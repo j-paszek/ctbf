@@ -64,6 +64,8 @@ GRF - all nodes NJ :  0.1563342704349393
 **The evaluation confirms visual observation, that our reconstruction method provides better results than 
 NJ algorithm.** 
 
+See `Results` section for detailed experimental evaluation analysis.
+
 ____
 
 For more information please contact: j.paszek@uw.edu.pl 
