@@ -8,9 +8,11 @@ from copy import deepcopy
 from simulator import CancerCellEvolutionSimulator
 from reconstructor import build_evolution_tree, visualize_tree_plotly
 from evaluator import grf_tree
+from ctbs_utils import to_newick
 
 IN_FILE_NAME = "biopsy.txt"
 OUT_FILE_NAME = "cnp_distance_matrix.txt"
+SIM_DM = "sim_dm.txt"
 cnp2cnp_FOLDER = r"/Users/voronwe/Work/PyCharmProjects/cnp2cnp/examples"
 cnp2cnp_FILE = r"/Users/voronwe/Work/PyCharmProjects/cnp2cnp/cnp2cnp.py"
 
@@ -98,7 +100,7 @@ def show_cells(cell_list):
 
 def run_single_test(config="config_telomeric.json", bedfile="bed like config sample.csv", seed=777,
                     biopsy_size=2, biopsy_size_scalable=None, biopsy_generatons=[5,7,9], r_dist=4,
-                    visualize=True, time_collector=None, clear_cnps=False):
+                    visualize=True, time_collector=None, clear_cnps=False, compare_dm=False):
     if bedfile is not None:
         sim = CancerCellEvolutionSimulator(config, bedfile, seed=seed)
     else:
@@ -116,6 +118,10 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
                                     generation=b_gen, seed=seed)
         cell_lists.append(biopsy)
         all_in_one_sample[0] += biopsy
+
+    if compare_dm:
+        l = [x.cell_id for x in all_in_one_sample[0]]
+        sim.to_distance_matrix(SIM_DM, l)
 
     print("Number of biopsy cells: ", len(all_in_one_sample[0]))
     if len(all_in_one_sample[0]) < 3:
@@ -161,6 +167,10 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
 
     njtree, a1 = build_evolution_tree(osl, OUT_FILE_NAME, r=r_dist, only_nj=True)
     tree, a3 = build_evolution_tree(cl, OUT_FILE_NAME, r=r_dist)
+
+    print("Newick simulated", to_newick(sim.tree))
+    print("Reconstructed", to_newick(tree))
+
 
     if visualize:
         lno = {2:[8,6], 1:[20,21,22,25,16,30], 0:[50,32,54,34,56,57,21,38,65,43,71,48]}
@@ -216,11 +226,18 @@ if __name__ == "__main__":
     # for key, times in timing_data.items():
     #     avg_ms = sum(times) / len(times) / 1e6
     #     print(f"{key:<15}: {avg_ms:.3f} ms")
-
-    run_single_test(config="config_for_pic.json", bedfile="pic.csv", seed=727,
-                    biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4,
-                    visualize=True)
-
     # run_single_test(config="config_for_pic.json", bedfile="pic.csv", seed=727,
     #                 biopsy_size_scalable=0.5, biopsy_generatons=[4, 7], r_dist=4,
     #                 visualize=True)
+
+    # run_single_test(config="config_for_pic.json", bedfile="pic.csv", seed=727,
+    #                 biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4,
+    #                 visualize=True)
+
+
+
+    run_single_test(config="config_for_pic.json", bedfile="pic.csv", seed=727,
+                    biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4,
+                    visualize=False, compare_dm=True)
+
+

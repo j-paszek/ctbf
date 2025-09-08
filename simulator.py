@@ -1,3 +1,4 @@
+import itertools
 import json
 import numpy as np
 import networkx as nx
@@ -459,6 +460,55 @@ class CancerCellEvolutionSimulator:
         for node in tree_copy.nodes:
             tree_copy.nodes[node]['genome'] = None
         return tree_copy
+
+    def to_distance_matrix(self, output_filename, node_list=None):
+        """
+        Compute and save a distance matrix of tree nodes in PHYLIP format
+        based on the number of evolutionary events along the path between nodes.
+        Uses cell_id for labeling.
+
+        Parameters
+        ----------
+        output_filename : str
+            Path to output PHYLIP-style distance matrix file.
+        node_list : list, optional
+            If provided, only include these node IDs in the distance matrix.
+        """
+        undirected_tree = self.tree.to_undirected()
+
+        # Filter nodes
+        if node_list is not None:
+            nodes = [n for n in node_list if n in self.tree]
+        else:
+            nodes = list(self.tree.nodes())
+
+        n = len(nodes)
+
+        # Get cell_ids for labeling
+        cell_ids = [self.tree.nodes[node]["cell_id"] for node in nodes]
+
+        # Precompute all pairwise distances
+        dist_matrix = np.zeros((n, n), dtype=int)
+        for i, j in itertools.combinations(range(n), 2):
+            src, tgt = nodes[i], nodes[j]
+            path = nx.shortest_path(undirected_tree, source=src, target=tgt)
+
+            total_events = 0
+            for u, v in zip(path[:-1], path[1:]):
+                edge_data = self.tree.get_edge_data(u, v) or self.tree.get_edge_data(v, u)
+                if edge_data is not None and edge_data.get("events"):
+                    total_events += len(edge_data["events"].split(";"))
+
+            dist_matrix[i, j] = total_events
+            dist_matrix[j, i] = total_events
+
+        # Write PHYLIP-style file
+        with open(output_filename, "w") as f:
+            f.write(f"{n}\n")  # number of nodes first
+            for i, cid in enumerate(cell_ids):
+                f.write(f"{str(cid):<10}")
+                f.write(" ".join(str(dist) for dist in dist_matrix[i]))
+                f.write("\n")
 
     def plot_tree(self, title="Population Evolution", output_file=None,
                   biopsy_lists=None, highlight_nodes=None, node_numbers=False, x_scale=1.25, y_scale=1,
