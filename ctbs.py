@@ -4,6 +4,7 @@ import os.path
 import sys
 import time
 from copy import deepcopy
+from collections import defaultdict
 
 from simulator import CancerCellEvolutionSimulator
 from reconstructor import build_evolution_tree, visualize_tree_plotly
@@ -100,7 +101,31 @@ def show_cells(cell_list):
 
 def run_single_test(config="config_telomeric.json", bedfile="bed like config sample.csv", seed=777,
                     biopsy_size=2, biopsy_size_scalable=None, biopsy_generatons=[5,7,9], r_dist=4,
-                    visualize=True, time_collector=None, clear_cnps=False, compare_dm=False):
+                    visualize=False, time_collector=None, clear_cnps=False, compare_dm=False, to_newick=False):
+    """
+    Runs one test that consists of simulation, biopsy, tree reconstruction and tree evaluation.
+
+    Parameters
+    ----------
+    config  - input configuration file for global parameters for the simulator
+    bedfile - optional additional configuration file for positional parameters for the simulator
+    seed    - seed for random number generator
+    biopsy_size             - size of biopsy (number of cells sampled from given level)
+    biopsy_size_scalable    - size of biopsy (percentage of cells sampled from given level)
+    biopsy_generatons       - list of levels of the tree (generations numbers) used for biopsy
+    r_dist  - the proximity radius for tree reconstruction
+    visualize       - whether to visualize the simulation results
+    time_collector  - whether to time the simulation runs
+    clear_cnps  - whether to clear cnps (potential optimization - makes the simulation tree light)
+    compare_dm      - whether to output distance matrix of simulated tree cells
+    to_newick       - whether to output simulated tree and reconstructed tree in newick format
+
+    Returns
+    -------
+    The similarity values between simulated tree and reconstructed tree,
+    and between simulated tree and NJ-reconstructed tree.
+
+    """
     if bedfile is not None:
         sim = CancerCellEvolutionSimulator(config, bedfile, seed=seed)
     else:
@@ -168,8 +193,9 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
     njtree, a1 = build_evolution_tree(osl, OUT_FILE_NAME, r=r_dist, only_nj=True)
     tree, a3 = build_evolution_tree(cl, OUT_FILE_NAME, r=r_dist)
 
-    print("Newick simulated", to_newick(sim.tree))
-    print("Reconstructed", to_newick(tree))
+    if to_newick:
+        print("Newick simulated", to_newick(sim.tree))
+        print("Reconstructed", to_newick(tree))
 
 
     if visualize:
@@ -199,6 +225,35 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
         # allowed = [x.cell_id for x in all_in_one_sample[0]]
         # print("BGRF - reconstructed: ", bgrf_tree(true_tree_simplified, 0, tree, 0, allowed))
         # print("BGRF - all nodes NJ : ", bgrf_tree(true_tree_simplified, 0, njtree, 0, allowed))
+
+
+def run_single_test_timed(seeds=None, **kwargs):
+    """
+    Wrapper around run_single_test with timing and averaging.
+
+    Parameters
+    ----------
+    seeds : list[int], optional
+        Random seeds to run the tests with. Defaults to [56, 777, 7, 77, 22, 32, 727, 0, 100, 1000].
+    kwargs : dict
+        All arguments are passed to run_single_test.
+    """
+    if seeds is None:
+        seeds = [56, 777, 7, 77, 22, 32, 727, 0, 100, 1000]
+
+    timing_data = defaultdict(list)
+
+    for s in seeds:
+        with Timer("Total", timing_data):
+            run_single_test(seed=s, time_collector=timing_data, **kwargs)
+
+    print("\nAverage durations (ms):")
+    for key, times in timing_data.items():
+        avg_ms = sum(times) / len(times) / 1e6
+        print(f"{key:<15}: {avg_ms:.3f} ms")
+
+    return timing_data
+
 
 
 
@@ -236,8 +291,7 @@ if __name__ == "__main__":
 
 
 
-    run_single_test(config="config_for_pic.json", bedfile="pic.csv", seed=727,
-                    biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4,
-                    visualize=False, compare_dm=True)
+    run_single_test_timed(seeds=[727], config="config_for_pic.json", bedfile="pic.csv",
+                    biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4)
 
 
