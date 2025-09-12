@@ -5,9 +5,11 @@ import sys
 import time
 from copy import deepcopy
 from collections import defaultdict
+import numpy as np
+import random
 
 from simulator import CancerCellEvolutionSimulator
-from reconstructor import build_evolution_tree, visualize_tree_plotly
+from reconstructor import build_evolution_tree, visualize_tree_plotly, NJ_REC_TR_ROOT_ID
 from evaluator import grf_tree
 from ctbs_utils import to_newick
 
@@ -16,6 +18,8 @@ OUT_FILE_NAME = "cnp_distance_matrix.txt"
 SIM_DM = "sim_dm.txt"
 cnp2cnp_FOLDER = r"/Users/voronwe/Work/PyCharmProjects/cnp2cnp/examples"
 cnp2cnp_FILE = r"/Users/voronwe/Work/PyCharmProjects/cnp2cnp/cnp2cnp.py"
+TRUE_TREE_ROOT_ID = 0
+
 
 class Timer:
     def __init__(self, label, collector=None, verbose=False):
@@ -177,21 +181,20 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
     #     sim.plot_tree(biopsy_lists=cell_lists,legend_y_offset=-170,
     #                   highlight_nodes=all_in_one_sample[0])
 
-
     if clear_cnps:    # clear CNPs
         if time_collector is not None:
             with Timer("Clear CNPs: ", time_collector):
-                true_tree_simplified = sim.tree_without_CNPs()
-                for cell_list in cl:
+                true_tree_simplified = sim.tree_without_CNPs()  # clears simulated tree
+                for cell_list in cl:                            # clears biopsy
                     for cell in cell_list:
-                        cell.genome = []
+                        cell.genome = np.array([], dtype=int)
                 for cell in osl[0]:
-                    cell.genome = []
+                    cell.genome = np.array([], dtype=int)
     else:
         true_tree_simplified = sim.tree
 
-    njtree, a1 = build_evolution_tree(osl, OUT_FILE_NAME, r=r_dist, only_nj=True)
-    tree, a3 = build_evolution_tree(cl, OUT_FILE_NAME, r=r_dist)
+    njtree, nj_node_info_for_plots, _ = build_evolution_tree(osl, OUT_FILE_NAME, r=r_dist, only_nj=True)
+    tree, rt_node_info_for_plots, root_rt = build_evolution_tree(cl, OUT_FILE_NAME, r=r_dist)
 
     if to_newick:
         print("Newick simulated", to_newick(sim.tree))
@@ -200,26 +203,22 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
 
     if visualize:
         lno = {2:[8,6], 1:[20,21,22,25,16,30], 0:[50,32,54,34,56,57,21,38,65,43,71,48]}
-        visualize_tree_plotly(tree, a3, level_node_ordering=lno, output_file="reconstructed.html")
+        visualize_tree_plotly(tree, rt_node_info_for_plots, level_node_ordering=lno, output_file="reconstructed.html")
         lno1 = {0:[50,32,54,34,20,56,57,21,22,38,8,65,25,43,16,6,71,30,48]}
-        visualize_tree_plotly(njtree, a1, level_node_ordering=lno1, output_file="nj.html")
+        visualize_tree_plotly(njtree, nj_node_info_for_plots, level_node_ordering=lno1, output_file="nj.html")
 
-        # print("GRF - check")
-        # print(grf_tree(sim.tree, 0, sim.tree, 0))
-        # print(grf_tree(tree, 0, tree, 0))
-        # print(grf_tree(njtree, 0, njtree, 0))
     if time_collector is not None:
         with Timer("GRF our: ", time_collector):
-            ret = grf_tree(true_tree_simplified, 0, tree, -1)
+            ret = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, tree, root_rt)
     else:
-        ret = grf_tree(true_tree_simplified, 0, tree, -1)
+        ret = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, tree, root_rt)
     print("GRF - reconstructed: ", ret)
 
     if time_collector is not None:
         with Timer("GRF NJ: ", time_collector):
-            ret = grf_tree(true_tree_simplified, 0, njtree, -1)
+            ret = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, njtree, NJ_REC_TR_ROOT_ID)
     else:
-        ret = grf_tree(true_tree_simplified, 0, njtree, -1)
+        ret = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, njtree, NJ_REC_TR_ROOT_ID)
     print("GRF - all nodes NJ : ", ret)
 
         # allowed = [x.cell_id for x in all_in_one_sample[0]]
@@ -245,16 +244,33 @@ def run_single_test_timed(seeds=None, **kwargs):
 
     for s in seeds:
         with Timer("Total", timing_data):
+            print("aqq ", s)
             run_single_test(seed=s, time_collector=timing_data, **kwargs)
 
     print("\nAverage durations (ms):")
+    a,b,c = 0,0,0
     for key, times in timing_data.items():
         avg_ms = sum(times) / len(times) / 1e6
         print(f"{key:<15}: {avg_ms:.3f} ms")
+        if key == "Computing cnp2cnp distance matrix: ": a=avg_ms
+        if key == "Total": b=avg_ms
+    c = b - a
+    print("Total without cnp call: ", c)
 
-    return timing_data
+    return timing_data, c
 
 
+def check_clearcnp_optimizaton(how_many=10):
+    """
+    Prints time of
+    """
+    seeds = [random.randint(0, 1000) for _ in range(how_many)]
+    _, x = run_single_test_timed(seeds=seeds, config="config_for_pic.json", bedfile="pic.csv",
+                          biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4, clear_cnps=False)
+    _, y = run_single_test_timed(seeds=seeds, config="config_for_pic.json", bedfile="pic.csv",
+                          biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4, clear_cnps=True)
+    print("Without optimization: ", x)
+    print("With    optimization: ", y)
 
 
 if __name__ == "__main__":
@@ -289,9 +305,10 @@ if __name__ == "__main__":
     #                 biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4,
     #                 visualize=True)
 
+    # run_single_test_timed(seeds=[727]*10, config="config_for_pic.json", bedfile="pic.csv",
+    #                       biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4, clear_cnps=True)
 
+    # check_clearcnp_optimizaton()
 
-    run_single_test_timed(seeds=[727], config="config_for_pic.json", bedfile="pic.csv",
-                    biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4)
-
-
+    run_single_test(config="test/data/config_for_pic.json", bedfile="test/data/pic.csv", seed=582, biopsy_size_scalable=0.5,
+                    biopsy_generatons=[4, 6, 8], r_dist=4, clear_cnps=False)

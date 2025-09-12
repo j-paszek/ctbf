@@ -6,6 +6,9 @@ from collections import defaultdict
 from simulator import Genotype
 
 
+NJ_REC_TR_ROOT_ID = -1
+
+
 def parse_distance_matrix(path):
     with open(path) as f:
         n = int(f.readline())
@@ -85,12 +88,12 @@ def build_evolution_tree(cell_lists, dist_matrix_path, r=2, only_nj=False):
             dist_matrix[i, j] = full_dist_matrix[idx1, idx2]
 
     max_id = next(unique_node_counter)
-    tree, new_nodes = neighbor_joining(dist_matrix, final_cells, max_id, existing_tree=tree)
+    tree, new_nodes, final_root = neighbor_joining(dist_matrix, final_cells, max_id, existing_tree=tree)
 
     for node in new_nodes:
         node_levels[node] = max(node_levels.values()) + 1
 
-    return tree, node_levels
+    return tree, node_levels, final_root
 
 
 def neighbor_joining(dist_matrix, cells, max_id, existing_tree=None):
@@ -140,14 +143,17 @@ def neighbor_joining(dist_matrix, cells, max_id, existing_tree=None):
         id_map = {k: v for k, v in enumerate(keys)}
         id_map[len(id_map)] = new_cell
 
-    id1, id2 = id_map[0], id_map[1]
-    root_cell = Genotype(None, -1)
-    tree.add_node(root_cell.node_id, genome=root_cell.genome, cell_id=None)
-    tree.add_edge(root_cell.node_id, id1.node_id, weight=D[0][1] / 2)
-    tree.add_edge(root_cell.node_id, id2.node_id, weight=D[0][1] / 2)
-    new_nodes[root_cell] = (id1, id2)
+    if len(id_map) == 2:
+        id1, id2 = id_map[0], id_map[1]
+        root_cell = Genotype(None, NJ_REC_TR_ROOT_ID)
+        tree.add_node(root_cell.node_id, genome=root_cell.genome, cell_id=None)
+        tree.add_edge(root_cell.node_id, id1.node_id, weight=D[0][1] / 2)
+        tree.add_edge(root_cell.node_id, id2.node_id, weight=D[0][1] / 2)
+        new_nodes[root_cell] = (id1, id2)
+    elif len(id_map) == 1:        # Only one cell in the highest biopsy level, and all connected, ready tree here
+        return tree, new_nodes, id_map[0].cell_id
 
-    return tree, new_nodes
+    return tree, new_nodes, NJ_REC_TR_ROOT_ID
 
 
 def visualize_tree_plotly(tree, node_levels=None, output_file="reconstructed.html", level_node_ordering=None):
@@ -299,5 +305,5 @@ if __name__ == '__main__':
     # tree, a, b = build_evolution_tree(cell_lists1, "distance_matrix.txt", r=2)
     # visualize_tree_plotly(tree, a, b)
     # 3->2, 4->2
-    tree, a = build_evolution_tree(cell_lists, "distance_matrix.txt", r=4)
+    tree, a, _ = build_evolution_tree(cell_lists, "distance_matrix.txt", r=4)
     visualize_tree_plotly(tree, a)
