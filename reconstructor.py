@@ -29,6 +29,25 @@ def build_evolution_tree(cell_lists, dist_matrix_path, r=2, only_nj=False):
         for cell in lst:
             cell.node_id = cell.cell_id  # Retained for compatibility
 
+    if only_nj:
+        # Flatten all cells, but deduplicate by cell_id
+        unique_cells = {}
+        for c in [c for sublist in cell_lists for c in sublist]:
+            if c.cell_id not in unique_cells:
+                unique_cells[c.cell_id] = c
+        all_cells = list(unique_cells.values())
+
+        max_id = max(c.node_id for c in all_cells)
+
+        # Keep only unique indices
+        selected_indices = [id_to_index[c.cell_id] for c in all_cells]
+
+        reduced_matrix = full_dist_matrix[np.ix_(selected_indices, selected_indices)]
+
+        # Run NJ on the reduced matrix
+        tree, new_nodes, root_id = neighbor_joining(reduced_matrix, all_cells, max_id)
+        return tree, new_nodes, root_id
+
     tree = nx.DiGraph()
     node_levels = defaultdict(lambda: None)
     for level, lst in enumerate(cell_lists[::-1]):

@@ -195,6 +195,46 @@ class CancerCellEvolutionSimulator:
         self.tree.add_node(0, genome=founder_genome.tolist(), generation=0, cell_id=0)
         self.node_counter = 1
 
+    @classmethod
+    def from_tree(cls, input_tree: nx.DiGraph):
+        """
+        Alternative constructor: build simulator directly from a given tree.
+
+        Parameters
+        ----------
+        input_tree : nx.DiGraph
+            A directed graph where each node has attributes:
+            'genome', 'generation', 'cell_id', 'id'.
+
+        Returns
+        -------
+        CancerCellEvolutionSimulator
+        """
+        # Create instance without running __init__
+        self = cls.__new__(cls)
+
+        # Directly assign the tree
+        self.tree = input_tree
+        self.genotypes = {}
+
+        # Fill genotypes dict from nodes
+        for node_id, data in input_tree.nodes(data=True):
+            genome = np.array(data["genome"])  # genome as numpy array
+            generation = data.get("generation")
+            cell_id = data.get("cell_id", node_id)
+
+            self.genotypes[node_id] = Genotype(
+                genome=genome,
+                node_id=node_id,
+                generation=generation,
+                cell_id=cell_id,
+            )
+
+        # Keep a counter for new nodes if needed later
+        self.node_counter = max(self.genotypes.keys()) + 1
+
+        return self
+
     def get_parameters_csv(self, file):
         """Outputs a CSV file containing CN values, event probabilities, and crucial_for_survival status."""
         with open(file, mode='w', newline='') as csvfile:
@@ -355,6 +395,7 @@ class CancerCellEvolutionSimulator:
                 num_copies = np.random.poisson(self.duplication_multiplicity) + 1 if event_type == "duplication" else -1
 
                 for pos in range(i, j + 1):
+                    # if genome[pos] > 0: # IMPORTANT genes cannot appear from nothing
                     genome[pos] = max(0, genome[pos] + num_copies)
                     if self.model_crucial_for_survival and self._get_ith_crucial(i) and genome[pos] == 0:
                         return None, None  # Prevent genome generation if crucial CN drops to 0

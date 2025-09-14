@@ -24,21 +24,19 @@ TRUE_TREE_ROOT_ID = 0
 class Timer:
     def __init__(self, label, collector=None, verbose=False):
         self.label = label
-        self.collector = collector
+        self.collector = collector  # collector is a dict for the current run
         self.verbose = verbose
-        self.enabled = collector is not None
 
     def __enter__(self):
-        if self.enabled:
-            self.start = time.perf_counter_ns()
+        self.start = time.perf_counter_ns()
         return self
 
     def __exit__(self, *args):
-        if self.enabled:
-            duration = time.perf_counter_ns() - self.start
-            self.collector[self.label].append(duration)
-            if self.verbose:
-                print(f"{self.label}: {duration / 1e6:.3f} ms")
+        duration = time.perf_counter_ns() - self.start
+        if self.collector is not None:
+            self.collector[self.label] = duration
+        if self.verbose:
+            print(f"{self.label}: {duration/1e6:.3f} ms")
 
 #  print to file in a format that is compatible with cnp2cnp tool
 def to_file(file, cells):
@@ -105,7 +103,8 @@ def show_cells(cell_list):
 
 def run_single_test(config="config_telomeric.json", bedfile="bed like config sample.csv", seed=777,
                     biopsy_size=2, biopsy_size_scalable=None, biopsy_generatons=[5,7,9], r_dist=4,
-                    visualize=False, time_collector=None, clear_cnps=False, compare_dm=False, to_newick=False):
+                    visualize=False, time_collector=None, clear_cnps=False, compare_dm=False,
+                    to_newick=False, simlulator_with_loaded_tree=None):
     """
     Runs one test that consists of simulation, biopsy, tree reconstruction and tree evaluation.
 
@@ -123,6 +122,7 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
     clear_cnps  - whether to clear cnps (potential optimization - makes the simulation tree light)
     compare_dm      - whether to output distance matrix of simulated tree cells
     to_newick       - whether to output simulated tree and reconstructed tree in newick format
+    simlulator_with_loaded_tree - for testing and repeatability, simlulator with loaded tree
 
     Returns
     -------
@@ -130,23 +130,29 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
     and between simulated tree and NJ-reconstructed tree.
 
     """
-    if bedfile is not None:
-        sim = CancerCellEvolutionSimulator(config, bedfile, seed=seed)
+    if simlulator_with_loaded_tree:
+        sim = simlulator_with_loaded_tree
     else:
-        sim = CancerCellEvolutionSimulator(config, seed=seed)
+        if bedfile is not None:
+            sim = CancerCellEvolutionSimulator(config, bedfile, seed=seed)
+        else:
+            sim = CancerCellEvolutionSimulator(config, seed=seed)
 
-    if time_collector is not None:
-        with Timer("Core simulation: ", time_collector):
+        if time_collector is not None:
+            with Timer("Core simulation: ", time_collector):
+                sim.run_simulation()
+        else:
             sim.run_simulation()
-    else:
-        sim.run_simulation()
 
     cell_lists, all_in_one_sample = [], [[]]
     for b_gen in biopsy_generatons:
         biopsy = sim.perform_biopsy(biopsy_size=biopsy_size, biopsy_size_scalable=biopsy_size_scalable,
                                     generation=b_gen, seed=seed)
-        cell_lists.append(biopsy)
-        all_in_one_sample[0] += biopsy
+        if biopsy:  # we assume biopsy has at least one cell
+            cell_lists.append(biopsy)
+            all_in_one_sample[0] += biopsy
+        else:
+            print("Biopsy sample from generation ", b_gen, " has no cells. Skipping.")
 
     if compare_dm:
         l = [x.cell_id for x in all_in_one_sample[0]]
@@ -155,6 +161,9 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
     print("Number of biopsy cells: ", len(all_in_one_sample[0]))
     if len(all_in_one_sample[0]) < 3:
         print("Total number of cells in biopsy less than 3.")
+        if time_collector is not None:
+            for key in ["Computing cnp2cnp distance matrix: ", "Clear CNPs: ", "GRF our: ", "GRF NJ: "]:
+                time_collector[key] = 0
         return
 
     to_file(IN_FILE_NAME, all_in_one_sample[0])
@@ -221,56 +230,56 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
         ret = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, njtree, NJ_REC_TR_ROOT_ID)
     print("GRF - all nodes NJ : ", ret)
 
-        # allowed = [x.cell_id for x in all_in_one_sample[0]]
-        # print("BGRF - reconstructed: ", bgrf_tree(true_tree_simplified, 0, tree, 0, allowed))
-        # print("BGRF - all nodes NJ : ", bgrf_tree(true_tree_simplified, 0, njtree, 0, allowed))
+    return true_tree_simplified, tree, njtree
 
 
-def run_single_test_timed(seeds=None, **kwargs):
-    """
-    Wrapper around run_single_test with timing and averaging.
+def run_single_test_timed(seed, **kwargs):
+    run_timings_no_opt = {}
+    with Timer("Total", run_timings_no_opt):
+        run_single_test(seed=seed, time_collector=run_timings_no_opt, clear_cnps=False, **kwargs)
 
-    Parameters
-    ----------
-    seeds : list[int], optional
-        Random seeds to run the tests with. Defaults to [56, 777, 7, 77, 22, 32, 727, 0, 100, 1000].
-    kwargs : dict
-        All arguments are passed to run_single_test.
-    """
-    if seeds is None:
-        seeds = [56, 777, 7, 77, 22, 32, 727, 0, 100, 1000]
+    run_timings_with_opt = {}
+    with Timer("Total", run_timings_with_opt):
+        run_single_test(seed=seed, time_collector=run_timings_with_opt, clear_cnps=True, **kwargs)
 
-    timing_data = defaultdict(list)
+    return run_timings_no_opt, run_timings_with_opt
+
+
+def check_clearcnp_optimizaton(how_many=100):
+    seeds = [random.randint(0, 1000) for _ in range(how_many)]
+
+    all_runs_no_opt = []
+    all_runs_with_opt = []
 
     for s in seeds:
-        with Timer("Total", timing_data):
-            print("aqq ", s)
-            run_single_test(seed=s, time_collector=timing_data, **kwargs)
+        print(f"\nTesting seed: {s}")
+        run_no_opt, run_with_opt = run_single_test_timed(seed=s, config="test/data/config_for_pic.json",
+            bedfile="test/data/pic.csv", biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4,)
+        all_runs_no_opt.append(run_no_opt)
+        all_runs_with_opt.append(run_with_opt)
 
-    print("\nAverage durations (ms):")
-    a,b,c = 0,0,0
-    for key, times in timing_data.items():
-        avg_ms = sum(times) / len(times) / 1e6
-        print(f"{key:<15}: {avg_ms:.3f} ms")
-        if key == "Computing cnp2cnp distance matrix: ": a=avg_ms
-        if key == "Total": b=avg_ms
-    c = b - a
-    print("Total without cnp call: ", c)
+    def average_timings(runs):
+        all_keys = {k for run in runs for k in run.keys()}
+        avg_dict = {}
+        for key in sorted(all_keys):
+            avg_dict[key] = sum(run.get(key, 0) for run in runs) / len(runs) / 1e6
+        without_cnp_avg = sum(
+            run["Total"] - run.get("Computing cnp2cnp distance matrix: ", 0) for run in runs
+        ) / len(runs) / 1e6
+        return avg_dict, without_cnp_avg
 
-    return timing_data, c
+    avg_no_opt_dict, avg_no_opt_total = average_timings(all_runs_no_opt)
+    avg_with_opt_dict, avg_with_opt_total = average_timings(all_runs_with_opt)
 
+    print("\n--- Average durations WITHOUT optimization (ms) ---")
+    for k, v in avg_no_opt_dict.items():
+        print(f"{k:<35}: {v:.3f}")
+    print(f"Total without cnp call{' ' * 10}: {avg_no_opt_total:.3f}")
 
-def check_clearcnp_optimizaton(how_many=10):
-    """
-    Prints time of
-    """
-    seeds = [random.randint(0, 1000) for _ in range(how_many)]
-    _, x = run_single_test_timed(seeds=seeds, config="config_for_pic.json", bedfile="pic.csv",
-                          biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4, clear_cnps=False)
-    _, y = run_single_test_timed(seeds=seeds, config="config_for_pic.json", bedfile="pic.csv",
-                          biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4, clear_cnps=True)
-    print("Without optimization: ", x)
-    print("With    optimization: ", y)
+    print("\n--- Average durations WITH optimization (ms) ---")
+    for k, v in avg_with_opt_dict.items():
+        print(f"{k:<35}: {v:.3f}")
+    print(f"Total without cnp call{' ' * 10}: {avg_with_opt_total:.3f}")
 
 
 if __name__ == "__main__":
@@ -308,7 +317,4 @@ if __name__ == "__main__":
     # run_single_test_timed(seeds=[727]*10, config="config_for_pic.json", bedfile="pic.csv",
     #                       biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4, clear_cnps=True)
 
-    # check_clearcnp_optimizaton()
-
-    run_single_test(config="test/data/config_for_pic.json", bedfile="test/data/pic.csv", seed=582, biopsy_size_scalable=0.5,
-                    biopsy_generatons=[4, 6, 8], r_dist=4, clear_cnps=False)
+    check_clearcnp_optimizaton()
