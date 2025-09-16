@@ -255,9 +255,9 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
         true_tree_simplified = sim.tree
 
     if parallel:
-        njtree, nj_node_info_for_plots, _ = build_evolution_tree(osl, OUT_FILE_NAME, r=r_dist,
+        njtree, nj_node_info_for_plots, _ = build_evolution_tree(osl, dist_matrix_path=None, r=r_dist,
                                                                  only_nj=True, inids=inid, indm=indm)
-        tree, rt_node_info_for_plots, root_rt = build_evolution_tree(cl, OUT_FILE_NAME, r=r_dist,
+        tree, rt_node_info_for_plots, root_rt = build_evolution_tree(cl, dist_matrix_path=None, r=r_dist,
                                                                      inids=inid, indm=indm)
     else:
         njtree, nj_node_info_for_plots, _ = build_evolution_tree(osl, OUT_FILE_NAME, r=r_dist, only_nj=True)
@@ -389,4 +389,4 @@ if __name__ == "__main__":
 
     # check_clearcnp_optimizaton(how_many=10, config="test/data/config100.json", bedfile=None)
     check_clearcnp_optimizaton(how_many=1, config="test/data/config_for_pic.json",
-                               bedfile=None, both=False) #, parallel=True)
+                               bedfile=None, both=False, parallel=True)

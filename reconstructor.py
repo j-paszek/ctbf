@@ -94,10 +94,7 @@ def build_evolution_tree(cell_lists, dist_matrix_path=None, r=2, only_nj=False, 
                 unique[g.cell_id] = g
         final_cells = list(unique.values())
 
-    print(final_cells)
     final_ids = [cell.cell_id for cell in final_cells]
-    print(final_ids)
-    print(id_to_index)
     dist_matrix = np.zeros((len(final_ids), len(final_ids)))
     for i, cell1 in enumerate(final_cells):
         for j, cell2 in enumerate(final_cells):
