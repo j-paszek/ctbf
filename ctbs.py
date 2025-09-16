@@ -2,13 +2,17 @@ import shutil
 import subprocess
 import os.path
 import sys
+import tempfile
 import time
 from copy import deepcopy
 from collections import defaultdict
 import numpy as np
 import random
+from concurrent.futures import ProcessPoolExecutor
 
-from simulator import CancerCellEvolutionSimulator
+from networkx.algorithms.isomorphism.ismags import are_all_equal
+
+from simulator import CancerCellEvolutionSimulator, Genotype
 from reconstructor import build_evolution_tree, visualize_tree_plotly, NJ_REC_TR_ROOT_ID
 from evaluator import grf_tree
 from ctbs_utils import to_newick
@@ -44,6 +48,46 @@ def to_file(file, cells):
         for c in cells:
             f.write(">" + str(c.get_id()) + "\n")
             f.write(c.get_cnp() + "\n")
+
+
+def _compute_pair(args):
+    c, d, i, j  = args
+    input_str = f">{c.get_id()}\n{c.get_cnp()}\n>{d.get_id()}\n{d.get_cnp()}\n"
+    dist = use_cnp2cnp_to_compute_pairwise_distance(input_str)
+    return i, j, dist
+
+
+def distance_matrix_from_biopsy(cells, max_threads=None):
+    """
+    Build a distance matrix for a list of cells using cnp2cnp.
+    """
+    n = len(cells)
+    ids = [c.get_id() for c in cells]
+    dist_matrix = np.zeros((n, n), dtype=float)
+
+    pairs = [(cells[i], cells[j], i, j) for i in range(n) for j in range(i + 1, n)]
+
+    with ProcessPoolExecutor(max_workers=max_threads) as executor:
+        for i, j, dist in executor.map(_compute_pair, pairs):
+            dist_matrix[i, j] = dist
+            dist_matrix[j, i] = dist
+
+    return ids, dist_matrix
+
+
+def use_cnp2cnp_to_compute_pairwise_distance(str_in, runfile=cnp2cnp_FILE):
+    pypath = str(sys.executable)
+
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp.write(str_in)
+        tmp.flush()
+        infile_path = tmp.name
+
+    out = subprocess.run(
+        [pypath, runfile, "-m", "dist", "-i", infile_path],
+        capture_output=True, text=True, check=True
+    )
+    return out.stdout
 
 
 def use_cnp2cnp_to_compute_dist_matrix(sample=IN_FILE_NAME,
@@ -104,7 +148,7 @@ def show_cells(cell_list):
 def run_single_test(config="config_telomeric.json", bedfile="bed like config sample.csv", seed=777,
                     biopsy_size=2, biopsy_size_scalable=None, biopsy_generatons=[5,7,9], r_dist=4,
                     visualize=False, time_collector=None, clear_cnps=False, compare_dm=False,
-                    to_newick=False, simlulator_with_loaded_tree=None):
+                    to_newick=False, simlulator_with_loaded_tree=None, parallel=False):
     """
     Runs one test that consists of simulation, biopsy, tree reconstruction and tree evaluation.
 
@@ -166,17 +210,25 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
                 time_collector[key] = 0
         return
 
-    to_file(IN_FILE_NAME, all_in_one_sample[0])
+    if not parallel:
+        to_file(IN_FILE_NAME, all_in_one_sample[0])
+    inid, indm = 0, 0
     print("Simulation finished. Generated cell evolution tree total nodes:", len(sim.tree.nodes()))
     if time_collector is not None:
         with Timer("Computing cnp2cnp distance matrix: ", time_collector):
-            use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
+            if parallel:
+                inid, indm = distance_matrix_from_biopsy(all_in_one_sample[0])
+            else:
+                use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
     else:
-        use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
+        if parallel:
+            inid, indm = distance_matrix_from_biopsy(all_in_one_sample[0])
+        else:
+            use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
 
     cl = deepcopy(cell_lists)
     osl = deepcopy(all_in_one_sample)
-    # show_cells(cell_lists)
+    show_cells(cell_lists)
 
     # Options for True tree pic
     only_nodes = [0, 1, 3, 5, 4, 7, 13, 12, 19]
@@ -202,8 +254,14 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
     else:
         true_tree_simplified = sim.tree
 
-    njtree, nj_node_info_for_plots, _ = build_evolution_tree(osl, OUT_FILE_NAME, r=r_dist, only_nj=True)
-    tree, rt_node_info_for_plots, root_rt = build_evolution_tree(cl, OUT_FILE_NAME, r=r_dist)
+    if parallel:
+        njtree, nj_node_info_for_plots, _ = build_evolution_tree(osl, OUT_FILE_NAME, r=r_dist,
+                                                                 only_nj=True, inids=inid, indm=indm)
+        tree, rt_node_info_for_plots, root_rt = build_evolution_tree(cl, OUT_FILE_NAME, r=r_dist,
+                                                                     inids=inid, indm=indm)
+    else:
+        njtree, nj_node_info_for_plots, _ = build_evolution_tree(osl, OUT_FILE_NAME, r=r_dist, only_nj=True)
+        tree, rt_node_info_for_plots, root_rt = build_evolution_tree(cl, OUT_FILE_NAME, r=r_dist)
 
     if to_newick:
         print("Newick simulated", to_newick(sim.tree))
@@ -233,30 +291,34 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
     return true_tree_simplified, tree, njtree
 
 
-def run_single_test_timed(seed, **kwargs):
+def run_single_test_timed(seed, both=True, **kwargs):
     run_timings_no_opt = {}
     with Timer("Total", run_timings_no_opt):
         run_single_test(seed=seed, time_collector=run_timings_no_opt, clear_cnps=False, **kwargs)
 
     run_timings_with_opt = {}
-    with Timer("Total", run_timings_with_opt):
-        run_single_test(seed=seed, time_collector=run_timings_with_opt, clear_cnps=True, **kwargs)
+    if both:
+        with Timer("Total", run_timings_with_opt):
+            run_single_test(seed=seed, time_collector=run_timings_with_opt, clear_cnps=True, **kwargs)
 
     return run_timings_no_opt, run_timings_with_opt
 
 
-def check_clearcnp_optimizaton(how_many=100):
-    seeds = [random.randint(0, 1000) for _ in range(how_many)]
+def check_clearcnp_optimizaton(how_many=100, both=True, seeds=None, **kwargs):
+    if not seeds:
+        seeds = [random.randint(0, 1000) for _ in range(how_many)]
+        seeds = [696]
 
     all_runs_no_opt = []
     all_runs_with_opt = []
 
     for s in seeds:
         print(f"\nTesting seed: {s}")
-        run_no_opt, run_with_opt = run_single_test_timed(seed=s, config="test/data/config_for_pic.json",
-            bedfile="test/data/pic.csv", biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4,)
+        run_no_opt, run_with_opt = run_single_test_timed(seed=s, biopsy_size_scalable=0.5, both=both,
+                                                         biopsy_generatons=[4, 6, 8], r_dist=4, **kwargs)
         all_runs_no_opt.append(run_no_opt)
-        all_runs_with_opt.append(run_with_opt)
+        if both:
+            all_runs_with_opt.append(run_with_opt)
 
     def average_timings(runs):
         all_keys = {k for run in runs for k in run.keys()}
@@ -269,17 +331,19 @@ def check_clearcnp_optimizaton(how_many=100):
         return avg_dict, without_cnp_avg
 
     avg_no_opt_dict, avg_no_opt_total = average_timings(all_runs_no_opt)
-    avg_with_opt_dict, avg_with_opt_total = average_timings(all_runs_with_opt)
+    if both:
+        avg_with_opt_dict, avg_with_opt_total = average_timings(all_runs_with_opt)
 
     print("\n--- Average durations WITHOUT optimization (ms) ---")
     for k, v in avg_no_opt_dict.items():
         print(f"{k:<35}: {v:.3f}")
     print(f"Total without cnp call{' ' * 10}: {avg_no_opt_total:.3f}")
 
-    print("\n--- Average durations WITH optimization (ms) ---")
-    for k, v in avg_with_opt_dict.items():
-        print(f"{k:<35}: {v:.3f}")
-    print(f"Total without cnp call{' ' * 10}: {avg_with_opt_total:.3f}")
+    if both:
+        print("\n--- Average durations WITH optimization (ms) ---")
+        for k, v in avg_with_opt_dict.items():
+            print(f"{k:<35}: {v:.3f}")
+        print(f"Total without cnp call{' ' * 10}: {avg_with_opt_total:.3f}")
 
 
 if __name__ == "__main__":
@@ -314,7 +378,15 @@ if __name__ == "__main__":
     #                 biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4,
     #                 visualize=True)
 
-    # run_single_test_timed(seeds=[727]*10, config="config_for_pic.json", bedfile="pic.csv",
-    #                       biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4, clear_cnps=True)
+    # run_single_test(seed=727, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
+    #                       biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4, visualize=True)
 
-    check_clearcnp_optimizaton()
+    # check_clearcnp_optimizaton(how_many=1, seeds=[773], config="test/data/config_for_pic.json",
+    #                            bedfile="test/data/pic.csv", parallel=True, both=False)
+
+    # run_single_test(seed=773, config="test/data/config_for_pic.json",
+    #                            bedfile="test/data/pic.csv", parallel=True)
+
+    # check_clearcnp_optimizaton(how_many=10, config="test/data/config100.json", bedfile=None)
+    check_clearcnp_optimizaton(how_many=1, config="test/data/config_for_pic.json",
+                               bedfile=None, both=False) #, parallel=True)

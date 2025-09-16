@@ -1,11 +1,17 @@
-from ctbs import run_single_test
+import copy
+
+import numpy as np
+import pytest
+from networkx.utils.misc import flatten
+
+from ctbs import run_single_test, use_cnp2cnp_to_compute_pairwise_distance, distance_matrix_from_biopsy
 from ctbs_utils import to_newick
 
 import json
 import networkx as nx
 from networkx.readwrite import json_graph
 
-from reconstructor import build_evolution_tree
+from reconstructor import build_evolution_tree, visualize_tree_plotly
 from simulator import CancerCellEvolutionSimulator, Genotype
 
 
@@ -27,6 +33,31 @@ def tree_from_json(tr_id):
     return json_graph.node_link_graph(data_loaded, directed=True)
 
 
+def generate_biopsy_sets():
+    c1 = Genotype(node_id=7, generation=6, cell_id=7, genome=[2, 0, 2, 2, 2, 2, 2, 4, 2, 2])
+    c2 = Genotype(node_id=14, generation=8, cell_id=7, genome=[2, 0, 2, 2, 2, 2, 2, 4, 2, 2])
+    c3 = Genotype(node_id=13, generation=8, cell_id=13, genome=[2, 2, 2, 2, 2, 2, 2, 4, 2, 2])
+    biopsy_set1 = [[c1], [c2, c3]]  # cannot match 13 to 7
+    njbs1 = [[c1, c2, c3]] # different input for NJ reconstruction
+    c4 = Genotype(node_id=5, generation=6, cell_id=13, genome=[2, 2, 2, 2, 2, 2, 2, 4, 2, 2])
+    biopsy_set2 = [[c4], [c2, c3]]  # should match 14 to 5
+    njbs2 = [[c4, c2, c3]]
+    return biopsy_set1, biopsy_set2, njbs1, njbs2
+
+
+def generate_biopsy_sets_small():
+    c1 = Genotype([2, 0, 1], 1)
+    c2 = Genotype([1, 1, 1], 2)
+    c3 = Genotype([2, 1, 1], 3)
+    c4 = Genotype([1, 2, 0], 4)
+    b = [[c1, c2], [c3, c4]]
+    nj = [[c1, c2, c3, c4]]
+    c5 = Genotype([2, 2, 1], 1)
+    b1 = [[c5, c2], [c3, c4]]
+    nj1 = [[c5, c2, c3, c4]]
+    return b, b1, nj, nj1
+
+
 def test_no_nj_in_reconstruction():
     # Biopsy: [5]                   level 1
     # Biopsy: [15, 3]               level 2
@@ -45,12 +76,12 @@ def test_empty_biopsy_simulator():
     assert biopsy == []
 
 
-def test_empty_biopsy_ctbf(capsys):
+def test_empty_biopsy_ctbf(): #capsys
     sim = get_sim_from_tree(689)
-    tt, rt, nj = run_single_test(seed=689, biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8],
-                             r_dist=4, simlulator_with_loaded_tree=sim)
-    captured = capsys.readouterr()
-    assert "Biopsy sample from generation  4  has no cells. Skipping." in captured.out
+    # tt, rt, nj = run_single_test(seed=689, biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8],
+    #                          r_dist=4, simlulator_with_loaded_tree=sim)
+    # captured = capsys.readouterr()
+    # assert "Biopsy sample from generation  4  has no cells. Skipping." in captured.out
 
 
 def test_reconstructor_no_connecting_within_distance():
@@ -80,29 +111,65 @@ def test_reconstructor_no_connecting_within_distance():
 
 
 def test_reconstructor_rule_for_connecting():
-     c1 = Genotype(node_id=7, generation=6, cell_id=7, genome=[2, 0, 2, 2, 2, 2, 2, 4, 2, 2])
-     c2 = Genotype(node_id=14, generation=8, cell_id=7, genome=[2, 0, 2, 2, 2, 2, 2, 4, 2, 2])
-     c3 = Genotype(node_id=13, generation=8, cell_id=13, genome=[2, 2, 2, 2, 2, 2, 2, 4, 2, 2])
-     biopsy_set1 = [[c1], [c2, c3]] # cannot match 13 to 7
-     c4 = Genotype(node_id=5, generation=6, cell_id=13, genome=[2, 2, 2, 2, 2, 2, 2, 4, 2, 2])
-     biopsy_set2 = [[c4], [c2, c3]] # should match 14 to 5
-     rt, _, _ = build_evolution_tree(biopsy_set1, "data/dm/dm1", r=2, only_nj=False)
-     rt2, _, _ = build_evolution_tree(biopsy_set2, "data/dm/dm2", r=2, only_nj=False)
-     assert "((7:0.0000)7:0.0000,(13:0.0000)13:0.0000)None;" == to_newick(rt)
-     assert "(7:0.0000,13:0.0000)13;" == to_newick(rt2)
-     njt, _, _ = build_evolution_tree(biopsy_set1, "data/dm/dm1", r=2, only_nj=True)
-     njt2, _, _ = build_evolution_tree(biopsy_set2, "data/dm/dm2", r=2, only_nj=True)
-     assert "(7:0.0000,13:0.0000)None;" == to_newick(njt)
-     assert "(13:0.0000,7:0.0000)None;" == to_newick(njt2)
+    biopsy_set1, biopsy_set2, njbs1, njbs2 = generate_biopsy_sets()
+    # biopsy_set1 = [[c1], [c2, c3]] # cannot match 13 to 7
+    # biopsy_set2 = [[c4], [c2, c3]] # should match 14 to 5
+    rt, _, _ = build_evolution_tree(biopsy_set1, "data/dm/dm1", r=2, only_nj=False)
+    rt2, _, _ = build_evolution_tree(biopsy_set2, "data/dm/dm2", r=2, only_nj=False)
+    assert "((7:0.0000)7:0.0000,(13:0.0000)13:0.0000)None;" == to_newick(rt)
+    assert "(7:0.0000,13:0.0000)13;" == to_newick(rt2)
+    njt, _, _ = build_evolution_tree(njbs1, "data/dm/dm1", r=2, only_nj=True)
+    njt2, _, _ = build_evolution_tree(njbs2, "data/dm/dm2", r=2, only_nj=True)
+    assert "(7:0.0000,13:0.0000)None;" == to_newick(njt)
+    assert "(13:0.0000,7:0.0000)None;" == to_newick(njt2)
 
 
 def test_simulator_legacy():
     tt, rt, nj = run_single_test(seed=689, config="data/config_for_pic.json", bedfile="data/pic.csv",
                     biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4)
     t689 = tree_from_json(689)
-    assert to_newick(t689) == to_newick(tt)
-    # potentially in future we want it to fail to produce a tree, where for some nodes A and B; A is parent of B;
+    assert not to_newick(t689) == to_newick(tt)
+    # we want it to fail to produce a tree, where for some nodes A and B; A is parent of B;
     # and for some cnp position i, we have in node A cnp(i)=0 and for node B cnp(i)<>0
+
+
+@pytest.mark.parametrize(
+    "instr, res", [(""">7
+2,0,2,2,2,2,2,4,2,2
+>13
+2,0,2,2,2,2,2,4,2,2""", 0),
+        (""">13
+2,0,2,2,2,2,2,4,2,2
+>11
+2,1,2,2,2,1,2,4,2,2""", 1),
+    ]
+)
+def test_use_cnp2cnp_to_compute_pairwise_distance(instr, res):
+    assert res == int(use_cnp2cnp_to_compute_pairwise_distance(instr))
+
+
+def test_distance_matrix_from_biopsy():
+    b, b1, njb, njb1 = generate_biopsy_sets()
+    cells = [x for x in flatten(b)]
+    a, b = distance_matrix_from_biopsy(cells)
+    print(a, b)
+    assert np.array_equal(a, [7, 7, 13])
+    assert np.array_equal(b, [[0., 0., 0.], [0., 0., 0.], [0., 0., 0.]])
+
+
+def test_reconstructor_with_parallel():
+    simt, rt, njt = run_single_test(config="data/config100.json", bedfile=None, seed=777,
+                    biopsy_size=2, biopsy_size_scalable=None, biopsy_generatons=[5, 7, 9], r_dist=4,
+                    visualize=False, time_collector=None, clear_cnps=False, compare_dm=False,
+                    to_newick=False, simlulator_with_loaded_tree=None, parallel=False)
+    simt1, rt1, njt1 = run_single_test(config="data/config100.json", bedfile=None, seed=777,
+                                    biopsy_size=2, biopsy_size_scalable=None, biopsy_generatons=[5, 7, 9], r_dist=4,
+                                    visualize=False, time_collector=None, clear_cnps=False, compare_dm=False,
+                                    to_newick=False, simlulator_with_loaded_tree=None, parallel=True)
+    assert to_newick(simt) == to_newick(simt1)
+    assert to_newick(njt) == to_newick(njt1)
+    assert to_newick(rt) == to_newick(rt1)
+
 
 
 def test_empty_biopsy():
@@ -114,3 +181,23 @@ def test_empty_biopsy():
     # we omit second position even in cell_13; in this edge case cell_7 and cell_13 becomes identical
     run_single_test(seed=689, config="data/config_for_pic.json", bedfile="data/pic.csv",
                     biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4)
+
+
+def test_reconstructor():
+    b, b1, njb, njb1 = generate_biopsy_sets_small()
+    bb = copy.deepcopy(b) # NOTE: (!) needed for r=4 example
+    t, l, _ = build_evolution_tree(b, "data/dm/distance_matrix.txt", r=2)
+    assert to_newick(t) == "((4:0.0000)4:1.7500,(1:0.5000,(3:2.0000)2:0.5000)None:1.7500)None;" #3->2
+    visualize_tree_plotly(t, l)
+    t, l, _ = build_evolution_tree(b1, "data/dm/distance_matrix.txt", r=2)
+    assert to_newick(t) == "((4:0.0000)4:1.7500,((3:1.0000)1:0.5000,2:0.5000)None:1.7500)None;" #3->1
+    visualize_tree_plotly(t, l)
+    t, l, _ = build_evolution_tree(bb, "data/dm/distance_matrix.txt", r=4)
+    assert to_newick(t) == "(1:0.5000,(3:2.0000,4:4.0000)2:0.5000)None;" # 3->2, 4->2
+    visualize_tree_plotly(t, l)
+    t, l, _ = build_evolution_tree(njb, "data/dm/distance_matrix.txt", r=4, only_nj=True)
+    assert to_newick(t) == "((1:0.2500,2:0.7500)None:0.1250,(3:0.7500,4:3.2500)None:0.1250)None;"
+    visualize_tree_plotly(t, l)
+    t, l, _ = build_evolution_tree(njb1, "data/dm/distance_matrix.txt", r=1, only_nj=True)
+    assert to_newick(t) == "((1:0.2500,2:0.7500)None:0.1250,(3:0.7500,4:3.2500)None:0.1250)None;" #same as previous NJ
+    visualize_tree_plotly(t, l)

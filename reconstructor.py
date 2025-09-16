@@ -20,33 +20,19 @@ def parse_distance_matrix(path):
             matrix.append([float(x) for x in parts[1:]])
     return ids, np.array(matrix)
 
-def build_evolution_tree(cell_lists, dist_matrix_path, r=2, only_nj=False):
-    ids, full_dist_matrix = parse_distance_matrix(dist_matrix_path)
+def build_evolution_tree(cell_lists, dist_matrix_path=None, r=2, only_nj=False, inids=None, indm=None):
+    if dist_matrix_path:
+        ids, full_dist_matrix = parse_distance_matrix(dist_matrix_path)
+    elif inids is not None and indm is not None:
+        ids, full_dist_matrix = inids, indm
+    else:
+        print("Please provide either dist_matrix_path or inids and indm")
     id_to_index = {cid: i for i, cid in enumerate(ids)}
     unique_node_counter = itertools.count(start=max(ids) + 1)
 
     for lst in cell_lists:
         for cell in lst:
             cell.node_id = cell.cell_id  # Retained for compatibility
-
-    if only_nj:
-        # Flatten all cells, but deduplicate by cell_id
-        unique_cells = {}
-        for c in [c for sublist in cell_lists for c in sublist]:
-            if c.cell_id not in unique_cells:
-                unique_cells[c.cell_id] = c
-        all_cells = list(unique_cells.values())
-
-        max_id = max(c.node_id for c in all_cells)
-
-        # Keep only unique indices
-        selected_indices = [id_to_index[c.cell_id] for c in all_cells]
-
-        reduced_matrix = full_dist_matrix[np.ix_(selected_indices, selected_indices)]
-
-        # Run NJ on the reduced matrix
-        tree, new_nodes, root_id = neighbor_joining(reduced_matrix, all_cells, max_id)
-        return tree, new_nodes, root_id
 
     tree = nx.DiGraph()
     node_levels = defaultdict(lambda: None)
@@ -61,45 +47,57 @@ def build_evolution_tree(cell_lists, dist_matrix_path, r=2, only_nj=False):
             else:
                 tree.add_node(cell.node_id, genome=cell.genome, cell_id=cell.cell_id)
 
-    for i in reversed(range(1, len(cell_lists))):
-        upper, bottom = cell_lists[i - 1], cell_lists[i]
-        for y in bottom:
-            y_idx = id_to_index[y.cell_id]
-            x_ks = []
-            for x in upper:
-                x_idx = id_to_index[x.cell_id]
-                if full_dist_matrix[y_idx, x_idx] <= r:
-                    x_ks.append(x)
+    if not only_nj: # reconstruction logic
+        for i in reversed(range(1, len(cell_lists))):
+            upper, bottom = cell_lists[i - 1], cell_lists[i]
+            for y in bottom:
+                y_idx = id_to_index[y.cell_id]
+                x_ks = []
+                for x in upper:
+                    x_idx = id_to_index[x.cell_id]
+                    if full_dist_matrix[y_idx, x_idx] <= r:
+                        x_ks.append(x)
 
-            same_id_match = [x for x in x_ks if x.cell_id == y.cell_id]
-            if same_id_match:
-                x = same_id_match[0]
-                tree.add_edge(x.node_id, y.node_id, weight=full_dist_matrix[y_idx, id_to_index[x.cell_id]])
-                continue
+                same_id_match = [x for x in x_ks if x.cell_id == y.cell_id]
+                if same_id_match:
+                    x = same_id_match[0]
+                    tree.add_edge(x.node_id, y.node_id, weight=full_dist_matrix[y_idx, id_to_index[x.cell_id]])
+                    continue
 
-            x_ks = [x for x in x_ks if not np.any((x.genome == 0) & (y.genome > 0))]
+                # appearance constraint
+                x_ks = [x for x in x_ks if not np.any((x.genome == 0) & (y.genome > 0))]
 
-            if len(x_ks) == 1:
-                x = x_ks[0]
-                tree.add_edge(x.node_id, y.node_id, weight=full_dist_matrix[y_idx, id_to_index[x.cell_id]])
-                continue
+                if len(x_ks) == 1:
+                    x = x_ks[0]
+                    tree.add_edge(x.node_id, y.node_id, weight=full_dist_matrix[y_idx, id_to_index[x.cell_id]])
+                    continue
 
-            if len(x_ks) > 1:
-                closest = min(x_ks, key=lambda x: full_dist_matrix[y_idx, id_to_index[x.cell_id]])
-                tree.add_edge(closest.node_id, y.node_id, weight=full_dist_matrix[y_idx, id_to_index[closest.cell_id]])
-                continue
+                if len(x_ks) > 1:
+                    closest = min(x_ks, key=lambda x: full_dist_matrix[y_idx, id_to_index[x.cell_id]])
+                    tree.add_edge(closest.node_id, y.node_id, weight=full_dist_matrix[y_idx, id_to_index[closest.cell_id]])
+                    continue
 
-            # the case when x_ks empty there is no neighbour near
-            new_node_id = next(unique_node_counter)
-            copied_cell = Genotype(list(y.genome), y.cell_id)
-            copied_cell.node_id = new_node_id
-            cell_lists[i - 1].append(copied_cell)
-            node_levels[copied_cell] = len(cell_lists) - i
-            tree.add_node(copied_cell.node_id, genome=copied_cell.genome, cell_id=copied_cell.cell_id)
-            tree.add_edge(copied_cell.node_id, y.node_id, weight=0)
+                # the case when x_ks empty there is no neighbour near
+                new_node_id = next(unique_node_counter)
+                copied_cell = Genotype(list(y.genome), y.cell_id)
+                copied_cell.node_id = new_node_id
+                cell_lists[i - 1].append(copied_cell)
+                node_levels[copied_cell] = len(cell_lists) - i
+                tree.add_node(copied_cell.node_id, genome=copied_cell.genome, cell_id=copied_cell.cell_id)
+                tree.add_edge(copied_cell.node_id, y.node_id, weight=0)
 
-    final_cells = cell_lists[0]
+    final_cells = cell_lists[0]  # may contain same genotype 0 distance cells not merged due to appearance constraint
+    if only_nj: # in NJ triggered by argument we assume no duplicate cell genotypes
+        unique = {}
+        for g in final_cells:
+            if g.cell_id not in unique:
+                unique[g.cell_id] = g
+        final_cells = list(unique.values())
+
+    print(final_cells)
     final_ids = [cell.cell_id for cell in final_cells]
+    print(final_ids)
+    print(id_to_index)
     dist_matrix = np.zeros((len(final_ids), len(final_ids)))
     for i, cell1 in enumerate(final_cells):
         for j, cell2 in enumerate(final_cells):
@@ -319,10 +317,10 @@ if __name__ == '__main__':
 
     # 3->2
     # tree, a, b = build_evolution_tree(cell_lists, "distance_matrix.txt", r=2)
-    # visualize_tree_plotly(tree, a, b)
+    # visualize_tree_plotly(tree, a)
     # 3->1
     # tree, a, b = build_evolution_tree(cell_lists1, "distance_matrix.txt", r=2)
-    # visualize_tree_plotly(tree, a, b)
+    # visualize_tree_plotly(tree, a)
     # 3->2, 4->2
     tree, a, _ = build_evolution_tree(cell_lists, "distance_matrix.txt", r=4)
     visualize_tree_plotly(tree, a)

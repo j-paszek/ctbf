@@ -395,8 +395,8 @@ class CancerCellEvolutionSimulator:
                 num_copies = np.random.poisson(self.duplication_multiplicity) + 1 if event_type == "duplication" else -1
 
                 for pos in range(i, j + 1):
-                    # if genome[pos] > 0: # IMPORTANT genes cannot appear from nothing
-                    genome[pos] = max(0, genome[pos] + num_copies)
+                    if genome[pos] > 0: # IMPORTANT genes cannot appear from nothing
+                        genome[pos] = max(0, genome[pos] + num_copies)
                     if self.model_crucial_for_survival and self._get_ith_crucial(i) and genome[pos] == 0:
                         return None, None  # Prevent genome generation if crucial CN drops to 0
                 pos_label = f"{i}-{j}" if i != j else f"{i}"
