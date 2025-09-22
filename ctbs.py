@@ -5,15 +5,12 @@ import sys
 import tempfile
 import time
 from copy import deepcopy
-from collections import defaultdict
 import numpy as np
 import random
 from concurrent.futures import ProcessPoolExecutor
 
-from networkx.algorithms.isomorphism.ismags import are_all_equal
-
 from simulator import CancerCellEvolutionSimulator, Genotype
-from reconstructor import build_evolution_tree, visualize_tree_plotly, NJ_REC_TR_ROOT_ID
+from reconstructor import build_evolution_tree, visualize_tree_plotly
 from evaluator import grf_tree
 from ctbs_utils import to_newick
 
@@ -255,12 +252,12 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
         true_tree_simplified = sim.tree
 
     if parallel:
-        njtree, nj_node_info_for_plots, _ = build_evolution_tree(osl, dist_matrix_path=None, r=r_dist,
+        njtree, nj_node_info_for_plots, root_nj = build_evolution_tree(osl, dist_matrix_path=None, r=r_dist,
                                                                  only_nj=True, inids=inid, indm=indm)
         tree, rt_node_info_for_plots, root_rt = build_evolution_tree(cl, dist_matrix_path=None, r=r_dist,
                                                                      inids=inid, indm=indm)
     else:
-        njtree, nj_node_info_for_plots, _ = build_evolution_tree(osl, OUT_FILE_NAME, r=r_dist, only_nj=True)
+        njtree, nj_node_info_for_plots, root_nj = build_evolution_tree(osl, OUT_FILE_NAME, r=r_dist, only_nj=True)
         tree, rt_node_info_for_plots, root_rt = build_evolution_tree(cl, OUT_FILE_NAME, r=r_dist)
 
     if to_newick:
@@ -283,9 +280,9 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
 
     if time_collector is not None:
         with Timer("GRF NJ: ", time_collector):
-            ret = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, njtree, NJ_REC_TR_ROOT_ID)
+            ret = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, njtree, root_nj)
     else:
-        ret = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, njtree, NJ_REC_TR_ROOT_ID)
+        ret = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, njtree, root_nj)
     print("GRF - all nodes NJ : ", ret)
 
     return true_tree_simplified, tree, njtree
@@ -385,8 +382,13 @@ if __name__ == "__main__":
     #                            bedfile="test/data/pic.csv", parallel=True, both=False)
 
     # run_single_test(seed=773, config="test/data/config_for_pic.json",
-    #                            bedfile="test/data/pic.csv", parallel=True)
+    #                            bedfile="test/data/pic.csv") #, parallel=True)
+
+    run_single_test(seed=773, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
+                    biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4)
+    # run_single_test(seed=773, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
+    #                 biopsy_size_scalable=0.5, biopsy_generatons=[3, 5, 7, 9], r_dist=4)
 
     # check_clearcnp_optimizaton(how_many=10, config="test/data/config100.json", bedfile=None)
-    check_clearcnp_optimizaton(how_many=1, config="test/data/config_for_pic.json",
-                               bedfile=None, both=False, parallel=True)
+    # check_clearcnp_optimizaton(how_many=1, config="test/data/config_for_pic.json",
+    #                            bedfile=None, both=False, parallel=True)
