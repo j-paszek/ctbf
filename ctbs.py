@@ -261,8 +261,9 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
         tree, rt_node_info_for_plots, root_rt = build_evolution_tree(cl, OUT_FILE_NAME, r=r_dist)
 
     if write_newick:
-        print("Newick simulated", to_newick(sim.tree))
-        print("Reconstructed", to_newick(tree))
+        print("Newick simulated:", to_newick(sim.tree))
+        print("Reconstructed:", to_newick(tree))
+        print("NJ tree:", to_newick(njtree))
 
 
     if visualize:
