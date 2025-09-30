@@ -145,7 +145,7 @@ def show_cells(cell_list):
 def run_single_test(config="config_telomeric.json", bedfile="bed like config sample.csv", seed=777,
                     biopsy_size=2, biopsy_size_scalable=None, biopsy_generatons=[5,7,9], r_dist=4,
                     visualize=False, time_collector=None, clear_cnps=False, compare_dm=False,
-                    to_newick=False, simlulator_with_loaded_tree=None, parallel=False):
+                    write_newick=False, simlulator_with_loaded_tree=None, parallel=False):
     """
     Runs one test that consists of simulation, biopsy, tree reconstruction and tree evaluation.
 
@@ -162,7 +162,7 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
     time_collector  - whether to time the simulation runs
     clear_cnps  - whether to clear cnps (potential optimization - makes the simulation tree light)
     compare_dm      - whether to output distance matrix of simulated tree cells
-    to_newick       - whether to output simulated tree and reconstructed tree in newick format
+    write_newick       - whether to output simulated tree and reconstructed tree in newick format
     simlulator_with_loaded_tree - for testing and repeatability, simlulator with loaded tree
 
     Returns
@@ -260,7 +260,7 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
         njtree, nj_node_info_for_plots, root_nj = build_evolution_tree(osl, OUT_FILE_NAME, r=r_dist, only_nj=True)
         tree, rt_node_info_for_plots, root_rt = build_evolution_tree(cl, OUT_FILE_NAME, r=r_dist)
 
-    if to_newick:
+    if write_newick:
         print("Newick simulated", to_newick(sim.tree))
         print("Reconstructed", to_newick(tree))
 
@@ -385,7 +385,7 @@ if __name__ == "__main__":
     #                            bedfile="test/data/pic.csv") #, parallel=True)
 
     run_single_test(seed=773, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
-                    biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4)
+                    biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4, write_newick=True)
     # run_single_test(seed=773, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
     #                 biopsy_size_scalable=0.5, biopsy_generatons=[3, 5, 7, 9], r_dist=4)
 
