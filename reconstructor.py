@@ -130,9 +130,9 @@ def neighbor_joining_full(dist_matrix, cells, max_id, existing_tree=None):
         child_leaf = node_list[child_idx]
 
         # create a new internal node (copy of parent) with empty genome
-        internal_node = type(parent_leaf)(genome=None, node_id=next_id, cell_id=parent_leaf.cell_id)
+        internal_node = type(parent_leaf)(genome=parent_leaf.genome, node_id=next_id, cell_id=parent_leaf.cell_id)
         next_id += 1
-        tree.add_node(internal_node.node_id, genome=None, cell_id=internal_node.cell_id)
+        tree.add_node(internal_node.node_id, genome=internal_node.genome, cell_id=internal_node.cell_id)
 
         # attach original leaves under the internal node
         tree.add_edge(internal_node.node_id, parent_leaf.node_id, weight=0.0)

@@ -14,6 +14,7 @@ from networkx.readwrite import json_graph
 from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full
 from simulator import CancerCellEvolutionSimulator, Genotype
 
+SHOW_FIGURES = False
 
 def get_sim_from_tree(tr):
     tree = tree_from_json(tr)
@@ -68,6 +69,19 @@ def test_no_nj_in_reconstruction():
     run_single_test(config="data/config_for_pic.json", bedfile="data/pic.csv",
                     seed=582, biopsy_size_scalable=0.5,
                     biopsy_generations=[4, 6, 8], r_dist=4, clear_cnps=False)
+
+
+def test_no_nj_in_reconstruction_full():
+    # Biopsy: [5]                   level 1
+    # Biopsy: [15, 3]               level 2
+    # Biopsy: [3, 22, 15, 23]       level 3
+    # Edge case - top level is of size one; all elements from next level are in r_dist range
+    # reconstructor in build_evolution_tree pass to neighbor_joining already completed tree
+    # Reconstructed tree is ((3,22)3,(15,23)15)5
+    run_single_test(config="data/config_for_pic.json", bedfile="data/pic.csv",
+                    seed=582, biopsy_size_scalable=0.5,
+                    biopsy_generations=[4, 6, 8], r_dist=4, clear_cnps=False,
+                    reconstruction_algorithm=neighbor_joining_full)
 
 
 def test_empty_biopsy_simulator():
@@ -183,24 +197,50 @@ def test_empty_biopsy():
                     biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4)
 
 
-def test_reconstructor():
+def test_reconstructor(show=SHOW_FIGURES):
     b, b1, njb, njb1 = generate_biopsy_sets_small()
     bb = copy.deepcopy(b) # NOTE: (!) needed for r=4 example
     t, l, _ = build_evolution_tree(b, "data/dm/distance_matrix.txt", r=2)
     assert to_newick(t) == "((4:0.0000)4:1.7500,(1:0.5000,(3:2.0000)2:0.5000)None:1.7500)None;" #3->2
-    visualize_tree_plotly(t, l)
+    if show: visualize_tree_plotly(t, l)
     t, l, _ = build_evolution_tree(b1, "data/dm/distance_matrix.txt", r=2)
     assert to_newick(t) == "((4:0.0000)4:1.7500,((3:1.0000)1:0.5000,2:0.5000)None:1.7500)None;" #3->1
-    visualize_tree_plotly(t, l)
+    if show: visualize_tree_plotly(t, l)
     t, l, _ = build_evolution_tree(bb, "data/dm/distance_matrix.txt", r=4)
     assert to_newick(t) == "(1:0.5000,(3:2.0000,4:4.0000)2:0.5000)None;" # 3->2, 4->2
-    visualize_tree_plotly(t, l)
+    if show: visualize_tree_plotly(t, l)
     t, l, _ = build_evolution_tree(njb, "data/dm/distance_matrix.txt", r=4, only_nj=True)
     assert to_newick(t) == "((1:0.2500,2:0.7500)None:0.1250,(3:0.7500,4:3.2500)None:0.1250)None;"
-    visualize_tree_plotly(t, l)
+    if show: visualize_tree_plotly(t, l)
     t, l, _ = build_evolution_tree(njb1, "data/dm/distance_matrix.txt", r=1, only_nj=True)
     assert to_newick(t) == "((1:0.2500,2:0.7500)None:0.1250,(3:0.7500,4:3.2500)None:0.1250)None;" #same as previous NJ
-    visualize_tree_plotly(t, l)
+    if show: visualize_tree_plotly(t, l)
+
+
+def test_reconstructor_full(show=SHOW_FIGURES):
+    b, b1, njb, njb1 = generate_biopsy_sets_small()
+    bb = copy.deepcopy(b) # NOTE: (!) needed for r=4 example
+    t, l, _ = build_evolution_tree(b, "data/dm/distance_matrix.txt", r=2,
+                                   neighbor_joining=neighbor_joining_full)
+    assert to_newick(t) == "((1:0.0000,(3:2.0000)2:1.0000)1:0.0000,(4:0.0000)4:4.0000)1;"
+    if show: visualize_tree_plotly(t, l)
+    t, l, _ = build_evolution_tree(b1, "data/dm/distance_matrix.txt", r=2,
+                                   neighbor_joining=neighbor_joining_full)
+    assert to_newick(t) == "(((3:1.0000)1:0.0000,2:1.0000)1:0.0000,(4:0.0000)4:4.0000)1;"
+    if show: visualize_tree_plotly(t, l)
+    t, l, _ = build_evolution_tree(bb, "data/dm/distance_matrix.txt", r=4,
+                                   neighbor_joining=neighbor_joining_full)
+    assert to_newick(t) == "(1:0.0000,(3:2.0000,4:4.0000)2:1.0000)1;"
+    if show: visualize_tree_plotly(t, l)
+    t, l, _ = build_evolution_tree(njb, "data/dm/distance_matrix.txt", r=4, only_nj=True,
+                                   neighbor_joining=neighbor_joining_full)
+    assert to_newick(t) == "(((1:0.0000,2:1.0000)1:0.0000,3:1.0000)1:0.0000,4:4.0000)1;"
+    if show: visualize_tree_plotly(t, l)
+    t, l, _ = build_evolution_tree(njb1, "data/dm/distance_matrix.txt", r=1, only_nj=True,
+                                   neighbor_joining=neighbor_joining_full)
+    assert to_newick(t) == "(((1:0.0000,2:1.0000)1:0.0000,3:1.0000)1:0.0000,4:4.0000)1;"
+    if show: visualize_tree_plotly(t, l)
+
 
 def test_reconstructor_njfull():
     D = np.array([

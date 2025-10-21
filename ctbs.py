@@ -141,150 +141,161 @@ def show_cells(cell_list):
     for cell_l in cell_list:
         print("Biopsy: ", [cell.cell_id for cell in cell_l])
 
-# def _run_simulation(config, bedfile, seed, simulator_with_loaded_tree, time_collector):
-#     if simulator_with_loaded_tree:
-#         return simulator_with_loaded_tree
-#
-#     if bedfile:
-#         sim = CancerCellEvolutionSimulator(config, bedfile, seed=seed)
-#     else:
-#         sim = CancerCellEvolutionSimulator(config, seed=seed)
-#
-#     if time_collector:
-#         with Timer("Core simulation: ", time_collector):
-#             sim.run_simulation()
-#     else:
-#         sim.run_simulation()
-#
-#     print(f"Simulation finished. Generated tree nodes: {len(sim.tree.nodes())}")
-#     return sim
+def _run_simulation(config, bedfile, seed, simulator_with_loaded_tree, time_collector):
+    if simulator_with_loaded_tree:
+        return simulator_with_loaded_tree
 
-# def _perform_biopsies(sim, biopsy_generations, biopsy_size, biopsy_size_scalable, seed, compare_dm):
-#     cell_lists, all_in_one_sample = [], [[]]
-#
-#     for b_gen in biopsy_generations:
-#         biopsy = sim.perform_biopsy(
-#             biopsy_size=biopsy_size,
-#             biopsy_size_scalable=biopsy_size_scalable,
-#             generation=b_gen,
-#             seed=seed
-#         )
-#         if biopsy: # we assume biopsy has at least one cell
-#             cell_lists.append(biopsy)
-#             all_in_one_sample[0] += biopsy
-#         else:
-#             print(f"Biopsy sample from generation {b_gen} has no cells. Skipping.")
-#
-#     if compare_dm:
-#         sim.to_distance_matrix(SIM_DM, [x.cell_id for x in all_in_one_sample[0]])
-#
-#     print("Number of biopsy cells:", len(all_in_one_sample[0]))
-#     return cell_lists, all_in_one_sample
+    if bedfile is not None:
+        sim = CancerCellEvolutionSimulator(config, bedfile, seed=seed)
+    else:
+        sim = CancerCellEvolutionSimulator(config, seed=seed)
 
-# def _handle_small_biopsy(time_collector):
-#     print("Total number of cells in biopsy less than 3.")
-#     if time_collector:
-#         for key in ["Computing cnp2cnp distance matrix: ", "Clear CNPs: ", "GRF our: ", "GRF NJ: "]:
-#             time_collector[key] = 0
+    if time_collector is not None:
+        with Timer("Core simulation: ", time_collector):
+            sim.run_simulation()
+    else:
+        sim.run_simulation()
 
-# def _compute_distance_matrix(all_in_one_sample, parallel, time_collector):
-#     inid = indm = 0
-#     if time_collector:
-#         with Timer("Computing cnp2cnp distance matrix: ", time_collector):
-#             if parallel:
-#                 inid, indm = distance_matrix_from_biopsy(all_in_one_sample[0])
-#             else:
-#                 use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
-#     else:
-#         if parallel:
-#             inid, indm = distance_matrix_from_biopsy(all_in_one_sample[0])
-#         else:
-#             use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
-#     return inid, indm
+    print("Simulation finished. Generated cell evolution tree total nodes:", len(sim.tree.nodes()))
+    return sim
 
-# def _reconstruct_and_evaluate(sim, cell_lists, all_in_one_sample, r_dist, visualize,
-#                               clear_cnps, parallel, write_newick, reconstruction_algorithm,
-#                               inid, indm, time_collector):
-#     cl, osl = deepcopy(cell_lists), deepcopy(all_in_one_sample)
-#     show_cells(cell_lists)
-#
-#     # Optional visualization
-#     if visualize:
-#         sim.plot_tree(biopsy_lists=cell_lists, highlight_nodes=all_in_one_sample[0],
-#                       legend_y_offset=-170, output_file="simulated_tree")
-#
-#     # # Options for True tree pic
-#     # only_nodes = [0, 1, 3, 5, 4, 7, 13, 12, 19]
-#     # if visualize:
-#     #     sim.plot_tree(biopsy_lists=cell_lists, legend_y_offset=-170,
-#     #                   highlight_nodes=all_in_one_sample[0], output_file="simulated_tree")
-#     #     sim.plot_tree(biopsy_lists=cell_lists,legend_y_offset=-170,
-#     #                   highlight_nodes=all_in_one_sample[0],extended=False,
-#     #                   only_nodes=only_nodes,node_numbers=True,output_file="true_tree")
-#     # # if visualize:
-#     # #     sim.plot_tree(biopsy_lists=cell_lists,legend_y_offset=-170,
-#     # #                   highlight_nodes=all_in_one_sample[0])
-#
-#     # Clear CNPs if requested
-#     if clear_cnps:
-#         with Timer("Clear CNPs: ", time_collector) if time_collector else contextlib.nullcontext():
-#             true_tree_simplified = sim.tree_without_CNPs()
-#             for lst in (cl + [osl[0]]):
-#                 for cell in lst:
-#                     cell.genome = np.array([], dtype=int)
-#     else:
-#         true_tree_simplified = sim.tree
-#
-#     if clear_cnps:    # clear CNPs
-#         if time_collector is not None:
-#             with Timer("Clear CNPs: ", time_collector):
-#                 true_tree_simplified = sim.tree_without_CNPs()  # clears simulated tree
-#                 for cell_list in cl:                            # clears biopsy
-#                     for cell in cell_list:
-#                         cell.genome = np.array([], dtype=int)
-#                 for cell in osl[0]:
-#                     cell.genome = np.array([], dtype=int)
-#     else:
-#         true_tree_simplified = sim.tree
-#
-#
-#     # --- unified build config ---
-#     build_kwargs = {"r": r_dist}
-#     if parallel:
-#         build_kwargs.update({"dist_matrix_path": None, "inids": inid, "indm": indm})
-#     else:
-#         build_kwargs.update({"dist_matrix_path": OUT_FILE_NAME})
-#     if reconstruction_algorithm:
-#         build_kwargs["algorithm"] = reconstruction_algorithm
-#
-#     # --- build trees ---
-#     njtree, nj_info, root_nj = build_evolution_tree(osl, only_nj=True, **build_kwargs)
-#     tree, rt_info, root_rt = build_evolution_tree(cl, **build_kwargs)
-#
-#     if write_newick:
-#         print("Newick simulated:", to_newick(sim.tree))
-#         print("Reconstructed:", to_newick(tree))
-#         print("NJ tree:", to_newick(njtree))
-#
-#     # Visualization (optional)
-#     if visualize:
-#         visualize_tree_plotly(tree, rt_info, output_file="reconstructed.html")
-#         visualize_tree_plotly(njtree, nj_info, output_file="nj.html")
-#
-#     # --- Evaluate GRF distances ---
-#     if time_collector:
-#         with Timer("GRF our: ", time_collector):
-#             ret1 = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, tree, root_rt)
-#         with Timer("GRF NJ: ", time_collector):
-#             ret2 = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, njtree, root_nj)
-#     else:
-#         ret1 = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, tree, root_rt)
-#         ret2 = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, njtree, root_nj)
-#
-#     print("GRF - reconstructed:", ret1)
-#     print("GRF - NJ:", ret2)
-#
-#     return true_tree_simplified, tree, njtree
+def _perform_biopsies(sim, biopsy_generations, biopsy_size, biopsy_size_scalable, seed, compare_dm):
+    cell_lists, all_in_one_sample = [], [[]]
+
+    for b_gen in biopsy_generations:
+        biopsy = sim.perform_biopsy(
+            biopsy_size=biopsy_size,
+            biopsy_size_scalable=biopsy_size_scalable,
+            generation=b_gen,
+            seed=seed
+        )
+        if biopsy: # we assume biopsy has at least one cell
+            cell_lists.append(biopsy)
+            all_in_one_sample[0] += biopsy
+        else:
+            print(f"Biopsy sample from generation {b_gen} has no cells. Skipping.")
+
+    if compare_dm:
+        sim.to_distance_matrix(SIM_DM, [x.cell_id for x in all_in_one_sample[0]])
+
+    print("Number of biopsy cells:", len(all_in_one_sample[0]))
+    return cell_lists, all_in_one_sample
+
+def _handle_small_biopsy(time_collector):
+    print("Total number of cells in biopsy less than 3.")
+    if time_collector is not None:
+        for key in ["Computing cnp2cnp distance matrix: ", "Clear CNPs: ", "GRF our: ", "GRF NJ: "]:
+            time_collector[key] = 0
+
+def _compute_distance_matrix(all_in_one_sample, parallel, time_collector):
+    # for parallel case single distances are being computed
+    # for not parallel we write biopsy to cnp2cnp format file, and proces that
+    if not parallel:
+        to_file(IN_FILE_NAME, all_in_one_sample[0])
+
+    inid = indm = None
+    if time_collector is not None:
+        with Timer("Computing cnp2cnp distance matrix: ", time_collector):
+            if parallel:
+                inid, indm = distance_matrix_from_biopsy(all_in_one_sample[0])
+            else:
+                use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
+    else:
+        if parallel:
+            inid, indm = distance_matrix_from_biopsy(all_in_one_sample[0])
+        else:
+            use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
+    return inid, indm
+
+def _reconstruct_and_evaluate(sim, cell_lists, all_in_one_sample, r_dist, visualize,
+                              clear_cnps, parallel, write_newick, reconstruction_algorithm,
+                              inid, indm, time_collector):
+    cl, osl = deepcopy(cell_lists), deepcopy(all_in_one_sample)
+    show_cells(cell_lists)
+
+    # Optional visualization
+    if visualize:
+        sim.plot_tree(biopsy_lists=cell_lists, highlight_nodes=all_in_one_sample[0],
+                      legend_y_offset=-170, output_file="simulated_tree")
+
+    # # Options for True tree pic
+    # only_nodes = [0, 1, 3, 5, 4, 7, 13, 12, 19]
+    # if visualize:
+    #     sim.plot_tree(biopsy_lists=cell_lists, legend_y_offset=-170,
+    #                   highlight_nodes=all_in_one_sample[0], output_file="simulated_tree")
+    #     sim.plot_tree(biopsy_lists=cell_lists,legend_y_offset=-170,
+    #                   highlight_nodes=all_in_one_sample[0],extended=False,
+    #                   only_nodes=only_nodes,node_numbers=True,output_file="true_tree")
+    # # if visualize:
+    # #     sim.plot_tree(biopsy_lists=cell_lists,legend_y_offset=-170,
+    # #                   highlight_nodes=all_in_one_sample[0])
+
+    # # Clear CNPs if requested
+    # if clear_cnps:
+    #     with Timer("Clear CNPs: ", time_collector) if time_collector else contextlib.nullcontext():
+    #         true_tree_simplified = sim.tree_without_CNPs()
+    #         for lst in (cl + [osl[0]]):
+    #             for cell in lst:
+    #                 cell.genome = np.array([], dtype=int)
+    # else:
+    #     true_tree_simplified = sim.tree
+
+    if clear_cnps:    # clear CNPs
+        if time_collector is not None:
+            with Timer("Clear CNPs: ", time_collector):
+                true_tree_simplified = sim.tree_without_CNPs()  # clears simulated tree
+                for cell_list in cl:                            # clears biopsy
+                    for cell in cell_list:
+                        cell.genome = np.array([], dtype=int)
+                for cell in osl[0]:
+                    cell.genome = np.array([], dtype=int)
+    else:
+        true_tree_simplified = sim.tree
+
+    # --- unified build config ---
+    build_kwargs = {"r": r_dist}
+    if parallel:
+        build_kwargs.update({"dist_matrix_path": None, "inids": inid, "indm": indm})
+    else:
+        build_kwargs.update({"dist_matrix_path": OUT_FILE_NAME})
+    if reconstruction_algorithm:
+        build_kwargs["neighbor_joining"] = reconstruction_algorithm
+
+    # --- build trees ---
+    njtree, nj_info, root_nj = build_evolution_tree(osl, only_nj=True, **build_kwargs)
+    tree, rt_info, root_rt = build_evolution_tree(cl, **build_kwargs)
+
+    if write_newick:
+        print("Newick simulated:", to_newick(sim.tree))
+        print("Reconstructed:", to_newick(tree))
+        print("NJ tree:", to_newick(njtree))
+
+    # Visualization (optional)
+    if visualize:
+        visualize_tree_plotly(tree, rt_info, output_file="reconstructed.html")
+        visualize_tree_plotly(njtree, nj_info, output_file="nj.html")
+
+    # if visualize:
+    #     lno = {2:[8,6], 1:[20,21,22,25,16,30], 0:[50,32,54,34,56,57,21,38,65,43,71,48]}
+    #     visualize_tree_plotly(tree, rt_node_info_for_plots, level_node_ordering=lno, output_file="reconstructed.html")
+    #     lno1 = {0:[50,32,54,34,20,56,57,21,22,38,8,65,25,43,16,6,71,30,48]}
+    #     visualize_tree_plotly(njtree, nj_node_info_for_plots, level_node_ordering=lno1, output_file="nj.html")
+
+
+    # --- Evaluate GRF distances ---
+    if time_collector is not None:
+        with Timer("GRF our: ", time_collector):
+            ret1 = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, tree, root_rt)
+        with Timer("GRF NJ: ", time_collector):
+            ret2 = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, njtree, root_nj)
+    else:
+        ret1 = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, tree, root_rt)
+        ret2 = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, njtree, root_nj)
+
+    print("GRF - reconstructed:", ret1)
+    print("GRF - NJ:", ret2)
+
+    return true_tree_simplified, tree, njtree
 
 
 def run_single_test(config="config_telomeric.json", bedfile="bed like config sample.csv", seed=777,
@@ -317,154 +328,52 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
     and between simulated tree and NJ-reconstructed tree.
 
     """
-    # # 1. Simulation phase
-    # sim = _run_simulation(config, bedfile, seed, simulator_with_loaded_tree, time_collector)
-    #
-    # # 2. Biopsy phase
-    # cell_lists, all_in_one_sample = _perform_biopsies(sim, biopsy_generations, biopsy_size,
-    #                                                   biopsy_size_scalable, seed, compare_dm)
-    #
-    # if len(all_in_one_sample[0]) < 3:
-    #     _handle_small_biopsy(time_collector)
-    #     return
-    #
-    # # 3. Distance matrix computation
-    # inid, indm = _compute_distance_matrix(all_in_one_sample, parallel, time_collector)
-    #
-    # # 4. Tree reconstruction and evaluation
-    # return _reconstruct_and_evaluate(
-    #     sim,
-    #     cell_lists,
-    #     all_in_one_sample,
-    #     r_dist,
-    #     visualize,
-    #     clear_cnps,
-    #     parallel,
-    #     write_newick,
-    #     reconstruction_algorithm,
-    #     inid,
-    #     indm,
-    #     time_collector,
-    # )
-    if simulator_with_loaded_tree:
-        sim = simulator_with_loaded_tree
-    else:
-        if bedfile is not None:
-            sim = CancerCellEvolutionSimulator(config, bedfile, seed=seed)
-        else:
-            sim = CancerCellEvolutionSimulator(config, seed=seed)
+    # 1. Simulation phase
+    sim = _run_simulation(config, bedfile, seed, simulator_with_loaded_tree, time_collector)
 
-        if time_collector is not None:
-            with Timer("Core simulation: ", time_collector):
-                sim.run_simulation()
-        else:
-            sim.run_simulation()
+    # 2. Biopsy phase
+    cell_lists, all_in_one_sample = _perform_biopsies(sim, biopsy_generations, biopsy_size,
+                                                      biopsy_size_scalable, seed, compare_dm)
 
-    cell_lists, all_in_one_sample = [], [[]]
-    for b_gen in biopsy_generations:
-        biopsy = sim.perform_biopsy(biopsy_size=biopsy_size, biopsy_size_scalable=biopsy_size_scalable,
-                                    generation=b_gen, seed=seed)
-        if biopsy:  # we assume biopsy has at least one cell
-            cell_lists.append(biopsy)
-            all_in_one_sample[0] += biopsy
-        else:
-            print("Biopsy sample from generation ", b_gen, " has no cells. Skipping.")
-
-    if compare_dm:
-        l = [x.cell_id for x in all_in_one_sample[0]]
-        sim.to_distance_matrix(SIM_DM, l)
-
-    print("Number of biopsy cells: ", len(all_in_one_sample[0]))
     if len(all_in_one_sample[0]) < 3:
-        print("Total number of cells in biopsy less than 3.")
-        if time_collector is not None:
-            for key in ["Computing cnp2cnp distance matrix: ", "Clear CNPs: ", "GRF our: ", "GRF NJ: "]:
-                time_collector[key] = 0
+        _handle_small_biopsy(time_collector)
         return
 
-    if not parallel:
-        to_file(IN_FILE_NAME, all_in_one_sample[0])
-    inid, indm = 0, 0
-    print("Simulation finished. Generated cell evolution tree total nodes:", len(sim.tree.nodes()))
-    if time_collector is not None:
-        with Timer("Computing cnp2cnp distance matrix: ", time_collector):
-            if parallel:
-                inid, indm = distance_matrix_from_biopsy(all_in_one_sample[0])
-            else:
-                use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
-    else:
-        if parallel:
-            inid, indm = distance_matrix_from_biopsy(all_in_one_sample[0])
-        else:
-            use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
+    # 3. Distance matrix computation
+    inid, indm = _compute_distance_matrix(all_in_one_sample, parallel, time_collector)
 
-    cl = deepcopy(cell_lists)
-    osl = deepcopy(all_in_one_sample)
-    show_cells(cell_lists)
-
-    # Options for True tree pic
-    only_nodes = [0, 1, 3, 5, 4, 7, 13, 12, 19]
-    if visualize:
-        sim.plot_tree(biopsy_lists=cell_lists, legend_y_offset=-170,
-                      highlight_nodes=all_in_one_sample[0], output_file="simulated_tree")
-        sim.plot_tree(biopsy_lists=cell_lists,legend_y_offset=-170,
-                      highlight_nodes=all_in_one_sample[0],extended=False,
-                      only_nodes=only_nodes,node_numbers=True,output_file="true_tree")
-    # if visualize:
-    #     sim.plot_tree(biopsy_lists=cell_lists,legend_y_offset=-170,
-    #                   highlight_nodes=all_in_one_sample[0])
-
-    if clear_cnps:    # clear CNPs
-        if time_collector is not None:
-            with Timer("Clear CNPs: ", time_collector):
-                true_tree_simplified = sim.tree_without_CNPs()  # clears simulated tree
-                for cell_list in cl:                            # clears biopsy
-                    for cell in cell_list:
-                        cell.genome = np.array([], dtype=int)
-                for cell in osl[0]:
-                    cell.genome = np.array([], dtype=int)
-    else:
-        true_tree_simplified = sim.tree
-
-    if parallel:
-        njtree, nj_node_info_for_plots, root_nj = build_evolution_tree(osl, dist_matrix_path=None, r=r_dist,
-                                                                 only_nj=True, inids=inid, indm=indm)
-        tree, rt_node_info_for_plots, root_rt = build_evolution_tree(cl, dist_matrix_path=None, r=r_dist,
-                                                                     inids=inid, indm=indm)
-    else:
-        njtree, nj_node_info_for_plots, root_nj = build_evolution_tree(osl, OUT_FILE_NAME, r=r_dist, only_nj=True)
-        tree, rt_node_info_for_plots, root_rt = build_evolution_tree(cl, OUT_FILE_NAME, r=r_dist)
-
-    if write_newick:
-        print("Newick simulated:", to_newick(sim.tree))
-        print("Reconstructed:", to_newick(tree))
-        print("NJ tree:", to_newick(njtree))
-
-
-    if visualize:
-        lno = {2:[8,6], 1:[20,21,22,25,16,30], 0:[50,32,54,34,56,57,21,38,65,43,71,48]}
-        visualize_tree_plotly(tree, rt_node_info_for_plots, level_node_ordering=lno, output_file="reconstructed.html")
-        lno1 = {0:[50,32,54,34,20,56,57,21,22,38,8,65,25,43,16,6,71,30,48]}
-        visualize_tree_plotly(njtree, nj_node_info_for_plots, level_node_ordering=lno1, output_file="nj.html")
-
-    if time_collector is not None:
-        with Timer("GRF our: ", time_collector):
-            ret = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, tree, root_rt)
-    else:
-        ret = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, tree, root_rt)
-    print("GRF - reconstructed: ", ret)
-
-    if time_collector is not None:
-        with Timer("GRF NJ: ", time_collector):
-            ret = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, njtree, root_nj)
-    else:
-        ret = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, njtree, root_nj)
-    print("GRF - all nodes NJ : ", ret)
-
-    return true_tree_simplified, tree, njtree
+    # 4. Tree reconstruction and evaluation
+    return _reconstruct_and_evaluate(
+        sim,
+        cell_lists,
+        all_in_one_sample,
+        r_dist,
+        visualize,
+        clear_cnps,
+        parallel,
+        write_newick,
+        reconstruction_algorithm,
+        inid,
+        indm,
+        time_collector,
+    )
 
 
 def run_single_test_timed(seed, both=True, **kwargs):
+    """
+    Wrapper for run_single_test to measure the time for the cases with clear_cnps optimization on and off.
+
+    Parameters
+    ----------
+    seed        passed to run_single_test
+    both        if true executes run_single_test two times with clear_cnps optimization on and off;
+                if false executes run_single_test without clear_cnps optimization;
+    kwargs      parameters passed to run_single_test
+
+    Returns
+    -------
+    Dictionaries with times of executions of parts of test (computing distance matrix, GRF distances ...)
+    """
     run_timings_no_opt = {}
     with Timer("Total", run_timings_no_opt):
         run_single_test(seed=seed, time_collector=run_timings_no_opt, clear_cnps=False, **kwargs)
@@ -478,6 +387,22 @@ def run_single_test_timed(seed, both=True, **kwargs):
 
 
 def check_clearcnp_optimizaton(how_many=100, both=True, seeds=None, **kwargs):
+    """
+    Runner
+
+    Parameters
+    ----------
+    how_many    number of tests to run
+    both        if true runs pair of test with clear_cnps optimization on and off;
+                otherwise runs one test without optimization
+    seeds       seeds for executions of run_single_test; if not given, randomly selected here
+    kwargs      parameters passed to run_single_test
+
+    Returns
+    -------
+    Prints summary of the tests.
+
+    """
     if not seeds:
         seeds = [random.randint(0, 1000) for _ in range(how_many)]
         seeds = [696]
@@ -561,7 +486,8 @@ if __name__ == "__main__":
     #                            bedfile="test/data/pic.csv") #, parallel=True)
 
     run_single_test(seed=773, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
-                    biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True)
+                    biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
+                    reconstruction_algorithm=neighbor_joining_full)
     # run_single_test(seed=773, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
     #                 biopsy_size_scalable=0.5, biopsy_generatons=[3, 5, 7, 9], r_dist=4)
 
