@@ -20,7 +20,139 @@ def parse_distance_matrix(path):
             matrix.append([float(x) for x in parts[1:]])
     return ids, np.array(matrix)
 
-def build_evolution_tree(cell_lists, dist_matrix_path=None, r=2, only_nj=False, inids=None, indm=None):
+
+def neighbor_joining_standard(dist_matrix, cells, max_id, existing_tree=None):
+    D = dist_matrix.copy()
+    tree = existing_tree or nx.DiGraph()
+    new_nodes = {}  # Store new nodes for visualization
+    id_map = {i: cells[i] for i in range(len(cells))}
+    next_id = max_id + 1
+
+    for cell in cells:
+        tree.add_node(cell.node_id, genome=cell.genome, cell_id=cell.cell_id)
+
+    while len(D) > 2:
+        n = len(D)
+        total_dist = D.sum(axis=1)
+        Q = np.zeros((n, n))
+        for i in range(n):
+            for j in range(n):
+                if i != j:
+                    Q[i][j] = (n - 2) * D[i][j] - total_dist[i] - total_dist[j]
+
+        i, j = divmod(np.argmin(Q), n)
+        if j < i:
+            i, j = j, i
+
+        delta = (total_dist[i] - total_dist[j]) / (n - 2)
+        limb_len_i = 0.5 * (D[i][j] + delta)
+        limb_len_j = 0.5 * (D[i][j] - delta)
+
+        id_i, id_j = id_map[i], id_map[j]
+        new_cell = Genotype(None, next_id)
+        next_id += 1
+
+        tree.add_node(new_cell.node_id, genome=new_cell.genome, cell_id=None)
+        tree.add_edge(new_cell.node_id, id_i.node_id, weight=limb_len_i)
+        tree.add_edge(new_cell.node_id, id_j.node_id, weight=limb_len_j)
+        new_nodes[new_cell] = (id_i, id_j)
+
+        new_row = [(D[i][k] + D[j][k] - D[i][j]) / 2 for k in range(n) if k != i and k != j]
+        D = np.delete(D, [i, j], axis=0)
+        D = np.delete(D, [i, j], axis=1)
+        D = np.vstack([D, new_row])
+        new_col = np.append(new_row, [0])[:, None]
+        D = np.hstack([D, new_col])
+
+        keys = [id_map[k] for k in range(n) if k != i and k != j]
+        id_map = {k: v for k, v in enumerate(keys)}
+        id_map[len(id_map)] = new_cell
+
+    if len(id_map) == 2:
+        id1, id2 = id_map[0], id_map[1]
+        root_cell = Genotype(None, NJ_REC_TR_ROOT_ID)
+        tree.add_node(root_cell.node_id, genome=root_cell.genome, cell_id=None)
+        tree.add_edge(root_cell.node_id, id1.node_id, weight=D[0][1] / 2)
+        tree.add_edge(root_cell.node_id, id2.node_id, weight=D[0][1] / 2)
+        new_nodes[root_cell] = (id1, id2)
+    elif len(id_map) == 1:        # Only one cell in the highest biopsy level, and all connected, ready tree here
+        return tree, new_nodes, id_map[0].cell_id
+
+    return tree, new_nodes, NJ_REC_TR_ROOT_ID
+
+
+def neighbor_joining_full(dist_matrix, cells, max_id, existing_tree=None):
+    """
+    Deterministic, parent-retaining neighbor-joining replacement.
+    Each merge creates a new internal node (copy of parent) with empty genome.
+    Original leaves are preserved.
+    Returns: tree, new_nodes dict, root cell_id
+    """
+    D = dist_matrix.copy().astype(float)
+    tree = existing_tree or nx.DiGraph()
+    new_nodes = {}
+
+    # keep ordered list aligned with D
+    node_list = [cells[i] for i in range(len(cells))]
+
+    # add leaf nodes
+    for node in node_list:
+        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
+
+    next_id = max_id + 1
+
+    while len(node_list) > 1:
+        n = len(D)
+
+        # find closest pair
+        i, j = None, None
+        min_val = np.inf
+        for a in range(n):
+            for b in range(a+1, n):
+                if D[a, b] < min_val:
+                    min_val = D[a, b]
+                    i, j = a, b
+
+        # decide parent based on minimal sum to others
+        others = [k for k in range(n) if k not in (i, j)]
+        sum_i = D[i, others].sum() if others else 0
+        sum_j = D[j, others].sum() if others else 0
+
+        id_i = node_list[i].cell_id
+        id_j = node_list[j].cell_id
+
+        if (sum_i < sum_j) or (sum_i == sum_j and str(id_i) < str(id_j)):
+            parent_idx, child_idx = i, j
+        else:
+            parent_idx, child_idx = j, i
+
+        parent_leaf = node_list[parent_idx]
+        child_leaf = node_list[child_idx]
+
+        # create a new internal node (copy of parent) with empty genome
+        internal_node = type(parent_leaf)(genome=None, node_id=next_id, cell_id=parent_leaf.cell_id)
+        next_id += 1
+        tree.add_node(internal_node.node_id, genome=None, cell_id=internal_node.cell_id)
+
+        # attach original leaves under the internal node
+        tree.add_edge(internal_node.node_id, parent_leaf.node_id, weight=0.0)
+        tree.add_edge(internal_node.node_id, child_leaf.node_id, weight=float(D[parent_idx, child_idx]))
+
+        new_nodes[internal_node] = (parent_leaf, child_leaf)
+
+        # replace parent_leaf in node_list with internal_node, remove child_leaf
+        keep_indices = [k for k in range(n) if k != child_idx]
+        D = D[np.ix_(keep_indices, keep_indices)]
+        node_list[parent_idx] = internal_node
+        node_list.pop(child_idx)
+
+    # final remaining node is root
+    root = node_list[0]
+    return tree, new_nodes, root.cell_id
+
+
+def build_evolution_tree(cell_lists, dist_matrix_path=None, r=2, only_nj=False, inids=None, indm=None,
+                         neighbor_joining=neighbor_joining_standard):
     if dist_matrix_path:
         ids, full_dist_matrix = parse_distance_matrix(dist_matrix_path)
     elif inids is not None and indm is not None:
@@ -108,66 +240,6 @@ def build_evolution_tree(cell_lists, dist_matrix_path=None, r=2, only_nj=False, 
         node_levels[node] = max(node_levels.values()) + 1
 
     return tree, node_levels, final_root
-
-
-def neighbor_joining(dist_matrix, cells, max_id, existing_tree=None):
-    D = dist_matrix.copy()
-    tree = existing_tree or nx.DiGraph()
-    new_nodes = {}  # Store new nodes for visualization
-    id_map = {i: cells[i] for i in range(len(cells))}
-    next_id = max_id + 1
-
-    for cell in cells:
-        tree.add_node(cell.node_id, genome=cell.genome, cell_id=cell.cell_id)
-
-    while len(D) > 2:
-        n = len(D)
-        total_dist = D.sum(axis=1)
-        Q = np.zeros((n, n))
-        for i in range(n):
-            for j in range(n):
-                if i != j:
-                    Q[i][j] = (n - 2) * D[i][j] - total_dist[i] - total_dist[j]
-
-        i, j = divmod(np.argmin(Q), n)
-        if j < i:
-            i, j = j, i
-
-        delta = (total_dist[i] - total_dist[j]) / (n - 2)
-        limb_len_i = 0.5 * (D[i][j] + delta)
-        limb_len_j = 0.5 * (D[i][j] - delta)
-
-        id_i, id_j = id_map[i], id_map[j]
-        new_cell = Genotype(None, next_id)
-        next_id += 1
-
-        tree.add_node(new_cell.node_id, genome=new_cell.genome, cell_id=None)
-        tree.add_edge(new_cell.node_id, id_i.node_id, weight=limb_len_i)
-        tree.add_edge(new_cell.node_id, id_j.node_id, weight=limb_len_j)
-        new_nodes[new_cell] = (id_i, id_j)
-
-        new_row = [(D[i][k] + D[j][k] - D[i][j]) / 2 for k in range(n) if k != i and k != j]
-        D = np.delete(D, [i, j], axis=0)
-        D = np.delete(D, [i, j], axis=1)
-        D = np.vstack([D, new_row])
-        new_col = np.append(new_row, [0])[:, None]
-        D = np.hstack([D, new_col])
-
-        keys = [id_map[k] for k in range(n) if k != i and k != j]
-        id_map = {k: v for k, v in enumerate(keys)}
-        id_map[len(id_map)] = new_cell
-
-    if len(id_map) == 2:
-        id1, id2 = id_map[0], id_map[1]
-        root_cell = Genotype(None, NJ_REC_TR_ROOT_ID)
-        tree.add_node(root_cell.node_id, genome=root_cell.genome, cell_id=None)
-        tree.add_edge(root_cell.node_id, id1.node_id, weight=D[0][1] / 2)
-        tree.add_edge(root_cell.node_id, id2.node_id, weight=D[0][1] / 2)
-        new_nodes[root_cell] = (id1, id2)
-    elif len(id_map) == 1:        # Only one cell in the highest biopsy level, and all connected, ready tree here
-        return tree, new_nodes, id_map[0].cell_id
-
-    return tree, new_nodes, NJ_REC_TR_ROOT_ID
 
 
 def visualize_tree_plotly(tree, node_levels=None, output_file="reconstructed.html", level_node_ordering=None):
@@ -312,12 +384,12 @@ if __name__ == '__main__':
         [Genotype([2, 1, 1], 3), Genotype([1, 2, 0], 4)]
     ]
 
-    # 3->2
-    # tree, a, b = build_evolution_tree(cell_lists, "distance_matrix.txt", r=2)
+    # # 3->2
+    # tree, a, b = build_evolution_tree(cell_lists, "test/data/dm/distance_matrix.txt", r=2)
     # visualize_tree_plotly(tree, a)
-    # 3->1
-    # tree, a, b = build_evolution_tree(cell_lists1, "distance_matrix.txt", r=2)
+    # # 3->1
+    # tree, a, b = build_evolution_tree(cell_lists1, "test/data/dm/distance_matrix.txt", r=2)
     # visualize_tree_plotly(tree, a)
     # 3->2, 4->2
-    tree, a, _ = build_evolution_tree(cell_lists, "distance_matrix.txt", r=4)
+    tree, a, _ = build_evolution_tree(cell_lists, "test/data/dm/distance_matrix.txt", r=4)
     visualize_tree_plotly(tree, a)

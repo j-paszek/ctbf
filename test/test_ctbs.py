@@ -11,7 +11,7 @@ import json
 import networkx as nx
 from networkx.readwrite import json_graph
 
-from reconstructor import build_evolution_tree, visualize_tree_plotly
+from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full
 from simulator import CancerCellEvolutionSimulator, Genotype
 
 
@@ -67,7 +67,7 @@ def test_no_nj_in_reconstruction():
     # Reconstructed tree is ((3,22)3,(15,23)15)5
     run_single_test(config="data/config_for_pic.json", bedfile="data/pic.csv",
                     seed=582, biopsy_size_scalable=0.5,
-                    biopsy_generatons=[4, 6, 8], r_dist=4, clear_cnps=False)
+                    biopsy_generations=[4, 6, 8], r_dist=4, clear_cnps=False)
 
 
 def test_empty_biopsy_simulator():
@@ -104,7 +104,7 @@ def test_reconstructor_no_connecting_within_distance():
                                             # [Genotype(ID=7, Gen=6, cell_id=7, genome=[2 0 2 2 2 2 2 4 2 2])]
     assert 0 < cell_lists[1][1].genome[1]   # cell 13 has non-zero CNP in position where potential match has 0
                                             # Genotype(ID=13, Gen=8, cell_id=13, genome=[2 2 2 2 2 2 2 4 2 2])
-    tt, rt, nj = run_single_test(biopsy_generatons=[4, 6, 8], r_dist=4, simlulator_with_loaded_tree=sim, **common_params)
+    tt, rt, nj = run_single_test(biopsy_generations=[4, 6, 8], r_dist=4, simulator_with_loaded_tree=sim, **common_params)
     assert "((7:0.0000)7:0.0000,(13:0.0000)13:0.0000)None;" == to_newick(rt)
     # cell 14 is connected to cell 7, whereas cell 13 not despite dist=0 < r_dist
     # the cell 13 is copied into upper level, and then connected with common father with 7
@@ -126,7 +126,7 @@ def test_reconstructor_rule_for_connecting():
 
 def test_simulator_legacy():
     tt, rt, nj = run_single_test(seed=689, config="data/config_for_pic.json", bedfile="data/pic.csv",
-                    biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4)
+                    biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4)
     t689 = tree_from_json(689)
     assert not to_newick(t689) == to_newick(tt)
     # we want it to fail to produce a tree, where for some nodes A and B; A is parent of B;
@@ -159,13 +159,13 @@ def test_distance_matrix_from_biopsy():
 
 def test_reconstructor_with_parallel():
     simt, rt, njt = run_single_test(config="data/config100.json", bedfile=None, seed=777,
-                    biopsy_size=2, biopsy_size_scalable=None, biopsy_generatons=[5, 7, 9], r_dist=4,
+                    biopsy_size=2, biopsy_size_scalable=None, biopsy_generations=[5, 7, 9], r_dist=4,
                     visualize=False, time_collector=None, clear_cnps=False, compare_dm=False,
-                    to_newick=False, simlulator_with_loaded_tree=None, parallel=False)
+                    write_newick=False, simulator_with_loaded_tree=None, parallel=False)
     simt1, rt1, njt1 = run_single_test(config="data/config100.json", bedfile=None, seed=777,
-                                    biopsy_size=2, biopsy_size_scalable=None, biopsy_generatons=[5, 7, 9], r_dist=4,
+                                    biopsy_size=2, biopsy_size_scalable=None, biopsy_generations=[5, 7, 9], r_dist=4,
                                     visualize=False, time_collector=None, clear_cnps=False, compare_dm=False,
-                                    to_newick=False, simlulator_with_loaded_tree=None, parallel=True)
+                                    write_newick=False, simulator_with_loaded_tree=None, parallel=True)
     assert to_newick(simt) == to_newick(simt1)
     assert to_newick(njt) == to_newick(njt1)
     assert to_newick(rt) == to_newick(rt1)
@@ -180,7 +180,7 @@ def test_empty_biopsy():
     # that means cnp2cnp runs as cnp2cnp([2,  2,2,2,2,2,4,2,2], [2,  2,2,2,2,2,4,2,2])
     # we omit second position even in cell_13; in this edge case cell_7 and cell_13 becomes identical
     run_single_test(seed=689, config="data/config_for_pic.json", bedfile="data/pic.csv",
-                    biopsy_size_scalable=0.5, biopsy_generatons=[4, 6, 8], r_dist=4)
+                    biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4)
 
 
 def test_reconstructor():
@@ -201,3 +201,43 @@ def test_reconstructor():
     t, l, _ = build_evolution_tree(njb1, "data/dm/distance_matrix.txt", r=1, only_nj=True)
     assert to_newick(t) == "((1:0.2500,2:0.7500)None:0.1250,(3:0.7500,4:3.2500)None:0.1250)None;" #same as previous NJ
     visualize_tree_plotly(t, l)
+
+def test_reconstructor_njfull():
+    D = np.array([
+        [0, 1, 1],
+        [1, 0, 4],
+        [1, 4, 0]
+    ])
+    cells = [Genotype([2, 2, 1], 1), Genotype([1, 1, 1], 2), Genotype([2, 1, 1], 3)]
+    c3 = copy.deepcopy(cells)
+    max_id = 3
+    t1, l, _ = neighbor_joining_full(D, cells, max_id, existing_tree=None)
+    assert to_newick(t1) == "((1:0.0000,2:1.0000)1:0.0000,3:1.0000)1;"
+    D = np.array([
+        [0, 1, 3, 8],
+        [1, 0, 7, 7],
+        [3, 7, 0, 2],
+        [8, 7, 2, 0]
+    ])
+    cells = [Genotype([2, 2, 1], 1), Genotype([1, 1, 1], 2),
+             Genotype([2, 1, 1], 3), Genotype([2, 1, 7], 4)]
+    c4 = copy.deepcopy(cells)
+    max_id = 4
+    t2, l, _ = neighbor_joining_full(D, cells, max_id, existing_tree=None)
+    assert to_newick(t2) == "((1:0.0000,2:1.0000)1:0.0000,(3:0.0000,4:2.0000)3:3.0000)1;"
+
+    t3, l, _ = build_evolution_tree([c3], dist_matrix_path="data/dm/dm3", only_nj=True,
+                                    neighbor_joining=neighbor_joining_full)
+    assert to_newick(t1) == to_newick(t3)
+
+    t4, l, _ = build_evolution_tree([c3], dist_matrix_path="data/dm/dm3",
+                                    neighbor_joining=neighbor_joining_full)
+    assert to_newick(t1) == to_newick(t4)
+
+    t5, l, _ = build_evolution_tree([c4], dist_matrix_path="data/dm/dm4", only_nj=True,
+                                    neighbor_joining=neighbor_joining_full)
+    assert to_newick(t2) == to_newick(t5)
+
+    t6, l, _ = build_evolution_tree([c4], dist_matrix_path="data/dm/dm4",
+                                    neighbor_joining=neighbor_joining_full)
+    assert to_newick(t2) == to_newick(t6)
