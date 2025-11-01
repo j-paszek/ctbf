@@ -12,7 +12,8 @@ from concurrent.futures import ProcessPoolExecutor
 from simulator import CancerCellEvolutionSimulator, Genotype
 from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full
 from evaluator import grf_tree
-from ctbs_utils import to_newick
+from evaluator_full import evaluate_4
+from ctbs_utils import to_newick, vizualize_nx_tree
 
 IN_FILE_NAME = "biopsy.txt"
 OUT_FILE_NAME = "cnp_distance_matrix.txt"
@@ -485,9 +486,20 @@ if __name__ == "__main__":
     # run_single_test(seed=773, config="test/data/config_for_pic.json",
     #                            bedfile="test/data/pic.csv") #, parallel=True)
 
-    run_single_test(seed=773, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
+    # run_single_test(seed=773, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
+    #                 biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
+    #                 reconstruction_algorithm=neighbor_joining_full)
+
+    # seed 35 !!!
+    a,b,c = run_single_test(seed=295, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
                     biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
                     reconstruction_algorithm=neighbor_joining_full)
+
+    out = evaluate_4(a, b, print_debug=True)
+    print(out)
+    vizualize_nx_tree(b)
+
+
     # run_single_test(seed=773, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
     #                 biopsy_size_scalable=0.5, biopsy_generatons=[3, 5, 7, 9], r_dist=4)
 
