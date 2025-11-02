@@ -1,6 +1,7 @@
 import copy
 
 import numpy as np
+import pandas as pd
 import pytest
 from networkx.utils.misc import flatten
 
@@ -11,6 +12,7 @@ import json
 import networkx as nx
 from networkx.readwrite import json_graph
 
+from evaluator_full import evaluate_4
 from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full
 from simulator import CancerCellEvolutionSimulator, Genotype
 
@@ -281,3 +283,70 @@ def test_reconstructor_njfull():
     t6, l, _ = build_evolution_tree([c4], dist_matrix_path="data/dm/dm4",
                                     neighbor_joining=neighbor_joining_full)
     assert to_newick(t2) == to_newick(t6)
+
+
+df = pd.read_csv("data/f1results.csv", delimiter="\t")
+def float_to_str_comma(x, digits=3):
+    """
+    Convert a float to string with comma as decimal separator and fixed number of digits.
+    Example: 0.056644 -> '0,057'
+    """
+    rounded = round(x, digits)
+    int_part = int(rounded)
+
+    # check if number is integer after rounding
+    if rounded == int_part:
+        return f"{int_part},0"
+    else:
+        s = f"{rounded:.{digits}f}".rstrip("0")
+        if s.endswith("."):
+            s += "0"
+        return s.replace(".", ",")
+
+# Parametrize over rows, passing seed and expected outputs
+@pytest.mark.parametrize("seed,t,tr,tnj,tp,fp,fn,f1,i,p,r",
+                         [(row["seed"], row["T"], row["Trec"], row["Tnj"],
+                           row["TP"], row["FP"], row["FN"], row["F1"], row["IoU"],
+                           row["precision"], row["recall"]) for _, row in df.iterrows()])
+def test_ete3_to_nx(seed, t, tr, tnj, tp, fp, fn, f1, i, p, r):
+    a,b,c = run_single_test(seed=seed, config="data/config_for_pic.json", bedfile="data/pic.csv",
+                    biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
+                    reconstruction_algorithm=neighbor_joining_full)
+    # Checking trees
+    assert to_newick(a) == t
+    if "-" in tnj:
+        assert to_newick(b) == tr
+        out = evaluate_4(a, b)
+        tp_exp = out["ancestors_multiset"]["TP"]
+        assert tp == tp_exp
+        fp_exp = out["ancestors_multiset"]["FP"]
+        assert fp == fp_exp
+        fn_exp = out["ancestors_multiset"]["FN"]
+        assert fn == fn_exp
+        f1_exp = out["ancestors_multiset"]["F1"]
+        # assert float(f1.replace(",", ".")) == pytest.approx(f1_exp, 1e-3)
+        assert f1 == float_to_str_comma(f1_exp, 3)
+        i_exp = out["ancestors_multiset"]["IoU"]
+        assert i == float_to_str_comma(i_exp, 3)
+        p_exp = out["ancestors_multiset"]["precision"]
+        assert p == float_to_str_comma(p_exp, 3)
+        r_exp = out["ancestors_multiset"]["recall"]
+        assert r == float_to_str_comma(r_exp, 3)
+    else:
+        assert to_newick(c) == tnj
+        out = evaluate_4(a, c)
+        tp_exp = out["ancestors_multiset"]["TP"]
+        assert tp == tp_exp
+        fp_exp = out["ancestors_multiset"]["FP"]
+        assert fp == fp_exp
+        fn_exp = out["ancestors_multiset"]["FN"]
+        assert fn == fn_exp
+        f1_exp = out["ancestors_multiset"]["F1"]
+        # assert float(f1.replace(",", ".")) == pytest.approx(f1_exp, 1e-3)
+        assert f1 == float_to_str_comma(f1_exp, 3)
+        i_exp = out["ancestors_multiset"]["IoU"]
+        assert i == float_to_str_comma(i_exp, 3)
+        p_exp = out["ancestors_multiset"]["precision"]
+        assert p == float_to_str_comma(p_exp, 3)
+        r_exp = out["ancestors_multiset"]["recall"]
+        assert r == float_to_str_comma(r_exp, 3)
