@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 from networkx.utils.misc import flatten
+import atexit
+import os
 
 from ctbs import run_single_test, use_cnp2cnp_to_compute_pairwise_distance, distance_matrix_from_biopsy
 from ctbs_utils import to_newick
@@ -303,7 +305,7 @@ def float_to_str_comma(x, digits=3):
             s += "0"
         return s.replace(".", ",")
 
-# Parametrize over rows, passing seed and expected outputs
+@pytest.mark.skip(reason="One time test before code integration.")
 @pytest.mark.parametrize("seed,t,tr,tnj,tp,fp,fn,f1,i,p,r",
                          [(row["seed"], row["T"], row["Trec"], row["Tnj"],
                            row["TP"], row["FP"], row["FN"], row["F1"], row["IoU"],
@@ -350,3 +352,59 @@ def test_ete3_to_nx(seed, t, tr, tnj, tp, fp, fn, f1, i, p, r):
         assert p == float_to_str_comma(p_exp, 3)
         r_exp = out["ancestors_multiset"]["recall"]
         assert r == float_to_str_comma(r_exp, 3)
+
+
+results_store = {"ancestors_multiset_precision_failures": [], "ancestors_multiset_f1_failures": [],
+                 "ancestors_unique_precision_failures": [], "ancestors_unique_f1_failures": []}
+@pytest.fixture
+def failures():
+    return results_store
+
+def provide_summary(rec, nj, mode, seed, failures):
+    p1 = rec[mode]["precision"]
+    p2 = nj[mode]["precision"]
+    f1 = rec[mode]["F1"]
+    f2 = nj[mode]["F1"]
+    print("Mode ", mode)
+    print(f"Precision: {p1} vs: {p2}")
+    print(f"F1: {f1} vs: {f2}")
+    if p1 < p2:
+        name = mode + "_precision_failures"
+        failures[name].append(seed)
+    if f1 < f2:
+        name = mode + "_f1_failures"
+        failures[name].append(seed)
+
+
+@pytest.mark.parametrize("seed", df["seed"].unique().tolist())
+def test_evaluate4(seed, failures):
+    print(f"\nTesting seed: {seed}")
+    a, b, c = run_single_test(seed=seed, config="data/config_for_pic.json", bedfile="data/pic.csv",
+                              biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
+                              reconstruction_algorithm=neighbor_joining_full)
+    rec = evaluate_4(a, b)
+    nj = evaluate_4(a, c)
+    for mode in ["ancestors_multiset", "ancestors_unique"]:
+        provide_summary(rec, nj, mode, seed, failures)
+
+
+# register a function that will run even under PyCharm
+def save_results():
+    print("\n\nSummary")
+    print(results_store)
+    all_seeds = sorted({s for v in results_store.values() for s in v})
+
+    # initialize df
+    df = pd.DataFrame({"seed": all_seeds})
+
+    # mark presence (1 if seed in that list)
+    for key, seeds in results_store.items():
+        df[key] = df["seed"].apply(lambda x: 1 if x in seeds else 0)
+
+    # --- Optional: add a summary column ---
+    df["total_failures"] = df.drop(columns=["seed"]).sum(axis=1)
+
+    df.to_csv('out.csv', index=False)
+
+
+atexit.register(save_results)
