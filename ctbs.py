@@ -191,19 +191,21 @@ def _handle_small_biopsy(time_collector):
 def _compute_distance_matrix(all_in_one_sample, parallel, time_collector):
     # for parallel case single distances are being computed
     # for not parallel we write biopsy to cnp2cnp format file, and proces that
+    unique_cells = list({cell.cell_id: cell for cell in all_in_one_sample[0]}.values())
+
     if not parallel:
-        to_file(IN_FILE_NAME, all_in_one_sample[0])
+        to_file(IN_FILE_NAME, unique_cells)
 
     inid = indm = None
     if time_collector is not None:
         with Timer("Computing cnp2cnp distance matrix: ", time_collector):
             if parallel:
-                inid, indm = distance_matrix_from_biopsy(all_in_one_sample[0])
+                inid, indm = distance_matrix_from_biopsy(unique_cells)
             else:
                 use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
     else:
         if parallel:
-            inid, indm = distance_matrix_from_biopsy(all_in_one_sample[0])
+            inid, indm = distance_matrix_from_biopsy(unique_cells)
         else:
             use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
     return inid, indm
@@ -491,7 +493,7 @@ if __name__ == "__main__":
     #                 reconstruction_algorithm=neighbor_joining_full)
 
     # seed 35 !!!
-    a,b,c = run_single_test(seed=295, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
+    a,b,c = run_single_test(seed=35, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
                     biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
                     reconstruction_algorithm=neighbor_joining_full)
 
