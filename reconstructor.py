@@ -151,6 +151,34 @@ def neighbor_joining_full(dist_matrix, cells, max_id, existing_tree=None):
     return tree, new_nodes, root.cell_id
 
 
+def _extend_biopsies(cell_lists):
+    """
+    Ensures that if a cell_id appears in multiple biopsy levels (e.g., 1 and 3),
+    it also appears in all intermediate levels (e.g., 2).
+    Returns a modified copy of cell_lists.
+    """
+    # Map cell_id -> all levels where it appears
+    cell_levels = defaultdict(list)
+    for level, lst in enumerate(cell_lists):
+        for cell in lst:
+            cell_levels[cell.cell_id].append(level)
+
+    # Extend intermediate levels
+    for cell_id, levels in cell_levels.items():
+        if len(levels) > 1:
+            min_l, max_l = min(levels), max(levels)
+            for l in range(min_l, max_l + 1):
+                # If missing at level l, copy from nearest existing one
+                if all(c.cell_id != cell_id for c in cell_lists[l]):
+                    # copy genome from nearest level
+                    nearest_level = min(levels, key=lambda x: abs(x - l))
+                    orig = next(c for c in cell_lists[nearest_level] if c.cell_id == cell_id)
+                    copied_cell = Genotype(list(orig.genome), orig.cell_id)
+                    copied_cell.node_id = orig.node_id  # keep same ID for consistency
+                    cell_lists[l].append(copied_cell)
+    return cell_lists
+
+
 def build_evolution_tree(cell_lists, dist_matrix_path=None, r=2, only_nj=False, inids=None, indm=None,
                          neighbor_joining=neighbor_joining_standard):
     if dist_matrix_path:
@@ -159,6 +187,11 @@ def build_evolution_tree(cell_lists, dist_matrix_path=None, r=2, only_nj=False, 
         ids, full_dist_matrix = inids, indm
     else:
         print("Please provide either dist_matrix_path or inids and indm")
+        return None
+
+    # extend biopsies so no cell skips levels ---
+    cell_lists = _extend_biopsies(cell_lists)
+
     id_to_index = {cid: i for i, cid in enumerate(ids)}
     unique_node_counter = itertools.count(start=max(ids) + 1)
 

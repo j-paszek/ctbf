@@ -8,7 +8,7 @@ import atexit
 import os
 
 from ctbs import run_single_test, use_cnp2cnp_to_compute_pairwise_distance, distance_matrix_from_biopsy
-from ctbs_utils import to_newick
+from ctbs_utils import to_newick, vizualize_nx_tree
 
 import json
 import networkx as nx
@@ -149,6 +149,16 @@ def test_simulator_legacy():
     assert not to_newick(t689) == to_newick(tt)
     # we want it to fail to produce a tree, where for some nodes A and B; A is parent of B;
     # and for some cnp position i, we have in node A cnp(i)=0 and for node B cnp(i)<>0
+
+
+def test_no_skipping_cells_between_biopsies():
+    a,b,c = run_single_test(seed=35, config="data/config_for_pic.json", bedfile="data/pic.csv",
+                    biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
+                    reconstruction_algorithm=neighbor_joining_full)
+    assert to_newick(a) == "((((((((6)6,(58:2,39)39:2)6,((26)26)26:1)6)6)6:1,(((((41)41:1)18)18:1)12:1,((((1)1)1,((63:1)29,(64:2,44,66:2,67:1)44:1)29:1)1,(((45)45:1)20,((31)31)31:1)20:1)1)1)1)1:1,(((((((32,71:1)32)32:2,((8)8)8)8)8)8:1,(((((49)49:1,22)22)22:1,(((74:2)15,(52)52:1)15)15)15:1)0)0,((((((76:1,53)53:1,(24)24)24,((55)55:1,(56,81:1)56:1)37:1)24:1)16:1)5)5:1)0)0;"
+    assert to_newick(b) == "((((67:2.0000,26:2.0000,71:4.0000)31:2.0000,(63:1.0000,39:1.0000)29:1.0000,(41:1.0000)18:2.0000,(32:3.0000,49:1.0000)15:2.0000,20:1.0000,(1:0.0000)1:0.0000)1:0.0000,6:1.0000)1:0.0000,((24:1.0000,76:3.0000,53:2.0000)37:2.0000)16:2.0000)1;"
+    assert to_newick(c) == "((32:0.0000,71:1.0000)32:0.0000,(((53:0.0000,76:1.0000)53:0.0000,37:2.0000)53:0.0000,((26:0.0000,(((((((((1:0.0000,6:1.0000)1:0.0000,29:1.0000)1:0.0000,20:1.0000)1:0.0000,(16:0.0000,24:1.0000)16:2.0000)1:0.0000,31:2.0000)1:0.0000,(18:0.0000,41:1.0000)18:2.0000)1:0.0000,(15:0.0000,49:1.0000)15:2.0000)1:0.0000,63:2.0000)1:0.0000,67:2.0000)1:2.0000)26:0.0000,39:2.0000)26:2.0000)53:3.0000)32;"
+    # vizualize_nx_tree(b) # 1-1 instead of 1-29 on the lowest levels
 
 
 @pytest.mark.parametrize(
