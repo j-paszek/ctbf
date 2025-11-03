@@ -1,4 +1,6 @@
 import itertools
+import random
+
 import networkx as nx
 import numpy as np
 import plotly.graph_objects as go
@@ -21,7 +23,7 @@ def parse_distance_matrix(path):
     return ids, np.array(matrix)
 
 
-def neighbor_joining_standard(dist_matrix, cells, max_id, existing_tree=None):
+def neighbor_joining_standard(dist_matrix, cells, max_id, seed=7, existing_tree=None):
     D = dist_matrix.copy()
     tree = existing_tree or nx.DiGraph()
     new_nodes = {}  # Store new nodes for visualization
@@ -81,7 +83,7 @@ def neighbor_joining_standard(dist_matrix, cells, max_id, existing_tree=None):
     return tree, new_nodes, NJ_REC_TR_ROOT_ID
 
 
-def neighbor_joining_full(dist_matrix, cells, max_id, existing_tree=None):
+def neighbor_joining_full(dist_matrix, cells, max_id, seed=7, existing_tree=None):
     """
     Deterministic, parent-retaining neighbor-joining replacement.
     Each merge creates a new internal node (copy of parent) with empty genome.
@@ -121,10 +123,17 @@ def neighbor_joining_full(dist_matrix, cells, max_id, existing_tree=None):
         id_i = node_list[i].cell_id
         id_j = node_list[j].cell_id
 
-        if (sum_i < sum_j) or (sum_i == sum_j and str(id_i) < str(id_j)):
+        if (sum_i < sum_j):  #or (sum_i == sum_j and str(id_i) < str(id_j)):
             parent_idx, child_idx = i, j
-        else:
+        elif (sum_i > sum_j):
             parent_idx, child_idx = j, i
+        else:
+            # Randomly decide which becomes parent
+            rng = random.Random(seed)
+            if rng.random() < 0.5:
+                parent_idx, child_idx = i, j
+            else:
+                parent_idx, child_idx = j, i
 
         parent_leaf = node_list[parent_idx]
         child_leaf = node_list[child_idx]
@@ -179,7 +188,7 @@ def _extend_biopsies(cell_lists):
     return cell_lists
 
 
-def build_evolution_tree(cell_lists, dist_matrix_path=None, r=2, only_nj=False, inids=None, indm=None,
+def build_evolution_tree(cell_lists, seed=7, dist_matrix_path=None, r=2, only_nj=False, inids=None, indm=None,
                          neighbor_joining=neighbor_joining_standard):
     if dist_matrix_path:
         ids, full_dist_matrix = parse_distance_matrix(dist_matrix_path)
@@ -267,7 +276,7 @@ def build_evolution_tree(cell_lists, dist_matrix_path=None, r=2, only_nj=False, 
             dist_matrix[i, j] = full_dist_matrix[idx1, idx2]
 
     max_id = next(unique_node_counter)
-    tree, new_nodes, final_root = neighbor_joining(dist_matrix, final_cells, max_id, existing_tree=tree)
+    tree, new_nodes, final_root = neighbor_joining(dist_matrix, final_cells, max_id, existing_tree=tree, seed=seed)
 
     for node in new_nodes:
         node_levels[node] = max(node_levels.values()) + 1

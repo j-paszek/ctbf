@@ -210,7 +210,7 @@ def _compute_distance_matrix(all_in_one_sample, parallel, time_collector):
             use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
     return inid, indm
 
-def _reconstruct_and_evaluate(sim, cell_lists, all_in_one_sample, r_dist, visualize,
+def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, visualize,
                               clear_cnps, parallel, write_newick, reconstruction_algorithm,
                               inid, indm, time_collector):
     cl, osl = deepcopy(cell_lists), deepcopy(all_in_one_sample)
@@ -257,6 +257,7 @@ def _reconstruct_and_evaluate(sim, cell_lists, all_in_one_sample, r_dist, visual
 
     # --- unified build config ---
     build_kwargs = {"r": r_dist}
+    build_kwargs.update({"seed": seed})
     if parallel:
         build_kwargs.update({"dist_matrix_path": None, "inids": inid, "indm": indm})
     else:
@@ -348,6 +349,7 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
     # 4. Tree reconstruction and evaluation
     return _reconstruct_and_evaluate(
         sim,
+        seed,
         cell_lists,
         all_in_one_sample,
         r_dist,
@@ -493,12 +495,12 @@ if __name__ == "__main__":
     #                 reconstruction_algorithm=neighbor_joining_full)
 
     # seed 35 !!!
-    a,b,c = run_single_test(seed=35, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
+    a,b,c = run_single_test(seed=888, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
                     biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
                     reconstruction_algorithm=neighbor_joining_full)
 
-    # out = evaluate_4(a, b, print_debug=True)
-    # print(out)
+    out = evaluate_4(a, b, print_debug=True)
+    print(out)
     # vizualize_nx_tree(b)
 
     out = evaluate_4(a, c, print_debug=True)
@@ -511,7 +513,7 @@ if __name__ == "__main__":
     if len(roots) != 1:
         raise ValueError(f"Tree must have exactly one root (found {len(roots)})")
     root = roots[0]
-    vizualize_nx_tree(c)
+    # vizualize_nx_tree(c)
 
     # run_single_test(seed=773, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
     #                 biopsy_size_scalable=0.5, biopsy_generatons=[3, 5, 7, 9], r_dist=4)
