@@ -4,19 +4,29 @@ from ctbs import run_single_test
 from evaluator_full import evaluate_4
 from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full, neighbor_joining_full_cps, \
     neighbor_joining_hybrid, neighbor_joining_hybrid_inverse_centrality, neighbor_joining_adaptive_centrality, \
-    neighbor_joining_adaptive_centrality_nonlinear
-
+    neighbor_joining_adaptive_centrality_nonlinear, neighbor_joining_adaptive_centrality_reversed, \
+    neighbor_joining_hybrid_opt, neighbor_joining_hybrid_opt_adaptive, neighbor_joining_hybrid_opt_v2, \
+    neighbor_joining_hybrid_opt_refined, neighbor_joining_hybrid_anticentral_opt, \
+    neighbor_joining_hybrid_anticentral_adaptive_v2, neighbor_joining_hybrid_anticentral_adaptive_v3
 
 df = pd.read_csv("data/f1results.csv", delimiter="\t")
 all_seeds = df["seed"].unique().tolist()
 
 def get_algorithms_to_test():
-    return [neighbor_joining_full,
-            neighbor_joining_full_cps,
-            neighbor_joining_hybrid,
-            neighbor_joining_hybrid_inverse_centrality,
-            neighbor_joining_adaptive_centrality,
-            neighbor_joining_adaptive_centrality_nonlinear
+    return [
+            # neighbor_joining_full,
+            # neighbor_joining_full_cps,
+            # neighbor_joining_hybrid,
+            # neighbor_joining_hybrid_inverse_centrality,
+            # neighbor_joining_adaptive_centrality,
+            # neighbor_joining_adaptive_centrality_nonlinear,
+            # neighbor_joining_adaptive_centrality_reversed,
+            # neighbor_joining_hybrid_opt,
+            # neighbor_joining_hybrid_opt_adaptive,
+            # neighbor_joining_hybrid_opt_v2,
+            # neighbor_joining_hybrid_opt_refined,
+            # neighbor_joining_hybrid_anticentral_opt,
+            neighbor_joining_hybrid_anticentral_adaptive_v3
             ]
 
 

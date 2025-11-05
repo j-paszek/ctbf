@@ -18,7 +18,7 @@ def summarize(df):
     # summary.to_csv("summary_stats.csv")
 
 
-def analize(i, alg_name):
+def analize(i, alg_name, how_many):
     print(f"Analyzing {alg_name}")
     a = "results/" + str(i) + "out.csv"
     b = "results/" + str(i) + "rec.csv"
@@ -55,12 +55,20 @@ def analize(i, alg_name):
     summarize(df1)
     print("***** NJ *****")
     summarize(df2)
+    # print("***** Correctness *****")
+    if len(df1) == len(df2) == how_many:
+        print("")
+    else:
+        print("Correctness failure: ", len(df1), len(df2), " instead of ", how_many)
+
 
 
 if __name__ == "__main__":
     alg_names = get_algorithms_to_test()
+    df = pd.read_csv("data/f1results.csv", delimiter="\t")
+    all_seeds = df["seed"].unique().tolist()
 
     for i in range(len(alg_names)):
-        analize(i, alg_names[i])
+        analize(i, alg_names[i], len(all_seeds))
 
 

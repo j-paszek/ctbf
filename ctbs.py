@@ -10,7 +10,8 @@ import random
 from concurrent.futures import ProcessPoolExecutor
 
 from simulator import CancerCellEvolutionSimulator, Genotype
-from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full, neighbor_joining_full_cps
+from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full, neighbor_joining_full_cps, \
+    neighbor_joining_hybrid_anticentral_opt, neighbor_joining_hybrid_anticentral_adaptive_v3
 from evaluator import grf_tree
 from evaluator_full import evaluate_4, named_label
 from ctbs_utils import to_newick, vizualize_nx_tree
@@ -497,14 +498,14 @@ if __name__ == "__main__":
     # seed 35 !!!
     a,b,c = run_single_test(seed=632, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
                     biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
-                    reconstruction_algorithm=neighbor_joining_full_cps)
+                    reconstruction_algorithm=neighbor_joining_hybrid_anticentral_adaptive_v3)
 
     out = evaluate_4(a, b, print_debug=True)
     print(out)
     # vizualize_nx_tree(b)
 
     out = evaluate_4(a, c, print_debug=True)
-    # print(out)
+    print(out)
     # print(c.edges)
     # print(len(c.nodes))
     # l = [(named_label(c, x), named_label(c, y)) for x, y in c.edges]
