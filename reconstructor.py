@@ -120,10 +120,7 @@ def neighbor_joining_full(dist_matrix, cells, max_id, seed=7, existing_tree=None
         sum_i = D[i, others].sum() if others else 0
         sum_j = D[j, others].sum() if others else 0
 
-        id_i = node_list[i].cell_id
-        id_j = node_list[j].cell_id
-
-        if (sum_i < sum_j):  #or (sum_i == sum_j and str(id_i) < str(id_j)):
+        if (sum_i < sum_j):
             parent_idx, child_idx = i, j
         elif (sum_i > sum_j):
             parent_idx, child_idx = j, i
@@ -156,6 +153,485 @@ def neighbor_joining_full(dist_matrix, cells, max_id, seed=7, existing_tree=None
         node_list.pop(child_idx)
 
     # final remaining node is root
+    root = node_list[0]
+    return tree, new_nodes, root.cell_id
+
+
+def neighbor_joining_full_cps(dist_matrix, cells, max_id, seed=7, existing_tree=None):
+    """
+    Centrality-guided neighbor joining heuristic.
+    1. Find all pairs with minimal distance.
+    2. For each, compute centrality = sum of distances to all other cells.
+    3. Pick pair (x, y) such that:
+         - the smaller centrality is minimal (most central ancestor)
+         - if tie, the larger centrality is maximal (most peripheral child)
+    4. Parent = the node with smaller centrality (more central one).
+    """
+    rng = random.Random(seed)
+    D = dist_matrix.copy().astype(float)
+    tree = existing_tree or nx.DiGraph()
+    new_nodes = {}
+
+    # keep ordered list aligned with D
+    node_list = [cells[i] for i in range(len(cells))]
+
+    # add leaf nodes
+    for node in node_list:
+        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
+
+    next_id = max_id + 1
+
+    while len(node_list) > 1:
+        n = len(D)
+
+        # compute all pairwise distances
+        min_val = np.min(D[np.triu_indices(n, 1)])
+        min_pairs = [(i, j) for i in range(n) for j in range(i + 1, n) if D[i, j] == min_val]
+
+        # compute centrality (sum of distances to all others)
+        centrality = D.sum(axis=1)
+
+        # build list of candidate tuples (first_central, second_central, i, j)
+        candidates = []
+        for i, j in min_pairs:
+            c_i, c_j = centrality[i], centrality[j]
+            first, second = sorted((c_i, c_j))
+            candidates.append((first, -second, i, j))  # -second to get max(second)
+
+        # choose pair with smallest first, then largest second (since we negated)
+        candidates.sort()
+        _, _, i, j = candidates[0]
+
+        # determine which is parent (more central = smaller sum)
+        if centrality[i] < centrality[j]:
+            parent_idx, child_idx = i, j
+        elif centrality[i] > centrality[j]:
+            parent_idx, child_idx = j, i
+        else:
+            # if equal, random tie-break
+            parent_idx, child_idx = (i, j) if rng.random() < 0.5 else (j, i)
+
+        parent_leaf = node_list[parent_idx]
+        child_leaf = node_list[child_idx]
+
+        # create new internal node (copy of parent)
+        internal_node = type(parent_leaf)(
+            genome=parent_leaf.genome,
+            node_id=next_id,
+            cell_id=parent_leaf.cell_id
+        )
+        next_id += 1
+        tree.add_node(internal_node.node_id, genome=internal_node.genome, cell_id=internal_node.cell_id)
+
+        # attach edges
+        tree.add_edge(internal_node.node_id, parent_leaf.node_id, weight=0.0)
+        tree.add_edge(internal_node.node_id, child_leaf.node_id, weight=float(D[parent_idx, child_idx]))
+
+        new_nodes[internal_node] = (parent_leaf, child_leaf)
+
+        # update distance matrix and node list (keep parent, remove child)
+        keep_indices = [k for k in range(n) if k != child_idx]
+        D = D[np.ix_(keep_indices, keep_indices)]
+        node_list[parent_idx] = internal_node
+        node_list.pop(child_idx)
+
+    root = node_list[0]
+    return tree, new_nodes, root.cell_id
+
+
+def neighbor_joining_hybrid(dist_matrix, cells, max_id, alpha=1.0, beta=0.5, seed=7, existing_tree=None):
+    """
+    Hybrid neighbor joining: prefers pairs that are both close (small D[x,y])
+    and asymmetric in centrality (|c(x) - c(y)| large).
+
+    Parameters
+    ----------
+    dist_matrix : np.ndarray
+        Pairwise distance matrix between cells.
+    cells : list
+        List of Genotype-like cell objects (must have .node_id, .cell_id, .genome).
+    max_id : int
+        Max node ID so far; new nodes start from max_id + 1.
+    alpha : float
+        Weight for distance term (default 1.0).
+    beta : float
+        Weight for asymmetry term (default 0.5).
+    seed : int
+        Random seed for tie-breaking.
+    existing_tree : nx.DiGraph, optional
+        If provided, new nodes will be added to this tree.
+
+    Returns
+    -------
+    tree : nx.DiGraph
+    new_nodes : dict
+    root_cell_id : any
+    """
+    rng = random.Random(seed)
+    D = dist_matrix.copy().astype(float)
+    tree = existing_tree or nx.DiGraph()
+    new_nodes = {}
+
+    node_list = [cells[i] for i in range(len(cells))]
+    for node in node_list:
+        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
+
+    next_id = max_id + 1
+
+    while len(node_list) > 1:
+        n = len(D)
+        centrality = D.sum(axis=1)
+
+        # Compute hybrid score for each pair
+        best_score = np.inf
+        best_pair = None
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                score = alpha * D[i, j] - beta * abs(centrality[i] - centrality[j])
+                if score < best_score:
+                    best_score = score
+                    best_pair = (i, j)
+
+        i, j = best_pair
+        c_i, c_j = centrality[i], centrality[j]
+
+        # Determine parent-child relationship
+        if c_i < c_j:
+            parent_idx, child_idx = i, j
+        elif c_i > c_j:
+            parent_idx, child_idx = j, i
+        else:
+            parent_idx, child_idx = (i, j) if rng.random() < 0.5 else (j, i)
+
+        parent_leaf = node_list[parent_idx]
+        child_leaf = node_list[child_idx]
+
+        internal_node = type(parent_leaf)(genome=parent_leaf.genome, node_id=next_id, cell_id=parent_leaf.cell_id)
+        next_id += 1
+
+        tree.add_node(internal_node.node_id, genome=internal_node.genome, cell_id=internal_node.cell_id)
+        tree.add_edge(internal_node.node_id, parent_leaf.node_id, weight=D[parent_idx, child_idx])
+        tree.add_edge(internal_node.node_id, child_leaf.node_id, weight=D[parent_idx, child_idx])
+
+        new_nodes[internal_node] = (parent_leaf, child_leaf)
+
+        # Update matrix
+        keep_indices = [k for k in range(n) if k != child_idx]
+        D = D[np.ix_(keep_indices, keep_indices)]
+        node_list[parent_idx] = internal_node
+        node_list.pop(child_idx)
+
+    root = node_list[0]
+    return tree, new_nodes, root.cell_id
+
+
+def neighbor_joining_hybrid_inverse_centrality(dist_matrix, cells, max_id, alpha=1.0, beta=0.5, epsilon=1e-6, seed=7, existing_tree=None):
+    """
+    Hybrid neighbor joining with inverse-distance centrality.
+    Prefers pairs that are both close (small D[x,y]) and asymmetric
+    in weighted centrality c'(x) = sum(1 / (D[x,i] + eps)).
+
+    Parameters
+    ----------
+    dist_matrix : np.ndarray
+        Pairwise distance matrix between cells.
+    cells : list
+        List of Genotype-like objects with .node_id, .cell_id, .genome.
+    max_id : int
+        Maximum node ID so far; new nodes start from max_id + 1.
+    alpha : float
+        Weight for distance term (default 1.0).
+    beta : float
+        Weight for centrality asymmetry term (default 0.5).
+    epsilon : float
+        Small constant to prevent division by zero (default 1e-6).
+    seed : int
+        Random seed for tie-breaking.
+    existing_tree : nx.DiGraph, optional
+        If provided, new nodes will be added to this tree.
+
+    Returns
+    -------
+    tree : nx.DiGraph
+    new_nodes : dict
+    root_cell_id : any
+    """
+    rng = random.Random(seed)
+    D = dist_matrix.copy().astype(float)
+    tree = existing_tree or nx.DiGraph()
+    new_nodes = {}
+
+    node_list = [cells[i] for i in range(len(cells))]
+    for node in node_list:
+        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
+
+    next_id = max_id + 1
+
+    while len(node_list) > 1:
+        n = len(D)
+
+        # --- Inverse-distance weighted centrality ---
+        with np.errstate(divide='ignore', invalid='ignore'):
+            invD = 1.0 / (D + epsilon)
+            np.fill_diagonal(invD, 0.0)
+            centrality = invD.sum(axis=1)
+
+        # --- Hybrid score: prefer close + asymmetric ---
+        best_score = np.inf
+        best_pair = None
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                score = alpha * D[i, j] - beta * abs(centrality[i] - centrality[j])
+                if score < best_score:
+                    best_score = score
+                    best_pair = (i, j)
+
+        i, j = best_pair
+        c_i, c_j = centrality[i], centrality[j]
+
+        # More central node (higher c') becomes parent
+        if c_i > c_j:
+            parent_idx, child_idx = i, j
+        elif c_i < c_j:
+            parent_idx, child_idx = j, i
+        else:
+            parent_idx, child_idx = (i, j) if rng.random() < 0.5 else (j, i)
+
+        parent_leaf = node_list[parent_idx]
+        child_leaf = node_list[child_idx]
+
+        internal_node = type(parent_leaf)(genome=parent_leaf.genome, node_id=next_id, cell_id=parent_leaf.cell_id)
+        next_id += 1
+
+        tree.add_node(internal_node.node_id, genome=internal_node.genome, cell_id=internal_node.cell_id)
+        tree.add_edge(internal_node.node_id, parent_leaf.node_id, weight=float(D[parent_idx, child_idx]))
+        tree.add_edge(internal_node.node_id, child_leaf.node_id, weight=float(D[parent_idx, child_idx]))
+
+        new_nodes[internal_node] = (parent_leaf, child_leaf)
+
+        # Update matrix after merge
+        keep_indices = [k for k in range(n) if k != child_idx]
+        D = D[np.ix_(keep_indices, keep_indices)]
+        node_list[parent_idx] = internal_node
+        node_list.pop(child_idx)
+
+    root = node_list[0]
+    return tree, new_nodes, root.cell_id
+
+
+import numpy as np
+import networkx as nx
+import random
+
+def neighbor_joining_adaptive_centrality(dist_matrix, cells, max_id, alpha=1.0, beta=0.5, epsilon=1e-6, seed=7, existing_tree=None):
+    """
+    Adaptive neighbor joining with centrality blending.
+    Starts with global-distance centrality, transitions to
+    local inverse-distance centrality as nodes merge.
+
+    Parameters
+    ----------
+    dist_matrix : np.ndarray
+        Pairwise distance matrix.
+    cells : list
+        List of Genotype-like objects with .node_id, .cell_id, .genome.
+    max_id : int
+        Maximum node ID so far.
+    alpha : float
+        Weight for distance term (default 1.0).
+    beta : float
+        Weight for centrality asymmetry term (default 0.5).
+    epsilon : float
+        Small constant to prevent division by zero.
+    seed : int
+        Random seed for tie-breaking.
+    existing_tree : nx.DiGraph, optional
+
+    Returns
+    -------
+    tree : nx.DiGraph
+    new_nodes : dict
+    root_cell_id
+    """
+    rng = random.Random(seed)
+    D = dist_matrix.copy().astype(float)
+    tree = existing_tree or nx.DiGraph()
+    new_nodes = {}
+
+    node_list = [cells[i] for i in range(len(cells))]
+    for node in node_list:
+        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
+
+    next_id = max_id + 1
+    N0 = len(D)
+
+    while len(node_list) > 1:
+        n = len(D)
+        weight = (n - 2) / max(N0 - 2, 1)  # adaptive blending factor
+
+        # --- Compute both centralities ---
+        sum_dist = D.sum(axis=1)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            invD = 1.0 / (D + epsilon)
+            np.fill_diagonal(invD, 0.0)
+            inv_sum = invD.sum(axis=1)
+
+        # Combine them adaptively: higher C(x) = more central
+        centrality = weight * (1.0 / (sum_dist + epsilon)) + (1 - weight) * inv_sum
+
+        # --- Hybrid score ---
+        best_score = np.inf
+        best_pair = None
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                score = alpha * D[i, j] - beta * abs(centrality[i] - centrality[j])
+                if score < best_score:
+                    best_score = score
+                    best_pair = (i, j)
+
+        i, j = best_pair
+        c_i, c_j = centrality[i], centrality[j]
+
+        # More central node becomes parent
+        if c_i > c_j:
+            parent_idx, child_idx = i, j
+        elif c_i < c_j:
+            parent_idx, child_idx = j, i
+        else:
+            parent_idx, child_idx = (i, j) if rng.random() < 0.5 else (j, i)
+
+        parent_leaf = node_list[parent_idx]
+        child_leaf = node_list[child_idx]
+
+        # Create new internal node (copy of parent)
+        internal_node = type(parent_leaf)(genome=parent_leaf.genome, node_id=next_id, cell_id=parent_leaf.cell_id)
+        next_id += 1
+
+        tree.add_node(internal_node.node_id, genome=internal_node.genome, cell_id=internal_node.cell_id)
+        tree.add_edge(internal_node.node_id, parent_leaf.node_id, weight=float(D[parent_idx, child_idx]))
+        tree.add_edge(internal_node.node_id, child_leaf.node_id, weight=float(D[parent_idx, child_idx]))
+
+        new_nodes[internal_node] = (parent_leaf, child_leaf)
+
+        # Update distance matrix
+        keep_indices = [k for k in range(n) if k != child_idx]
+        D = D[np.ix_(keep_indices, keep_indices)]
+        node_list[parent_idx] = internal_node
+        node_list.pop(child_idx)
+
+    root = node_list[0]
+    return tree, new_nodes, root.cell_id
+
+
+def neighbor_joining_adaptive_centrality_nonlinear(
+    dist_matrix, cells, max_id,
+    alpha=1.0, beta=0.5, epsilon=1e-6,
+    k=10.0, tau=0.5, seed=7, existing_tree=None
+):
+    """
+    Adaptive neighbor joining with nonlinear sigmoid blending between
+    global and inverse-distance centralities.
+
+    Parameters
+    ----------
+    dist_matrix : np.ndarray
+        Pairwise distance matrix.
+    cells : list
+        List of Genotype-like objects with .node_id, .cell_id, .genome.
+    max_id : int
+        Maximum node ID so far.
+    alpha : float
+        Weight for distance term.
+    beta : float
+        Weight for centrality asymmetry term.
+    epsilon : float
+        Small constant to avoid division by zero.
+    k : float
+        Sigmoid steepness parameter.
+    tau : float
+        Sigmoid midpoint parameter (0–1).
+    seed : int
+        Random seed for reproducibility.
+    existing_tree : nx.DiGraph, optional
+        Tree to extend.
+
+    Returns
+    -------
+    tree : nx.DiGraph
+    new_nodes : dict
+    root_cell_id
+    """
+    rng = random.Random(seed)
+    D = dist_matrix.copy().astype(float)
+    tree = existing_tree or nx.DiGraph()
+    new_nodes = {}
+
+    node_list = [cells[i] for i in range(len(cells))]
+    for node in node_list:
+        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
+
+    next_id = max_id + 1
+    N0 = len(D)
+
+    while len(node_list) > 1:
+        n = len(D)
+        # nonlinear adaptive blending
+        frac = n / max(N0, 1)
+        weight = 1.0 / (1.0 + np.exp(-k * (frac - tau)))  # sigmoid in [0,1]
+
+        # compute global & inverse centralities
+        sum_dist = D.sum(axis=1)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            invD = 1.0 / (D + epsilon)
+            np.fill_diagonal(invD, 0.0)
+            inv_sum = invD.sum(axis=1)
+
+        # adaptive centrality blending
+        centrality = weight * (1.0 / (sum_dist + epsilon)) + (1 - weight) * inv_sum
+
+        # choose best pair: small D + asymmetric centrality
+        best_score = np.inf
+        best_pair = None
+        for i in range(n):
+            for j in range(i + 1, n):
+                score = alpha * D[i, j] - beta * abs(centrality[i] - centrality[j])
+                if score < best_score:
+                    best_score = score
+                    best_pair = (i, j)
+
+        i, j = best_pair
+        c_i, c_j = centrality[i], centrality[j]
+
+        # choose parent-child
+        if c_i > c_j:
+            parent_idx, child_idx = i, j
+        elif c_i < c_j:
+            parent_idx, child_idx = j, i
+        else:
+            parent_idx, child_idx = (i, j) if rng.random() < 0.5 else (j, i)
+
+        parent_leaf = node_list[parent_idx]
+        child_leaf = node_list[child_idx]
+
+        internal_node = type(parent_leaf)(
+            genome=parent_leaf.genome, node_id=next_id, cell_id=parent_leaf.cell_id
+        )
+        next_id += 1
+
+        tree.add_node(internal_node.node_id, genome=internal_node.genome, cell_id=internal_node.cell_id)
+        tree.add_edge(internal_node.node_id, parent_leaf.node_id, weight=float(D[parent_idx, child_idx]))
+        tree.add_edge(internal_node.node_id, child_leaf.node_id, weight=float(D[parent_idx, child_idx]))
+        new_nodes[internal_node] = (parent_leaf, child_leaf)
+
+        # update distance matrix
+        keep_indices = [k for k in range(n) if k != child_idx]
+        D = D[np.ix_(keep_indices, keep_indices)]
+        node_list[parent_idx] = internal_node
+        node_list.pop(child_idx)
+
     root = node_list[0]
     return tree, new_nodes, root.cell_id
 

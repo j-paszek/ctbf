@@ -10,7 +10,7 @@ import random
 from concurrent.futures import ProcessPoolExecutor
 
 from simulator import CancerCellEvolutionSimulator, Genotype
-from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full
+from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full, neighbor_joining_full_cps
 from evaluator import grf_tree
 from evaluator_full import evaluate_4, named_label
 from ctbs_utils import to_newick, vizualize_nx_tree
@@ -495,24 +495,24 @@ if __name__ == "__main__":
     #                 reconstruction_algorithm=neighbor_joining_full)
 
     # seed 35 !!!
-    a,b,c = run_single_test(seed=888, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
+    a,b,c = run_single_test(seed=632, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
                     biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
-                    reconstruction_algorithm=neighbor_joining_full)
+                    reconstruction_algorithm=neighbor_joining_full_cps)
 
     out = evaluate_4(a, b, print_debug=True)
     print(out)
     # vizualize_nx_tree(b)
 
     out = evaluate_4(a, c, print_debug=True)
-    print(out)
-    print(c.edges)
-    print(len(c.nodes))
-    l = [(named_label(c, x), named_label(c, y)) for x, y in c.edges]
-    print(l)
-    roots = [n for n, indeg in c.in_degree() if indeg == 0]
-    if len(roots) != 1:
-        raise ValueError(f"Tree must have exactly one root (found {len(roots)})")
-    root = roots[0]
+    # print(out)
+    # print(c.edges)
+    # print(len(c.nodes))
+    # l = [(named_label(c, x), named_label(c, y)) for x, y in c.edges]
+    # print(l)
+    # roots = [n for n, indeg in c.in_degree() if indeg == 0]
+    # if len(roots) != 1:
+    #     raise ValueError(f"Tree must have exactly one root (found {len(roots)})")
+    # root = roots[0]
     # vizualize_nx_tree(c)
 
     # run_single_test(seed=773, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",

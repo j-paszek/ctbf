@@ -15,7 +15,9 @@ import networkx as nx
 from networkx.readwrite import json_graph
 
 from evaluator_full import evaluate_4
-from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full
+from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full, neighbor_joining_full_cps, \
+    neighbor_joining_hybrid, neighbor_joining_hybrid_inverse_centrality, neighbor_joining_adaptive_centrality, \
+    neighbor_joining_adaptive_centrality_nonlinear
 from simulator import CancerCellEvolutionSimulator, Genotype
 
 SHOW_FIGURES = False
@@ -367,18 +369,42 @@ def test_ete3_to_nx(seed, t, tr, tnj, tp, fp, fn, f1, i, p, r):
         r_exp = out["ancestors_multiset"]["recall"]
         assert r == float_to_str_comma(r_exp, 3)
 
-
+df = pd.read_csv("data/f1results.csv", delimiter="\t")
 results_store = {"ancestors_multiset_precision_failures": [], "ancestors_multiset_f1_failures": [],
                  "ancestors_unique_precision_failures": [], "ancestors_unique_f1_failures": []}
 @pytest.fixture
 def failures():
     return results_store
 
-def provide_summary(rec, nj, mode, seed, failures):
+rec_output = {"seed": [], "1-precision": [], "1-f1": [], "2-precision": [], "2-f1": []}
+@pytest.fixture
+def rec_report():
+    return rec_output
+
+nj_output = {"seed": [], "1-precision": [], "1-f1": [], "2-precision": [], "2-f1": []}
+@pytest.fixture
+def nj_report():
+    return nj_output
+
+def provide_summary(rec, nj, mode, seed, failures, rec_report, nj_report):
     p1 = rec[mode]["precision"]
     p2 = nj[mode]["precision"]
     f1 = rec[mode]["F1"]
     f2 = nj[mode]["F1"]
+    if mode == "ancestors_multiset":
+        rec_report["seed"].append(seed)
+        rec_report["1-precision"].append(p1)
+        rec_report["1-f1"].append(f1)
+    else:
+        rec_report["2-precision"].append(p1)
+        rec_report["2-f1"].append(f1)
+    if mode == "ancestors_multiset":
+        nj_report["seed"].append(seed)
+        nj_report["1-precision"].append(p2)
+        nj_report["1-f1"].append(f2)
+    else:
+        nj_report["2-precision"].append(p2)
+        nj_report["2-f1"].append(f2)
     print("Mode ", mode)
     print(f"Precision: {p1} vs: {p2}")
     print(f"F1: {f1} vs: {f2}")
@@ -391,15 +417,15 @@ def provide_summary(rec, nj, mode, seed, failures):
 
 
 @pytest.mark.parametrize("seed", df["seed"].unique().tolist())
-def test_evaluate4(seed, failures):
+def test_evaluate4(seed, failures, rec_report, nj_report):
     print(f"\nTesting seed: {seed}")
     a, b, c = run_single_test(seed=seed, config="data/config_for_pic.json", bedfile="data/pic.csv",
                               biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
-                              reconstruction_algorithm=neighbor_joining_full)
+                              reconstruction_algorithm=neighbor_joining_adaptive_centrality_nonlinear)
     rec = evaluate_4(a, b)
     nj = evaluate_4(a, c)
     for mode in ["ancestors_multiset", "ancestors_unique"]:
-        provide_summary(rec, nj, mode, seed, failures)
+        provide_summary(rec, nj, mode, seed, failures, rec_report, nj_report)
 
 
 # register a function that will run even under PyCharm
@@ -420,5 +446,12 @@ def save_results():
 
     df.to_csv('out.csv', index=False)
 
+    print(rec_output)
+    df1 = pd.DataFrame(rec_output)
+    df1.to_csv('rec.csv', index=False)
+
+    print(nj_output)
+    df2 = pd.DataFrame(rec_output)
+    df2.to_csv('nj.csv', index=False)
 
 atexit.register(save_results)
