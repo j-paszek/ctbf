@@ -22,7 +22,7 @@ from nj_visualizer import create_all_visualizations
 
 def run_full_pipeline(max_seeds=None, output_dir='results', figures_dir='figures',
                      config='data/config_for_pic.json', bedfile='data/pic.csv',
-                     parallel_algorithms=False, max_workers=None, timestamp_dirs=True):
+                     parallel=False, max_workers=None, timestamp_dirs=True):
     """
     Run the complete NJ benchmark pipeline.
     
@@ -38,10 +38,10 @@ def run_full_pipeline(max_seeds=None, output_dir='results', figures_dir='figures
         Configuration file for simulation
     bedfile : str
         Bedfile for simulation
-    parallel_algorithms : bool
-        Run algorithms in parallel (default: False)
+    parallel : bool
+        Run tasks in parallel (default: False)
     max_workers : int or None
-        Maximum number of parallel workers (default: number of CPUs)
+        Maximum number of parallel workers (default: 60% of CPUs)
     timestamp_dirs : bool
         Add timestamp to output directories (default: True)
     """
@@ -55,9 +55,9 @@ def run_full_pipeline(max_seeds=None, output_dir='results', figures_dir='figures
     print(f"Max seeds: {max_seeds if max_seeds else 'ALL'}")
     print(f"Output directory: {output_dir}")
     print(f"Figures directory: {figures_dir}")
-    print(f"Parallel processing: {parallel_algorithms}")
-    if parallel_algorithms:
-        print(f"Max workers: {max_workers if max_workers else 'auto'}")
+    print(f"Parallel processing: {parallel}")
+    if parallel:
+        print(f"Max workers: {max_workers if max_workers else '60% of available cores'}")
     print(f"Timestamp directories: {timestamp_dirs}")
     print("="*80 + "\n")
     
@@ -84,7 +84,7 @@ def run_full_pipeline(max_seeds=None, output_dir='results', figures_dir='figures
             config=config,
             bedfile=bedfile,
             max_seeds=max_seeds,
-            parallel_algorithms=parallel_algorithms,
+            parallel=parallel,
             max_workers=max_workers,
             timestamp_dirs=False  # Already handled above
         )
@@ -192,9 +192,9 @@ Examples:
     parser.add_argument('--bedfile', type=str, default='data/pic.csv',
                        help='Bedfile (default: data/pic.csv)')
     parser.add_argument('--parallel', action='store_true',
-                       help='Run algorithms in parallel')
+                       help='Run tasks in parallel (processes all algorithm×seed combinations concurrently)')
     parser.add_argument('--max-workers', type=int, default=None,
-                       help='Maximum number of parallel workers (default: number of CPUs)')
+                       help='Maximum number of parallel workers (default: 60%% of available CPUs)')
     parser.add_argument('--no-timestamp', action='store_true',
                        help='Disable timestamp in output directories')
     
@@ -207,7 +207,7 @@ Examples:
         figures_dir=args.figures_dir,
         config=args.config,
         bedfile=args.bedfile,
-        parallel_algorithms=args.parallel,
+        parallel=args.parallel,
         max_workers=args.max_workers,
         timestamp_dirs=not args.no_timestamp
     )

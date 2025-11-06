@@ -10,6 +10,7 @@ Output: CSV file with detailed metrics for each method and seed.
 import pandas as pd
 import sys
 import os
+import multiprocessing
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
@@ -43,16 +44,16 @@ def get_all_nj_algorithms():
     Returns a list of tuples (algorithm_name, algorithm_function) for all NJ variants.
     """
     return [
-      #  ("standard", neighbor_joining_standard),
-      #  ("full", neighbor_joining_full),
-      #  ("full_cps", neighbor_joining_full_cps),
-      #  ("hybrid", neighbor_joining_hybrid),
-      #  ("hybrid_inverse_centrality", neighbor_joining_hybrid_inverse_centrality),
-      #  ("adaptive_centrality", neighbor_joining_adaptive_centrality),
-      #  ("adaptive_centrality_nonlinear", neighbor_joining_adaptive_centrality_nonlinear),
-      #  ("adaptive_centrality_reversed", neighbor_joining_adaptive_centrality_reversed),
-      #  ("hybrid_opt", neighbor_joining_hybrid_opt),
-      #  ("hybrid_opt_adaptive", neighbor_joining_hybrid_opt_adaptive),
+        ("standard", neighbor_joining_standard),
+        ("full", neighbor_joining_full),
+        ("full_cps", neighbor_joining_full_cps),
+        ("hybrid", neighbor_joining_hybrid),
+        ("hybrid_inverse_centrality", neighbor_joining_hybrid_inverse_centrality),
+        ("adaptive_centrality", neighbor_joining_adaptive_centrality),
+        ("adaptive_centrality_nonlinear", neighbor_joining_adaptive_centrality_nonlinear),
+        ("adaptive_centrality_reversed", neighbor_joining_adaptive_centrality_reversed),
+        ("hybrid_opt", neighbor_joining_hybrid_opt),
+        ("hybrid_opt_adaptive", neighbor_joining_hybrid_opt_adaptive),
         ("hybrid_opt_v2", neighbor_joining_hybrid_opt_v2),
         ("hybrid_opt_refined", neighbor_joining_hybrid_opt_refined),
         ("hybrid_anticentral_opt", neighbor_joining_hybrid_anticentral_opt),
@@ -181,27 +182,34 @@ def evaluate_method(method_name, reconstruction_algorithm, seed, config, bedfile
         }]
 
 
-def evaluate_algorithm_all_seeds(algo_name, algo_func, seeds, config, bedfile,
-                                biopsy_size_scalable, biopsy_generations, r_dist):
+def evaluate_single_task(task_tuple):
     """
-    Evaluate a single algorithm across all seeds (used for parallel processing).
+    Evaluate a single (algorithm, seed) combination.
     
-    Returns list of results for this algorithm.
+    Parameters
+    ----------
+    task_tuple : tuple
+        (algo_name, algo_func, seed, config, bedfile, biopsy_size_scalable, 
+         biopsy_generations, r_dist)
+    
+    Returns
+    -------
+    list
+        List with two dictionaries: [nj_pure_result, ctbs_hybrid_result]
     """
-    results = []
-    for seed in tqdm(seeds, desc=f"Testing {algo_name}", leave=False):
-        method_results = evaluate_method(
-            method_name=algo_name,
-            reconstruction_algorithm=algo_func,
-            seed=seed,
-            config=config,
-            bedfile=bedfile,
-            biopsy_size_scalable=biopsy_size_scalable,
-            biopsy_generations=biopsy_generations,
-            r_dist=r_dist
-        )
-        results.extend(method_results)
-    return results
+    (algo_name, algo_func, seed, config, bedfile, 
+     biopsy_size_scalable, biopsy_generations, r_dist) = task_tuple
+    
+    return evaluate_method(
+        method_name=algo_name,
+        reconstruction_algorithm=algo_func,
+        seed=seed,
+        config=config,
+        bedfile=bedfile,
+        biopsy_size_scalable=biopsy_size_scalable,
+        biopsy_generations=biopsy_generations,
+        r_dist=r_dist
+    )
 
 
 def run_benchmark(output_csv="results/nj_benchmark_results.csv",
@@ -211,7 +219,7 @@ def run_benchmark(output_csv="results/nj_benchmark_results.csv",
                  biopsy_generations=[4, 6, 8],
                  r_dist=4,
                  max_seeds=None,
-                 parallel_algorithms=False,
+                 parallel=False,
                  max_workers=None,
                  timestamp_dirs=True):
     """
@@ -233,10 +241,10 @@ def run_benchmark(output_csv="results/nj_benchmark_results.csv",
         Distance threshold for reconstruction
     max_seeds : int or None
         Maximum number of seeds to test (None = all seeds)
-    parallel_algorithms : bool
-        If True, run different algorithms in parallel (default: False)
+    parallel : bool
+        If True, run tasks in parallel using ProcessPoolExecutor (default: False)
     max_workers : int or None
-        Maximum number of parallel workers (default: number of CPUs)
+        Maximum number of parallel workers (default: 60% of CPUs)
     timestamp_dirs : bool
         If True, add timestamp to output directories (default: True)
     """
@@ -260,36 +268,40 @@ def run_benchmark(output_csv="results/nj_benchmark_results.csv",
     algorithms = get_all_nj_algorithms()
     print(f"Testing {len(algorithms)} NJ variants")
     
-    if parallel_algorithms and len(algorithms) > 1:
-        print(f"Running algorithms in parallel with max_workers={max_workers}")
-        # Collect all results using parallel processing
-        all_results = []
-        
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all algorithm tasks
-            futures = []
-            for algo_name, algo_func in algorithms:
-                print(f"Submitting job for: {algo_name}")
-                future = executor.submit(
-                    evaluate_algorithm_all_seeds,
-                    algo_name, algo_func, all_seeds, config, bedfile,
+    # Default to 60% of available cores for efficiency and cost-effectiveness
+    if max_workers is None:
+        cpu_count = multiprocessing.cpu_count()
+        max_workers = max(1, int(cpu_count * 0.6))
+        print(f"Using {max_workers} workers (60% of {cpu_count} available cores)")
+    
+    if parallel:
+        # Create a flat list of all (algorithm, seed) tasks
+        tasks = []
+        for algo_name, algo_func in algorithms:
+            for seed in all_seeds:
+                tasks.append((
+                    algo_name, algo_func, seed, config, bedfile,
                     biopsy_size_scalable, biopsy_generations, r_dist
-                )
-                futures.append((algo_name, future))
+                ))
+        
+        total_tasks = len(tasks)
+        print(f"Processing {total_tasks} tasks ({len(algorithms)} algorithms × {len(all_seeds)} seeds)")
+        print(f"Running in parallel with {max_workers} workers")
+        
+        # Process all tasks in parallel
+        all_results = []
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            # Use tqdm to show progress for all tasks
+            futures = [executor.submit(evaluate_single_task, task) for task in tasks]
             
-            # Collect results as they complete
-            for algo_name, future in futures:
-                print(f"\n{'='*60}")
-                print(f"Collecting results for: {algo_name}")
-                print(f"{'='*60}")
+            for future in tqdm(futures, desc="Processing tasks", total=total_tasks):
                 try:
                     results = future.result()
                     all_results.extend(results)
-                    print(f"✓ Completed {algo_name}: {len(results)} results")
                 except Exception as e:
-                    print(f"✗ Error processing {algo_name}: {e}")
+                    print(f"\nError processing task: {e}")
     else:
-        # Sequential processing (original behavior)
+        # Sequential processing
         all_results = []
         
         # Iterate through each algorithm
@@ -316,6 +328,10 @@ def run_benchmark(output_csv="results/nj_benchmark_results.csv",
     
     # Convert to DataFrame
     df = pd.DataFrame(all_results)
+    
+    # Sort by method and seed for better organization
+    if 'method' in df.columns and 'seed' in df.columns:
+        df = df.sort_values(['method', 'seed']).reset_index(drop=True)
     
     # Save to CSV
     os.makedirs(os.path.dirname(output_csv), exist_ok=True)
@@ -345,9 +361,9 @@ if __name__ == "__main__":
     parser.add_argument('--bedfile', type=str, default='data/pic.csv',
                        help='Bedfile for simulation')
     parser.add_argument('--parallel', action='store_true',
-                       help='Run algorithms in parallel')
+                       help='Run tasks in parallel (processes all algorithm×seed combinations concurrently)')
     parser.add_argument('--max-workers', type=int, default=None,
-                       help='Maximum number of parallel workers (default: number of CPUs)')
+                       help='Maximum number of parallel workers (default: 60%% of available CPUs)')
     parser.add_argument('--no-timestamp', action='store_true',
                        help='Disable timestamp in output directories')
     
@@ -359,7 +375,7 @@ if __name__ == "__main__":
         config=args.config,
         bedfile=args.bedfile,
         max_seeds=args.max_seeds,
-        parallel_algorithms=args.parallel,
+        parallel=args.parallel,
         max_workers=args.max_workers,
         timestamp_dirs=not args.no_timestamp
     )
