@@ -274,12 +274,14 @@ def multiset_confusion(true_pairs: Counter,
     return tp_count, fp_count, fn_count, tp_ctr, fp_ctr, fn_ctr
 
 
-def _set_confusion(true_ctr: Counter, rec_ctr: Counter):
+def _set_confusion(true_ctr: Counter, rec_ctr: Counter, restrict_labels: Optional[Iterable[str]] = None):
     """
     Set-level confusion (unique pairs only).
     Returns tp, fp, fn, set_true, set_rec
     """
     T = {k for k, v in true_ctr.items() if v > 0}
+    if restrict_labels is not None:
+        T = {(x, y) for (x, y) in T if x in restrict_labels and y in restrict_labels}
     R = {k for k, v in rec_ctr.items() if v > 0}
     tp = len(T & R)
     fp = len(R - T)
@@ -361,8 +363,8 @@ def evaluate_4(true_tree: Any,
     Tr = ensure_nx(rec_tree)
 
     # Ancestors multiset
-    P_true_pairs = label_multiset_ancestor_pairs(Tt, restrict_labels)
-    P_rec_pairs = label_multiset_ancestor_pairs(Tr, restrict_labels)
+    P_true_pairs = label_multiset_ancestor_pairs(Tt)
+    P_rec_pairs = label_multiset_ancestor_pairs(Tr)
     tp1, fp1, fn1 = multiset_confusion_simple(P_true_pairs, P_rec_pairs)
     prec1, rec1, f11, iou1 = prf1_iou(tp1, fp1, fn1)
     mode1 = {
@@ -380,6 +382,16 @@ def evaluate_4(true_tree: Any,
         "precision": prec2, "recall": rec2, "F1": f12, "IoU": iou2,
         "num_unique_pairs_true": len(T2),
         "num_unique_pairs_rec": len(R2)
+    }
+
+    # Ancestors unique restricted (set)
+    tp0, fp0, fn0, T0, R0 = _set_confusion(P_true_pairs, P_rec_pairs, restrict_labels)
+    prec0, rec0, f10, iou0 = prf1_iou(tp0, fp0, fn0)
+    mode0 = {
+        "TP": tp0, "FP": fp0, "FN": fn0,
+        "precision": prec0, "recall": rec0, "F1": f10, "IoU": iou0,
+        "num_unique_pairs_true": len(T0),
+        "num_unique_pairs_rec": len(R0)
     }
 
     # Edges multiset
@@ -406,10 +418,11 @@ def evaluate_4(true_tree: Any,
 
     if print_debug:
         print("---- DEBUG four modes ----")
-        print("Ancestors multiset:    TP/FP/FN =", tp1, fp1, fn1)
-        print("Ancestors unique:      TP/FP/FN =", tp2, fp2, fn2)
-        print("Edges multiset:        TP/FP/FN =", tp3, fp3, fn3)
-        print("Edges unique:          TP/FP/FN =", tp4, fp4, fn4)
+        print("Ancestors multiset:      TP/FP/FN =", tp1, fp1, fn1)
+        print("Ancestors unique:        TP/FP/FN =", tp2, fp2, fn2)
+        print("Edges multiset:          TP/FP/FN =", tp3, fp3, fn3)
+        print("Edges unique:            TP/FP/FN =", tp4, fp4, fn4)
+        print("anc unique & restricted: TP/FP/FN =", tp0, fp0, fn0)
 
         _, _, _, tp_list, fp_list, fn_list = multiset_confusion(
             P_true_pairs, P_rec_pairs,
@@ -428,12 +441,20 @@ def evaluate_4(true_tree: Any,
         print(f"FP ({len(fp_pairs_unique)}): {sorted(fp_pairs_unique)}")
         print(f"FN ({len(fn_pairs_unique)}): {sorted(fn_pairs_unique)}")
 
+        print("MODE 0")
+        tp_pairs_unique_r = T0 & R0
+        fp_pairs_unique_r = R0 - T0
+        fn_pairs_unique_r = T0 - R0
+        print(f"TP ({len(tp_pairs_unique_r)}): {sorted(tp_pairs_unique_r)}")
+        print(f"FP ({len(fp_pairs_unique_r)}): {sorted(fp_pairs_unique_r)}")
+        print(f"FN ({len(fn_pairs_unique_r)}): {sorted(fn_pairs_unique_r)}")
 
     return {
         "ancestors_multiset": mode1,
         "ancestors_unique": mode2,
         "edges_multiset": mode3,
-        "edges_unique": mode4
+        "edges_unique": mode4,
+        "ancestors_unique_restricted": mode0
     }
 
 

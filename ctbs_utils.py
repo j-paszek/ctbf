@@ -225,6 +225,16 @@ def from_nx_tree(tree: nx.DiGraph):
     return tree, node_objects
 
 
+def get_biopsy_nodes_ids(rec_tree, nj_tree):
+    b, c = rec_tree, nj_tree
+    biopsy_nodes_ids = [str(b.nodes[n].get("cell_id")) for n in b.nodes]
+    biopsy_nodes_ids = set(biopsy_nodes_ids)
+    verify = set([str(c.nodes[n].get("cell_id")) for n in c.nodes])
+    if len(biopsy_nodes_ids - verify) > 0:
+        raise Exception("Nodes of reconstructed trees do not match.")
+    return biopsy_nodes_ids
+
+
 def vizualize_from_newick(newick_str):
     tree, no = from_newick(newick_str)
     nl = compute_node_levels(tree, no)

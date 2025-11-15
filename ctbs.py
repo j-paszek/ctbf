@@ -14,7 +14,7 @@ from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_
     neighbor_joining_hybrid_anticentral_opt, neighbor_joining_hybrid_anticentral_adaptive_v3
 from evaluator import grf_tree
 from evaluator_full import evaluate_4, named_label
-from ctbs_utils import to_newick, vizualize_nx_tree
+from ctbs_utils import to_newick, vizualize_nx_tree, get_biopsy_nodes_ids
 
 IN_FILE_NAME = "biopsy.txt"
 OUT_FILE_NAME = "cnp_distance_matrix.txt"
@@ -500,11 +500,13 @@ if __name__ == "__main__":
                     biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
                     reconstruction_algorithm=neighbor_joining_hybrid_anticentral_adaptive_v3)
 
-    out = evaluate_4(a, b, print_debug=True)
+    biopsy_nodes_ids = get_biopsy_nodes_ids(b, c)
+
+    out = evaluate_4(a, b, restrict_labels=biopsy_nodes_ids, print_debug=True)
     print(out)
     # vizualize_nx_tree(b)
 
-    out = evaluate_4(a, c, print_debug=True)
+    out = evaluate_4(a, c, restrict_labels=biopsy_nodes_ids, print_debug=True)
     print(out)
     # print(c.edges)
     # print(len(c.nodes))

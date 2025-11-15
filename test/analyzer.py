@@ -49,7 +49,19 @@ def analize(i, alg_name, how_many):
             )
     )
     w = df.loc[mask2, "seed"].tolist()
+
+    m = (
+            (df["ancestors_unique_restricted_precision_failures"] > 0) |
+            (df["ancestors_unique_restricted_f1_failures"] > 0)
+    )
+    f = len(df.loc[m, "seed"].tolist())
+    m = (df["ancestors_unique_restricted_precision_failures"] > 0)
+    g = len(df.loc[m, "seed"].tolist())
+    m = (df["ancestors_unique_restricted_f1_failures"] > 0)
+    h = len(df.loc[m, "seed"].tolist())
+
     print("No. Rec < NJ; All: ", u, " Unique: ", v, " Unique but not all: ", w)
+    print("Restricted failures; All: ", f, " precision: ", g, " F1: ", h)
 
     print("***** Rekonstruowane *****")
     summarize(df1)

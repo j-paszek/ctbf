@@ -1,6 +1,7 @@
 import pandas as pd
 
 from ctbs import run_single_test
+from ctbs_utils import get_biopsy_nodes_ids
 from evaluator_full import evaluate_4
 from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full, neighbor_joining_full_cps, \
     neighbor_joining_hybrid, neighbor_joining_hybrid_inverse_centrality, neighbor_joining_adaptive_centrality, \
@@ -14,18 +15,18 @@ all_seeds = df["seed"].unique().tolist()
 
 def get_algorithms_to_test():
     return [
-            # neighbor_joining_full,
-            # neighbor_joining_full_cps,
-            # neighbor_joining_hybrid,
-            # neighbor_joining_hybrid_inverse_centrality,
-            # neighbor_joining_adaptive_centrality,
-            # neighbor_joining_adaptive_centrality_nonlinear,
-            # neighbor_joining_adaptive_centrality_reversed,
-            # neighbor_joining_hybrid_opt,
-            # neighbor_joining_hybrid_opt_adaptive,
-            # neighbor_joining_hybrid_opt_v2,
-            # neighbor_joining_hybrid_opt_refined,
-            # neighbor_joining_hybrid_anticentral_opt,
+            neighbor_joining_full,
+            neighbor_joining_full_cps,
+            neighbor_joining_hybrid,
+            neighbor_joining_hybrid_inverse_centrality,
+            neighbor_joining_adaptive_centrality,
+            neighbor_joining_adaptive_centrality_nonlinear,
+            neighbor_joining_adaptive_centrality_reversed,
+            neighbor_joining_hybrid_opt,
+            neighbor_joining_hybrid_opt_adaptive,
+            neighbor_joining_hybrid_opt_v2,
+            neighbor_joining_hybrid_opt_refined,
+            neighbor_joining_hybrid_anticentral_opt,
             neighbor_joining_hybrid_anticentral_adaptive_v3
             ]
 
@@ -48,6 +49,12 @@ def provide_summary(rec, nj, mode, seed, failures, rec_report, nj_report):
         rec_report["2-f1"].append(f1)
         nj_report["2-precision"].append(p2)
         nj_report["2-f1"].append(f2)
+    elif mode == "ancestors_unique_restricted":
+        rec_report["3-precision"].append(p1)
+        rec_report["3-f1"].append(f1)
+        nj_report["3-precision"].append(p2)
+        nj_report["3-f1"].append(f2)
+
 
     print(f"Mode: {mode}")
     print(f"Precision: {p1:.4f} vs {p2:.4f}")
@@ -68,10 +75,14 @@ if __name__ == "__main__":
             "ancestors_multiset_f1_failures": [],
             "ancestors_unique_precision_failures": [],
             "ancestors_unique_f1_failures": [],
+            "ancestors_unique_restricted_precision_failures": [],
+            "ancestors_unique_restricted_f1_failures": []
         }
 
-        rec_output = {"seed": [], "1-precision": [], "1-f1": [], "2-precision": [], "2-f1": []}
-        nj_output = {"seed": [], "1-precision": [], "1-f1": [], "2-precision": [], "2-f1": []}
+        rec_output = {"seed": [], "1-precision": [], "1-f1": [],
+                      "2-precision": [], "2-f1": [], "3-precision": [], "3-f1": []}
+        nj_output = {"seed": [], "1-precision": [], "1-f1": [],
+                     "2-precision": [], "2-f1": [], "3-precision": [], "3-f1": []}
         counter += 1
         algo_name = getattr(algo, "__name__", str(algo))
         print(f"\n--- Running tests with {algo_name} ---")
@@ -91,14 +102,15 @@ if __name__ == "__main__":
                     reconstruction_algorithm=algo,
                 )
 
-                rec = evaluate_4(a, b)
-                nj = evaluate_4(a, c)
+                biopsy_cell_ids = get_biopsy_nodes_ids(b, c)
+                rec = evaluate_4(a, b, restrict_labels=biopsy_cell_ids)
+                nj = evaluate_4(a, c, restrict_labels=biopsy_cell_ids)
 
                 # Make sure seed is added once
                 rec_output["seed"].append(seed)
                 nj_output["seed"].append(seed)
 
-                for mode in ["ancestors_multiset", "ancestors_unique"]:
+                for mode in ["ancestors_multiset", "ancestors_unique", "ancestors_unique_restricted"]:
                     provide_summary(rec, nj, mode, seed, results_store, rec_output, nj_output)
 
             except Exception as e:
