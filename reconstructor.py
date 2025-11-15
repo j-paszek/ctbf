@@ -83,16 +83,152 @@ def neighbor_joining_standard(dist_matrix, cells, max_id, seed=7, existing_tree=
     return tree, new_nodes, NJ_REC_TR_ROOT_ID
 
 
-def neighbor_joining_full(dist_matrix, cells, max_id, seed=7, existing_tree=None):
+def _is_biologically_plausible_pair(x, y):
     """
-    Deterministic, parent-retaining neighbor-joining replacement.
-    Each merge creates a new internal node (copy of parent) with empty genome.
-    Original leaves are preserved.
-    Returns: tree, new_nodes dict, root cell_id
+    Biological plausibility of merging two cells x and y.
+
+    Currently uses an "appearance constraint" similar to the
+    biopsy-guided reconstruction, i.e. disallow merges where one
+    genome has copy-number 0 and the other has a positive copy
+    number at the same position.
     """
+    return not (np.any((x.genome == 0) & (y.genome > 0)) or np.any((y.genome == 0) & (x.genome > 0)))
+
+
+def _resolve_pair_ties(candidate_pairs, node_list, rng, return_first=False):
+    """
+    Resolve ties between equally scoring candidate pairs.
+
+    Parameters
+    ----------
+    candidate_pairs : list of (i, j) index tuples
+        All pairs that have the same (best) score according to a heuristic.
+    node_list : list
+        Current ordered list of nodes corresponding to rows/cols of D.
+    rng : random.Random
+        Random generator for deterministic tie-breaking.
+
+    Returns
+    -------
+    (i, j) : tuple of int
+        Selected pair of indices.
+    """
+    if not candidate_pairs:
+        raise ValueError("No candidate pairs provided to _resolve_pair_ties.")
+
+    if return_first:
+        return candidate_pairs[0]
+
+    # Optional biological plausibility filter
+    plausible = [
+        (i, j) for (i, j) in candidate_pairs
+        if _is_biologically_plausible_pair(node_list[i], node_list[j])
+    ]
+    if plausible:
+        candidate_pairs = plausible
+
+    # If only one candidate remains, return it deterministically
+    if len(candidate_pairs) == 1:
+        return candidate_pairs[0]
+
+    # Deterministic random tie-breaker
+    return rng.choice(candidate_pairs)
+
+
+def _select_pair_core(D, node_list, rng, pair_score_func, minimize=True, apply_plausibility=True):
+    """
+    Universal pair-selection core used by all NJ variants.
+    Applies biological plausibility and tie-breaking.
+    """
+    n = len(D)
+    best_score = None
+    candidate_pairs = []
+
+    tri_i, tri_j = np.triu_indices(n, k=1)
+    for i, j in zip(tri_i, tri_j):
+        score = pair_score_func(i, j)
+
+        if best_score is None:
+            best_score = score
+            candidate_pairs = [(i, j)]
+        else:
+            if minimize:
+                if score < best_score:
+                    best_score = score
+                    candidate_pairs = [(i, j)]
+                elif score == best_score:
+                    candidate_pairs.append((i, j))
+            else:
+                if score > best_score:
+                    best_score = score
+                    candidate_pairs = [(i, j)]
+                elif score == best_score:
+                    candidate_pairs.append((i, j))
+
+    # APPLY BIOLOGICAL PLAUSIBILITY HERE FOR ALL VARIANTS
+    if apply_plausibility:
+        i, j = _resolve_pair_ties(candidate_pairs, node_list, rng)
+        return i, j
+    else:
+        # EXACT BEHAVIOR OF ORIGINAL NJ-FULL:
+        # pick the FIRST candidate pair (NumPy order)
+        return candidate_pairs[0]
+
+
+def _choose_parent_by_centrality(centrality, i, j, rng, larger_is_more_central):
+    """
+    Decide which index becomes the parent based on centrality values.
+
+    Parameters
+    ----------
+    centrality : array-like
+        Centrality score per node; semantics depend on the caller.
+    i, j : int
+        Indices of the two candidate nodes.
+    rng : random.Random
+        Used for deterministic tie-breaking.
+    larger_is_more_central : bool
+        If True, node with larger centrality is considered more central.
+        If False, node with smaller centrality is considered more central.
+
+    Returns
+    -------
+    (parent_idx, child_idx) : tuple of int
+    """
+    c_i = centrality[i]
+    c_j = centrality[j]
+
+    if larger_is_more_central:
+        if c_i > c_j:
+            return i, j
+        if c_j > c_i:
+            return j, i
+    else:
+        if c_i < c_j:
+            return i, j
+        if c_j < c_i:
+            return j, i
+
+    # Tie: random but seeded
+    return (i, j) if rng.random() < 0.5 else (j, i)
+
+
+def _choose_parent_full_nj(D, i, j, rng, larger_is_more_central):
+    centrality = D.sum(axis=1)
+    return _choose_parent_by_centrality(
+        centrality, i, j, rng, larger_is_more_central=larger_is_more_central
+    )
+
+
+def neighbour_joining_core(dist_matrix, cells, max_id, seed=7, existing_tree=None,
+                           select_pair_func=_select_pair_core,
+                           select_ancestor_func=_choose_parent_full_nj
+                           ):
+    rng = random.Random(seed)
     D = dist_matrix.copy().astype(float)
     tree = existing_tree or nx.DiGraph()
     new_nodes = {}
+
 
     # keep ordered list aligned with D
     node_list = [cells[i] for i in range(len(cells))]
@@ -103,35 +239,16 @@ def neighbor_joining_full(dist_matrix, cells, max_id, seed=7, existing_tree=None
 
     next_id = max_id + 1
 
+
     while len(node_list) > 1:
         n = len(D)
 
-        # find closest pair
-        i, j = None, None
-        min_val = np.inf
-        for a in range(n):
-            for b in range(a+1, n):
-                if D[a, b] < min_val:
-                    min_val = D[a, b]
-                    i, j = a, b
+        # core differences
+        i, j = select_pair_func(D, node_list, rng, minimize=True)
+        parent_idx, child_idx = select_ancestor_func(D, i, j, rng, larger_is_more_central=False)
 
-        # decide parent based on minimal sum to others
-        others = [k for k in range(n) if k not in (i, j)]
-        sum_i = D[i, others].sum() if others else 0
-        sum_j = D[j, others].sum() if others else 0
 
-        if (sum_i < sum_j):
-            parent_idx, child_idx = i, j
-        elif (sum_i > sum_j):
-            parent_idx, child_idx = j, i
-        else:
-            # Randomly decide which becomes parent
-            rng = random.Random(seed)
-            if rng.random() < 0.5:
-                parent_idx, child_idx = i, j
-            else:
-                parent_idx, child_idx = j, i
-
+        # reconstructing tree
         parent_leaf = node_list[parent_idx]
         child_leaf = node_list[child_idx]
 
@@ -157,6 +274,42 @@ def neighbor_joining_full(dist_matrix, cells, max_id, seed=7, existing_tree=None
     return tree, new_nodes, root.cell_id
 
 
+def _select_pair_full(D, node_list, rng, minimize=True):
+    return _select_pair_core(
+        D, node_list, rng,
+        pair_score_func=lambda i, j: D[i, j],   # score = distance
+        minimize=True,
+        apply_plausibility=False
+    )
+
+
+def neighbor_joining_full(dist_matrix, cells, max_id, seed=7, existing_tree=None):
+    """
+    Deterministic, parent-retaining neighbor-joining replacement.
+    Each merge creates a new internal node (copy of parent) with empty genome.
+    Original leaves are preserved.
+    Returns: tree, new_nodes dict, root cell_id
+    """
+    return neighbour_joining_core(dist_matrix, cells, max_id, seed=7, existing_tree=None,
+                           select_pair_func=_select_pair_full,
+                           select_ancestor_func=_choose_parent_full_nj)
+
+
+def _select_pair_cps(D, node_list, rng, minimize=True):
+    centrality = D.sum(axis=1)
+
+    def pair_score_func(i, j):
+        c_i, c_j = centrality[i], centrality[j]
+        return (D[i, j], min(c_i, c_j), -max(c_i, c_j))  # CPS tuple
+
+    return _select_pair_core(
+        D, node_list, rng,
+        pair_score_func=pair_score_func,
+        minimize=True,
+        apply_plausibility=True
+    )
+
+
 def neighbor_joining_full_cps(dist_matrix, cells, max_id, seed=7, existing_tree=None):
     """
     Centrality-guided neighbor joining heuristic.
@@ -167,76 +320,15 @@ def neighbor_joining_full_cps(dist_matrix, cells, max_id, seed=7, existing_tree=
          - if tie, the larger centrality is maximal (most peripheral child)
     4. Parent = the node with smaller centrality (more central one).
     """
-    rng = random.Random(seed)
-    D = dist_matrix.copy().astype(float)
-    tree = existing_tree or nx.DiGraph()
-    new_nodes = {}
-
-    # keep ordered list aligned with D
-    node_list = [cells[i] for i in range(len(cells))]
-
-    # add leaf nodes
-    for node in node_list:
-        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
-
-    next_id = max_id + 1
-
-    while len(node_list) > 1:
-        n = len(D)
-
-        # compute all pairwise distances
-        min_val = np.min(D[np.triu_indices(n, 1)])
-        min_pairs = [(i, j) for i in range(n) for j in range(i + 1, n) if D[i, j] == min_val]
-
-        # compute centrality (sum of distances to all others)
-        centrality = D.sum(axis=1)
-
-        # build list of candidate tuples (first_central, second_central, i, j)
-        candidates = []
-        for i, j in min_pairs:
-            c_i, c_j = centrality[i], centrality[j]
-            first, second = sorted((c_i, c_j))
-            candidates.append((first, -second, i, j))  # -second to get max(second)
-
-        # choose pair with smallest first, then largest second (since we negated)
-        candidates.sort()
-        _, _, i, j = candidates[0]
-
-        # determine which is parent (more central = smaller sum)
-        if centrality[i] < centrality[j]:
-            parent_idx, child_idx = i, j
-        elif centrality[i] > centrality[j]:
-            parent_idx, child_idx = j, i
-        else:
-            # if equal, random tie-break
-            parent_idx, child_idx = (i, j) if rng.random() < 0.5 else (j, i)
-
-        parent_leaf = node_list[parent_idx]
-        child_leaf = node_list[child_idx]
-
-        # create new internal node (copy of parent)
-        internal_node = type(parent_leaf)(
-            genome=parent_leaf.genome,
-            node_id=next_id,
-            cell_id=parent_leaf.cell_id
-        )
-        next_id += 1
-        tree.add_node(internal_node.node_id, genome=internal_node.genome, cell_id=internal_node.cell_id)
-
-        # attach edges
-        tree.add_edge(internal_node.node_id, parent_leaf.node_id, weight=0.0)
-        tree.add_edge(internal_node.node_id, child_leaf.node_id, weight=float(D[parent_idx, child_idx]))
-
-        new_nodes[internal_node] = (parent_leaf, child_leaf)
-
-        # update distance matrix and node list (keep parent, remove child)
-        keep_indices = [k for k in range(n) if k != child_idx]
-        D = D[np.ix_(keep_indices, keep_indices)]
-        node_list[parent_idx] = internal_node
-        node_list.pop(child_idx)
-
-    root = node_list[0]
-    return tree, new_nodes, root.cell_id
+    return neighbour_joining_core(
+        dist_matrix,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        select_pair_func=_select_pair_cps,
+        select_ancestor_func=_choose_parent_full_nj,  # same parent rule as full NJ
+    )
 
 
 def neighbor_joining_hybrid(dist_matrix, cells, max_id, alpha=1.0, beta=0.5, seed=7, existing_tree=None):

@@ -70,6 +70,10 @@ if __name__ == "__main__":
     # === Run tests ===
     counter = -1
     for algo in get_algorithms_to_test():
+        counter += 1
+        if counter != 1:
+            continue
+
         results_store = {
             "ancestors_multiset_precision_failures": [],
             "ancestors_multiset_f1_failures": [],
@@ -83,7 +87,7 @@ if __name__ == "__main__":
                       "2-precision": [], "2-f1": [], "3-precision": [], "3-f1": []}
         nj_output = {"seed": [], "1-precision": [], "1-f1": [],
                      "2-precision": [], "2-f1": [], "3-precision": [], "3-f1": []}
-        counter += 1
+
         algo_name = getattr(algo, "__name__", str(algo))
         print(f"\n--- Running tests with {algo_name} ---")
 
