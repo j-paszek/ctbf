@@ -83,16 +83,27 @@ def neighbor_joining_standard(dist_matrix, cells, max_id, seed=7, existing_tree=
     return tree, new_nodes, NJ_REC_TR_ROOT_ID
 
 
+def _is_biologically_plausible_ancestor(ancestor, descendant):
+    """
+    Returns True if 'ancestor' could biologically be the parent of 'descendant'.
+
+    Constraint:
+    - ancestor cannot generate descendant if ancestor has CN=0 at a locus
+      where descendant has CN>0 (i.e. a gain from 0 → positive is disallowed).
+    """
+    return not np.any((ancestor.genome == 0) & (descendant.genome > 0))
+
+
 def _is_biologically_plausible_pair(x, y):
     """
-    Biological plausibility of merging two cells x and y.
+    A pair (x, y) is biologically plausible if at least one direction
+    (x→y or y→x) is biologically possible.
 
-    Currently uses an "appearance constraint" similar to the
-    biopsy-guided reconstruction, i.e. disallow merges where one
-    genome has copy-number 0 and the other has a positive copy
-    number at the same position.
+    This means:
+    - keep this pair if x can be parent of y OR y can be parent of x.
     """
-    return not (np.any((x.genome == 0) & (y.genome > 0)) or np.any((y.genome == 0) & (x.genome > 0)))
+    return (_is_biologically_plausible_ancestor(x, y) or
+            _is_biologically_plausible_ancestor(y, x))
 
 
 def _resolve_pair_ties(candidate_pairs, node_list, rng, return_first=False):
@@ -220,8 +231,17 @@ def _choose_parent_full_nj(D, i, j, rng, larger_is_more_central):
     )
 
 
+def _select_pair_full(D, node_list, rng, minimize=True):
+    return _select_pair_core(
+        D, node_list, rng,
+        pair_score_func=lambda i, j: D[i, j],   # score = distance
+        minimize=True,
+        apply_plausibility=False
+    )
+
+
 def neighbour_joining_core(dist_matrix, cells, max_id, seed=7, existing_tree=None,
-                           select_pair_func=_select_pair_core,
+                           select_pair_func=_select_pair_full,
                            select_ancestor_func=_choose_parent_full_nj
                            ):
     rng = random.Random(seed)
@@ -243,10 +263,35 @@ def neighbour_joining_core(dist_matrix, cells, max_id, seed=7, existing_tree=Non
     while len(node_list) > 1:
         n = len(D)
 
-        # core differences
+        # ****** core ************
         i, j = select_pair_func(D, node_list, rng, minimize=True)
-        parent_idx, child_idx = select_ancestor_func(D, i, j, rng, larger_is_more_central=False)
+        # ************************
+        # First check biological plausibility (directional)
+        x = node_list[i]
+        y = node_list[j]
 
+        can_x_parent = _is_biologically_plausible_ancestor(x, y)
+        can_y_parent = _is_biologically_plausible_ancestor(y, x)
+
+        if can_x_parent and not can_y_parent:
+            # Only x can be parent → forced direction
+            parent_idx, child_idx = i, j
+
+        elif can_y_parent and not can_x_parent:
+            # Only y can be parent → forced direction
+            parent_idx, child_idx = j, i
+
+        elif can_x_parent and can_y_parent:
+            # Both directions biologically allowed → use NJ rule
+            # *************** core *******************
+            parent_idx, child_idx = select_ancestor_func(D, i, j, rng, larger_is_more_central=False)
+
+        else:
+            # Neither direction possible → should never happen
+            raise ValueError(
+                f"No biologically plausible direction between {x.node_id} and {y.node_id}"
+            )
+        # ************************
 
         # reconstructing tree
         parent_leaf = node_list[parent_idx]
@@ -274,15 +319,6 @@ def neighbour_joining_core(dist_matrix, cells, max_id, seed=7, existing_tree=Non
     return tree, new_nodes, root.cell_id
 
 
-def _select_pair_full(D, node_list, rng, minimize=True):
-    return _select_pair_core(
-        D, node_list, rng,
-        pair_score_func=lambda i, j: D[i, j],   # score = distance
-        minimize=True,
-        apply_plausibility=False
-    )
-
-
 def neighbor_joining_full(dist_matrix, cells, max_id, seed=7, existing_tree=None):
     """
     Deterministic, parent-retaining neighbor-joining replacement.
@@ -290,9 +326,9 @@ def neighbor_joining_full(dist_matrix, cells, max_id, seed=7, existing_tree=None
     Original leaves are preserved.
     Returns: tree, new_nodes dict, root cell_id
     """
-    return neighbour_joining_core(dist_matrix, cells, max_id, seed=7, existing_tree=None,
-                           select_pair_func=_select_pair_full,
-                           select_ancestor_func=_choose_parent_full_nj)
+    return neighbour_joining_core(dist_matrix, cells, max_id, seed=seed, existing_tree=existing_tree,
+                                  select_pair_func=_select_pair_full,
+                                  select_ancestor_func=_choose_parent_full_nj)
 
 
 def _select_pair_cps(D, node_list, rng, minimize=True):
@@ -1606,7 +1642,7 @@ def build_evolution_tree(cell_lists, seed=7, dist_matrix_path=None, r=2, only_nj
                     continue
 
                 # appearance constraint
-                x_ks = [x for x in x_ks if not np.any((x.genome == 0) & (y.genome > 0))]
+                x_ks = [x for x in x_ks if _is_biologically_plausible_ancestor(x, y)]
 
                 if len(x_ks) == 1:
                     x = x_ks[0]

@@ -242,7 +242,7 @@ def test_reconstructor_full(show=SHOW_FIGURES):
     bb = copy.deepcopy(b) # NOTE: (!) needed for r=4 example
     t, l, _ = build_evolution_tree(b, dist_matrix_path="data/dm/distance_matrix.txt", r=2,
                                    neighbor_joining=neighbor_joining_full)
-    assert to_newick(t) == "((1:0.0000,(3:2.0000)2:1.0000)1:0.0000,(4:0.0000)4:4.0000)1;"
+    assert to_newick(t) == "(((3:2.0000)2:0.0000,1:1.0000)2:0.0000,(4:0.0000)4:4.0000)2;"
     if show: visualize_tree_plotly(t, l)
     t, l, _ = build_evolution_tree(b1, dist_matrix_path="data/dm/distance_matrix.txt", r=2,
                                    neighbor_joining=neighbor_joining_full)
@@ -250,11 +250,11 @@ def test_reconstructor_full(show=SHOW_FIGURES):
     if show: visualize_tree_plotly(t, l)
     t, l, _ = build_evolution_tree(bb, dist_matrix_path="data/dm/distance_matrix.txt", r=4,
                                    neighbor_joining=neighbor_joining_full)
-    assert to_newick(t) == "(1:0.0000,(3:2.0000,4:4.0000)2:1.0000)1;"
+    assert to_newick(t) == "((3:2.0000,4:4.0000)2:0.0000,1:1.0000)2;"
     if show: visualize_tree_plotly(t, l)
     t, l, _ = build_evolution_tree(njb, dist_matrix_path="data/dm/distance_matrix.txt", r=4, only_nj=True,
                                    neighbor_joining=neighbor_joining_full)
-    assert to_newick(t) == "(((1:0.0000,2:1.0000)1:0.0000,3:1.0000)1:0.0000,4:4.0000)1;"
+    assert to_newick(t) == "(((2:0.0000,1:1.0000)2:0.0000,3:2.0000)2:0.0000,4:4.0000)2;"
     if show: visualize_tree_plotly(t, l)
     t, l, _ = build_evolution_tree(njb1, dist_matrix_path="data/dm/distance_matrix.txt", r=1, only_nj=True,
                                    neighbor_joining=neighbor_joining_full)
