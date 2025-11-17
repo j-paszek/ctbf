@@ -298,6 +298,31 @@ def _select_pair_hybrid_inv_centrality(D, node_list, rng,
 
 
 # ============================================================
+#  PARENT SELECTION - THE ROOT
+# ============================================================
+def _final_parent_choice_full_matrix(x, y, D_full, origin_index, rng, select_ancestor_func):
+    """
+    Decide the final parent–child direction for the last two lineages
+    using the ORIGINAL (full) distance matrix D_full.
+
+    x, y : the two remaining nodes (Genotype-like objects)
+    origin_index : dict mapping node -> original index in D_full
+    """
+    ix = origin_index[x]
+    iy = origin_index[y]
+
+    parent_idx, child_idx = select_ancestor_func(
+        D_full, ix, iy, rng, larger_is_more_central=False
+    )
+
+    # Map index choice back to node objects
+    if parent_idx == ix:
+        return x, y
+    else:
+        return y, x
+
+
+# ============================================================
 #  PARENT SELECTION
 # ============================================================
 
@@ -345,12 +370,17 @@ def neighbour_joining_core(dist_matrix, cells, max_id, seed=7, existing_tree=Non
                            select_ancestor_func=_choose_parent_full_nj
                            ):
     rng = random.Random(seed)
+    # full (original) matrix for final-step decision
+    D_full = dist_matrix.copy().astype(float)
     D = dist_matrix.copy().astype(float)
     tree = existing_tree or nx.DiGraph()
     new_nodes = {}
 
     # keep ordered list aligned with D
     node_list = [cells[i] for i in range(len(cells))]
+
+    # map each initial node to its original index in D_full
+    origin_index = {node: idx for idx, node in enumerate(node_list)}
 
     # add leaf nodes
     for node in node_list:
@@ -360,34 +390,47 @@ def neighbour_joining_core(dist_matrix, cells, max_id, seed=7, existing_tree=Non
 
     while len(node_list) > 1:
         n = len(D)
+
         # ---- 1. Select pair (i, j)
         i, j = select_pair_func(D, node_list, rng, minimize=True)
 
-        # ---- 2. Biological plausibility of direction
-        x = node_list[i]
-        y = node_list[j]
+        # special case - finding the root
+        if len(node_list) == 2:
+            x = node_list[0]
+            y = node_list[1]
 
-        can_x_parent = _is_biologically_plausible_ancestor(x, y)
-        can_y_parent = _is_biologically_plausible_ancestor(y, x)
-
-        if can_x_parent and not can_y_parent:
-            # Only x can be parent → forced direction
-            parent_idx, child_idx = i, j
-
-        elif can_y_parent and not can_x_parent:
-            # Only y can be parent → forced direction
-            parent_idx, child_idx = j, i
-
-        elif can_x_parent and can_y_parent:
-            # Both directions biologically allowed → use NJ rule
-            # *************** core *******************
-            parent_idx, child_idx = select_ancestor_func(D, i, j, rng, larger_is_more_central=False)
-
-        else:
-            # Neither direction possible → should never happen
-            raise ValueError(
-                f"No biologically plausible direction between {x.node_id} and {y.node_id}"
+            parent_leaf, child_leaf = _final_parent_choice_full_matrix(
+                x, y, D_full, origin_index, rng, select_ancestor_func
             )
+
+            parent_idx = 0 if node_list[0] is parent_leaf else 1
+            child_idx = 1 - parent_idx
+        else:
+            # ---- 2. Biological plausibility of direction
+            x = node_list[i]
+            y = node_list[j]
+
+            can_x_parent = _is_biologically_plausible_ancestor(x, y)
+            can_y_parent = _is_biologically_plausible_ancestor(y, x)
+
+            if can_x_parent and not can_y_parent:
+                # Only x can be parent → forced direction
+                parent_idx, child_idx = i, j
+
+            elif can_y_parent and not can_x_parent:
+                # Only y can be parent → forced direction
+                parent_idx, child_idx = j, i
+
+            elif can_x_parent and can_y_parent:
+                # Both directions biologically allowed → use NJ rule
+                # *************** core *******************
+                parent_idx, child_idx = select_ancestor_func(D, i, j, rng, larger_is_more_central=False)
+
+            else:
+                # Neither direction possible → should never happen
+                raise ValueError(
+                    f"No biologically plausible direction between {x.node_id} and {y.node_id}"
+                )
 
         # reconstructing tree
         parent_leaf = node_list[parent_idx]
@@ -396,6 +439,7 @@ def neighbour_joining_core(dist_matrix, cells, max_id, seed=7, existing_tree=Non
         # create a new internal node (copy of parent) with empty genome
         internal_node = type(parent_leaf)(genome=parent_leaf.genome, node_id=next_id, cell_id=parent_leaf.cell_id)
         next_id += 1
+        origin_index[internal_node] = origin_index[parent_leaf]
         tree.add_node(internal_node.node_id, genome=internal_node.genome, cell_id=internal_node.cell_id)
 
         # attach original leaves under the internal node
