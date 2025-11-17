@@ -303,6 +303,29 @@ def test_reconstructor_njfull():
     assert to_newick(t2) == to_newick(t6)
 
 
+def test_reconstructor_plausability():
+    a, b, c = run_single_test(
+        seed=95,
+        config="data/config_for_pic.json",
+        bedfile="data/pic.csv",
+        biopsy_size_scalable=0.5,
+        biopsy_generations=[4, 6, 8],
+        r_dist=4,
+        write_newick=True,
+        reconstruction_algorithm=neighbor_joining_full_cps,
+    )
+    a, b, c = run_single_test(
+        seed=95,
+        config="data/config_for_pic.json",
+        bedfile="data/pic.csv",
+        biopsy_size_scalable=0.5,
+        biopsy_generations=[4, 6, 8],
+        r_dist=4,
+        write_newick=True,
+        reconstruction_algorithm=neighbor_joining_full,
+    )
+
+
 df = pd.read_csv("data/f1results.csv", delimiter="\t")
 def float_to_str_comma(x, digits=3):
     """

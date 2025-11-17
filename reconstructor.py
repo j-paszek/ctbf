@@ -136,18 +136,6 @@ def _resolve_pair_ties(candidate_pairs, node_list, rng, return_first=False):
     if return_first:
         return candidate_pairs[0]
 
-    # Optional biological plausibility filter
-    plausible = [
-        (i, j) for (i, j) in candidate_pairs
-        if _is_biologically_plausible_pair(node_list[i], node_list[j])
-    ]
-    if plausible:
-        candidate_pairs = plausible
-
-    # If only one candidate remains, return it deterministically
-    if len(candidate_pairs) == 1:
-        return candidate_pairs[0]
-
     # Deterministic random tie-breaker
     return rng.choice(candidate_pairs)
 
@@ -158,39 +146,77 @@ def _resolve_pair_ties(candidate_pairs, node_list, rng, return_first=False):
 def _select_pair_core(D, node_list, rng, pair_score_func, minimize=True, apply_plausibility=True):
     """
     Universal pair-selection core used by all NJ variants.
-    Applies biological plausibility and tie-breaking.
+
+    If apply_plausibility is True:
+      - among all PLAUSIBLE pairs (according to _is_biologically_plausible_pair),
+        choose the one(s) with best score;
+      - if NO plausible pair exists at all, fall back to best score among ALL pairs.
+
+    If apply_plausibility is False:
+      - ignore biological plausibility, just choose best score among ALL pairs.
     """
     n = len(D)
-    best_score = None
-    candidate_pairs = []
+
+    best_score_all = None
+    best_pairs_all = []
+
+    best_score_plaus = None
+    best_pairs_plaus = []
 
     tri_i, tri_j = np.triu_indices(n, k=1)
+
     for i, j in zip(tri_i, tri_j):
         score = pair_score_func(i, j)
 
-        if best_score is None:
-            best_score = score
-            candidate_pairs = [(i, j)]
+        # --- track best over ALL pairs ---
+        if best_score_all is None:
+            best_score_all = score
+            best_pairs_all = [(i, j)]
         else:
             if minimize:
-                if score < best_score:
-                    best_score = score
-                    candidate_pairs = [(i, j)]
-                elif score == best_score:
-                    candidate_pairs.append((i, j))
+                if score < best_score_all:
+                    best_score_all = score
+                    best_pairs_all = [(i, j)]
+                elif score == best_score_all:
+                    best_pairs_all.append((i, j))
             else:
-                if score > best_score:
-                    best_score = score
-                    candidate_pairs = [(i, j)]
-                elif score == best_score:
-                    candidate_pairs.append((i, j))
+                if score > best_score_all:
+                    best_score_all = score
+                    best_pairs_all = [(i, j)]
+                elif score == best_score_all:
+                    best_pairs_all.append((i, j))
 
-    # APPLY BIOLOGICAL PLAUSIBILITY HERE FOR ALL VARIANTS
-    if apply_plausibility:
-        return _resolve_pair_ties(candidate_pairs, node_list, rng)
-    else:
-        # pick the FIRST candidate pair (NumPy order)
-        return candidate_pairs[0]
+        # --- track best among PLAUSIBLE pairs (if enabled) ---
+        if apply_plausibility:
+            if _is_biologically_plausible_pair(node_list[i], node_list[j]):
+                if best_score_plaus is None:
+                    best_score_plaus = score
+                    best_pairs_plaus = [(i, j)]
+                else:
+                    if minimize:
+                        if score < best_score_plaus:
+                            best_score_plaus = score
+                            best_pairs_plaus = [(i, j)]
+                        elif score == best_score_plaus:
+                            best_pairs_plaus.append((i, j))
+                    else:
+                        if score > best_score_plaus:
+                            best_score_plaus = score
+                            best_pairs_plaus = [(i, j)]
+                        elif score == best_score_plaus:
+                            best_pairs_plaus.append((i, j))
+
+    # ---- DECISION ----
+    if apply_plausibility and best_pairs_plaus:
+        # we found at least one plausible pair → use only those
+        return _resolve_pair_ties(best_pairs_plaus, node_list, rng)
+
+    # no plausible pair (or plausibility disabled) → fall back to best over ALL pairs
+    if apply_plausibility and not best_pairs_plaus:
+        print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+        print("@@@@@@@@@@@@@@@@@@@ not plausible @@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+
+    return _resolve_pair_ties(best_pairs_all, node_list, rng)
 
 
 # ============================================================
@@ -205,7 +231,7 @@ def _select_pair_full(D, node_list, rng, minimize=True):
         rng=rng,
         pair_score_func=lambda i, j: D[i, j],
         minimize=minimize,
-        apply_plausibility=False
+        apply_plausibility=True
     )
 
 
