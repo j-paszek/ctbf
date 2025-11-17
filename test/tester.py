@@ -70,8 +70,8 @@ if __name__ == "__main__":
     # === Run tests ===
     counter = -1
     for algo in get_algorithms_to_test():
-        counter += 1 # 0-21/30, 1-23/34, 2-24/27,
-        if counter != 0:
+        counter += 1 # 0-21/31, 1-23/34, 2-24/27, 3
+        if counter != 3:
             continue
 
         results_store = {

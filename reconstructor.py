@@ -270,6 +270,33 @@ def _select_pair_hybrid(D, node_list, rng, minimize=True, alpha=1.0, beta=0.5):
     )
 
 
+def _select_pair_hybrid_inv_centrality(D, node_list, rng,
+                                       minimize=True,
+                                       alpha=1.0, beta=0.5,
+                                       epsilon=1e-6):
+    """
+    Hybrid NJ with inverse-distance weighted centrality:
+        score = alpha * D[i,j] - beta * abs(c'[i] - c'[j])
+    where    c'[i] = sum_k 1/(D[i,k] + eps)
+    """
+    with np.errstate(divide='ignore', invalid='ignore'):
+        invD = 1.0 / (D + epsilon)
+        np.fill_diagonal(invD, 0.0)
+        centrality = invD.sum(axis=1)
+
+    def hybrid_inv_score(i, j):
+        return alpha * D[i, j] - beta * abs(centrality[i] - centrality[j])
+
+    return _select_pair_core(
+        D=D,
+        node_list=node_list,
+        rng=rng,
+        pair_score_func=hybrid_inv_score,
+        minimize=True,
+        apply_plausibility=True
+    )
+
+
 # ============================================================
 #  PARENT SELECTION
 # ============================================================
@@ -288,47 +315,26 @@ def _choose_parent_full_nj(D, i, j, rng, larger_is_more_central):
 
     # Centrality tie:
     return (i, j) if rng.random() < 0.5 else (j, i)
-# def _choose_parent_full_nj(D, i, j, rng, larger_is_more_central):
-#     centrality = D.sum(axis=1)
-#     return _choose_parent_by_centrality(
-#         centrality, i, j, rng, larger_is_more_central=larger_is_more_central
-#     )
-# def _choose_parent_by_centrality(centrality, i, j, rng, larger_is_more_central):
-#     """
-#     Decide which index becomes the parent based on centrality values.
-#
-#     Parameters
-#     ----------
-#     centrality : array-like
-#         Centrality score per node; semantics depend on the caller.
-#     i, j : int
-#         Indices of the two candidate nodes.
-#     rng : random.Random
-#         Used for deterministic tie-breaking.
-#     larger_is_more_central : bool
-#         If True, node with larger centrality is considered more central.
-#         If False, node with smaller centrality is considered more central.
-#
-#     Returns
-#     -------
-#     (parent_idx, child_idx) : tuple of int
-#     """
-#     c_i = centrality[i]
-#     c_j = centrality[j]
-#
-#     if larger_is_more_central:
-#         if c_i > c_j:
-#             return i, j
-#         if c_j > c_i:
-#             return j, i
-#     else:
-#         if c_i < c_j:
-#             return i, j
-#         if c_j < c_i:
-#             return j, i
-#
-#     # Tie: random but seeded
-#     return (i, j) if rng.random() < 0.5 else (j, i)
+
+
+def _choose_parent_hybrid_inv_centrality(D, i, j, rng, larger_is_more_central=False, epsilon=1e-6):
+    """
+    Parent = node with larger inverse-distance centrality.
+    """
+    with np.errstate(divide='ignore', invalid='ignore'):
+        invD = 1.0 / (D + epsilon)
+        np.fill_diagonal(invD, 0.0)
+        centrality = invD.sum(axis=1)
+
+    c_i, c_j = centrality[i], centrality[j]
+
+    if c_i > c_j:
+        return i, j
+    if c_j > c_i:
+        return j, i
+
+    # tie
+    return (i, j) if rng.random() < 0.5 else (j, i)
 
 
 # ============================================================
@@ -495,7 +501,9 @@ def neighbor_joining_full_cps(dist_matrix, cells, max_id, seed=7, existing_tree=
     )
 
 
-def neighbor_joining_hybrid_inverse_centrality(dist_matrix, cells, max_id, alpha=1.0, beta=0.5, epsilon=1e-6, seed=7, existing_tree=None):
+def neighbor_joining_hybrid_inverse_centrality(dist_matrix, cells, max_id,
+                                               alpha=1.0, beta=0.5, epsilon=1e-6,
+                                               seed=7, existing_tree=None):
     """
     Hybrid neighbor joining with inverse-distance centrality.
     Prefers pairs that are both close (small D[x,y]) and asymmetric
@@ -526,68 +534,27 @@ def neighbor_joining_hybrid_inverse_centrality(dist_matrix, cells, max_id, alpha
     new_nodes : dict
     root_cell_id : any
     """
-    rng = random.Random(seed)
-    D = dist_matrix.copy().astype(float)
-    tree = existing_tree or nx.DiGraph()
-    new_nodes = {}
+    select_pair_func = partial(
+        _select_pair_hybrid_inv_centrality,
+        alpha=alpha,
+        beta=beta,
+        epsilon=epsilon
+    )
 
-    node_list = [cells[i] for i in range(len(cells))]
-    for node in node_list:
-        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
+    select_ancestor_func = partial(
+        _choose_parent_hybrid_inv_centrality,
+        epsilon=epsilon
+    )
 
-    next_id = max_id + 1
-
-    while len(node_list) > 1:
-        n = len(D)
-
-        # --- Inverse-distance weighted centrality ---
-        with np.errstate(divide='ignore', invalid='ignore'):
-            invD = 1.0 / (D + epsilon)
-            np.fill_diagonal(invD, 0.0)
-            centrality = invD.sum(axis=1)
-
-        # --- Hybrid score: prefer close + asymmetric ---
-        best_score = np.inf
-        best_pair = None
-
-        for i in range(n):
-            for j in range(i + 1, n):
-                score = alpha * D[i, j] - beta * abs(centrality[i] - centrality[j])
-                if score < best_score:
-                    best_score = score
-                    best_pair = (i, j)
-
-        i, j = best_pair
-        c_i, c_j = centrality[i], centrality[j]
-
-        # More central node (higher c') becomes parent
-        if c_i > c_j:
-            parent_idx, child_idx = i, j
-        elif c_i < c_j:
-            parent_idx, child_idx = j, i
-        else:
-            parent_idx, child_idx = (i, j) if rng.random() < 0.5 else (j, i)
-
-        parent_leaf = node_list[parent_idx]
-        child_leaf = node_list[child_idx]
-
-        internal_node = type(parent_leaf)(genome=parent_leaf.genome, node_id=next_id, cell_id=parent_leaf.cell_id)
-        next_id += 1
-
-        tree.add_node(internal_node.node_id, genome=internal_node.genome, cell_id=internal_node.cell_id)
-        tree.add_edge(internal_node.node_id, parent_leaf.node_id, weight=float(D[parent_idx, child_idx]))
-        tree.add_edge(internal_node.node_id, child_leaf.node_id, weight=float(D[parent_idx, child_idx]))
-
-        new_nodes[internal_node] = (parent_leaf, child_leaf)
-
-        # Update matrix after merge
-        keep_indices = [k for k in range(n) if k != child_idx]
-        D = D[np.ix_(keep_indices, keep_indices)]
-        node_list[parent_idx] = internal_node
-        node_list.pop(child_idx)
-
-    root = node_list[0]
-    return tree, new_nodes, root.cell_id
+    return neighbour_joining_core(
+        dist_matrix=dist_matrix,
+        cells=cells,
+        max_id=max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        select_pair_func=select_pair_func,
+        select_ancestor_func=select_ancestor_func
+    )
 
 
 def neighbor_joining_adaptive_centrality(dist_matrix, cells, max_id, alpha=1.0, beta=0.5, epsilon=1e-6, seed=7, existing_tree=None):
