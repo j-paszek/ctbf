@@ -362,12 +362,38 @@ def _choose_parent_hybrid_inv_centrality(D, i, j, rng, larger_is_more_central=Fa
     return (i, j) if rng.random() < 0.5 else (j, i)
 
 
+def _choose_parent_with_full_matrix(
+    D_full, origin_index, node_list, i, j, rng, select_ancestor_func
+):
+    """
+    Use the FULL distance matrix to decide which of node_list[i], node_list[j]
+    should be the parent.
+
+    Returns (parent_idx, child_idx) in *current* node_list indexing.
+    """
+    x = node_list[i]
+    y = node_list[j]
+
+    ix = origin_index[x]
+    iy = origin_index[y]
+
+    parent_full_idx, child_full_idx = select_ancestor_func(
+        D_full, ix, iy, rng, larger_is_more_central=False
+    )
+
+    if parent_full_idx == ix:
+        return i, j
+    else:
+        return j, i
+
+
 # ============================================================
 #  UNIVERSAL CORE NJ ENGINE
 # ============================================================
 def neighbour_joining_core(dist_matrix, cells, max_id, seed=7, existing_tree=None,
                            select_pair_func=_select_pair_full,
-                           select_ancestor_func=_choose_parent_full_nj
+                           select_ancestor_func=_choose_parent_full_nj,
+                           full_information=False,
                            ):
     rng = random.Random(seed)
     # full (original) matrix for final-step decision
@@ -424,7 +450,15 @@ def neighbour_joining_core(dist_matrix, cells, max_id, seed=7, existing_tree=Non
             elif can_x_parent and can_y_parent:
                 # Both directions biologically allowed → use NJ rule
                 # *************** core *******************
-                parent_idx, child_idx = select_ancestor_func(D, i, j, rng, larger_is_more_central=False)
+                # Both directions biologically allowed
+                if full_information:
+                    # Use FULL matrix to decide parent
+                    parent_idx, child_idx = _choose_parent_with_full_matrix(
+                        D_full, origin_index, node_list, i, j, rng, select_ancestor_func
+                    )
+                else:
+                    # Use current (shrinking) matrix as before
+                    parent_idx, child_idx = select_ancestor_func(D, i, j, rng, larger_is_more_central=False)
 
             else:
                 # Neither direction possible → should never happen
@@ -462,9 +496,15 @@ def neighbour_joining_core(dist_matrix, cells, max_id, seed=7, existing_tree=Non
 # ============================================================
 #  WRAPPER FUNCTIONS USING PARTIALS
 # ============================================================
-def neighbor_joining_full(dist_matrix, cells, max_id, seed=7, existing_tree=None):
+def neighbor_joining_full(dist_matrix, cells, max_id, seed=7, existing_tree=None, full_information=True):
     """
-    NJ-full: minimal distance pairs, parent by centrality.
+    Deterministic, parent-retaining neighbor-joining replacement.
+
+    If full_information=False:
+        - Parent choice uses centrality on the current shrinking matrix D.
+    If full_information=True:
+        - Parent choice (when both directions are biologically allowed)
+          uses centrality computed on the full original distance matrix D_full.
     """
     return neighbour_joining_core(
         dist_matrix=dist_matrix,
@@ -473,13 +513,14 @@ def neighbor_joining_full(dist_matrix, cells, max_id, seed=7, existing_tree=None
         seed=seed,
         existing_tree=existing_tree,
         select_pair_func=_select_pair_full,
-        select_ancestor_func=_choose_parent_full_nj
+        select_ancestor_func=_choose_parent_full_nj,
+        full_information = full_information
     )
 
 
 def neighbor_joining_hybrid(dist_matrix, cells, max_id,
                             alpha=1.0, beta=0.5,
-                            seed=7, existing_tree=None):
+                            seed=7, existing_tree=None, full_information=False):
     """
     Hybrid neighbor joining: prefers pairs that are both close (small D[x,y])
     and asymmetric in centrality (|c(x) - c(y)| large).
@@ -520,19 +561,36 @@ def neighbor_joining_hybrid(dist_matrix, cells, max_id,
         seed=seed,
         existing_tree=existing_tree,
         select_pair_func=select_pair_func,
-        select_ancestor_func=_choose_parent_full_nj
+        select_ancestor_func=_choose_parent_full_nj,
+        full_information=full_information
     )
 
 
-def neighbor_joining_full_cps(dist_matrix, cells, max_id, seed=7, existing_tree=None):
+def neighbor_joining_full_cps(
+    dist_matrix,
+    cells,
+    max_id,
+    seed=7,
+    existing_tree=None,
+    full_information: bool = False,
+):
     """
-    Centrality-guided neighbor joining heuristic.
+    Centrality-guided neighbor joining (CPS).
     1. Find all pairs with minimal distance.
     2. For each, compute centrality = sum of distances to all other cells.
     3. Pick pair (x, y) such that:
          - the smaller centrality is minimal (most central ancestor)
          - if tie, the larger centrality is maximal (most peripheral child)
     4. Parent = the node with smaller centrality (more central one).
+    If full_information=False:
+        - CPS selects pairs using the shrinking matrix D.
+        - Parent choice (when both directions are biologically allowed)
+          uses centrality on the shrinking D.
+
+    If full_information=True:
+        - CPS still selects pairs using the shrinking D (unchanged).
+        - BUT parent choice uses the FULL original matrix D_full,
+          via select_ancestor_func and origin_index.
     """
     return neighbour_joining_core(
         dist_matrix=dist_matrix,
@@ -540,14 +598,15 @@ def neighbor_joining_full_cps(dist_matrix, cells, max_id, seed=7, existing_tree=
         max_id=max_id,
         seed=seed,
         existing_tree=existing_tree,
-        select_pair_func=_select_pair_cps,
-        select_ancestor_func=_choose_parent_full_nj,  # same parent rule as full NJ
+        select_pair_func=_select_pair_cps,          # CPS pair selector
+        select_ancestor_func=_choose_parent_full_nj,
+        full_information=full_information,
     )
 
 
 def neighbor_joining_hybrid_inverse_centrality(dist_matrix, cells, max_id,
                                                alpha=1.0, beta=0.5, epsilon=1e-6,
-                                               seed=7, existing_tree=None):
+                                               seed=7, existing_tree=None, full_information=False):
     """
     Hybrid neighbor joining with inverse-distance centrality.
     Prefers pairs that are both close (small D[x,y]) and asymmetric
@@ -597,7 +656,8 @@ def neighbor_joining_hybrid_inverse_centrality(dist_matrix, cells, max_id,
         seed=seed,
         existing_tree=existing_tree,
         select_pair_func=select_pair_func,
-        select_ancestor_func=select_ancestor_func
+        select_ancestor_func=select_ancestor_func,
+        full_information=full_information,
     )
 
 
