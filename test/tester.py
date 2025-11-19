@@ -4,13 +4,14 @@ from ctbs import run_single_test
 from ctbs_utils import get_biopsy_nodes_ids
 from evaluator_full import evaluate_4
 from evaluator import grf_tree
-from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full, neighbor_joining_full_cps, \
-    neighbor_joining_hybrid, neighbor_joining_hybrid_inverse_centrality, neighbor_joining_adaptive_centrality, \
+from reconstructor import build_evolution_tree, visualize_tree_plotly, \
+    neighbor_joining_adaptive_centrality, \
     neighbor_joining_adaptive_centrality_nonlinear, neighbor_joining_adaptive_centrality_reversed, \
     neighbor_joining_hybrid_opt, neighbor_joining_hybrid_opt_adaptive, neighbor_joining_hybrid_opt_v2, \
     neighbor_joining_hybrid_opt_refined, neighbor_joining_hybrid_anticentral_opt, \
     neighbor_joining_hybrid_anticentral_adaptive_v2, neighbor_joining_hybrid_anticentral_adaptive_v3, \
-    neighbor_joining_baseline
+    neighbor_joining_baseline, make_nj_full_variant, make_nj_full_cps_variant, make_nj_hybrid_variant, \
+    make_nj_hybrid_inv_cent_variant
 
 df = pd.read_csv("data/f1results.csv", delimiter="\t")
 all_seeds = df["seed"].unique().tolist()
@@ -24,12 +25,24 @@ def get_root_id(tr):
 
 
 def get_algorithms_to_test():
+    neighbor_joining_full_full = make_nj_full_variant(True)
+    neighbor_joining_full_partial = make_nj_full_variant(False)
+    neighbor_joining_full_cps_full = make_nj_full_cps_variant(True)
+    neighbor_joining_full_cps_partial = make_nj_full_cps_variant(False)
+    neighbor_joining_hybrid_full = make_nj_hybrid_variant(True)
+    neighbor_joining_hybrid_partial = make_nj_hybrid_variant(False)
+    neighbor_joining_hybrid_inverse_centrality_full = make_nj_hybrid_inv_cent_variant(True)
+    neighbor_joining_hybrid_inverse_centrality_partial = make_nj_hybrid_inv_cent_variant(False)
     return [
             neighbor_joining_baseline,
-            neighbor_joining_full,
-            neighbor_joining_full_cps,
-            neighbor_joining_hybrid,
-            neighbor_joining_hybrid_inverse_centrality,
+            neighbor_joining_full_full,
+            neighbor_joining_full_partial,
+            neighbor_joining_full_cps_full,
+            neighbor_joining_full_cps_partial,
+            neighbor_joining_hybrid_full,
+            neighbor_joining_hybrid_partial,
+            neighbor_joining_hybrid_inverse_centrality_full,
+            neighbor_joining_hybrid_inverse_centrality_partial,
             # neighbor_joining_adaptive_centrality,
             # neighbor_joining_adaptive_centrality_nonlinear,
             # neighbor_joining_adaptive_centrality_reversed,
@@ -151,8 +164,8 @@ if __name__ == "__main__":
     counter = -1
     for algo in get_algorithms_to_test():
         counter += 1 # 0-21/31, 1-23/34, 2-24/27, 3-25
-        # if counter > 3:
-        #     continue
+        if counter != 8:
+            continue
 
         algo_name = getattr(algo, "__name__", str(algo))
         print(f"\n--- Running tests with {algo_name} ---")

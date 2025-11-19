@@ -589,169 +589,115 @@ def neighbour_joining_core(dist_matrix, cells, max_id, seed=7, existing_tree=Non
 # ============================================================
 #  WRAPPER FUNCTIONS USING PARTIALS
 # ============================================================
-def neighbor_joining_full(dist_matrix, cells, max_id, seed=7, existing_tree=None, full_information=True):
-    """
-    Deterministic, parent-retaining neighbor-joining replacement.
-
-    If full_information=False:
-        - Parent choice uses centrality on the current shrinking matrix D.
-    If full_information=True:
-        - Parent choice (when both directions are biologically allowed)
-          uses centrality computed on the full original distance matrix D_full.
-    """
-    return neighbour_joining_core(
-        dist_matrix=dist_matrix,
-        cells=cells,
-        max_id=max_id,
-        seed=seed,
-        existing_tree=existing_tree,
-        select_pair_func=_select_pair_full,
-        select_ancestor_func=_choose_parent_full_nj,
-        full_information = full_information
+def make_nj_full_variant(full_information):
+    def _variant(dist_matrix, cells, max_id, seed=7, existing_tree=None):
+        return neighbour_joining_core(
+            dist_matrix=dist_matrix,
+            cells=cells,
+            max_id=max_id,
+            seed=seed,
+            existing_tree=existing_tree,
+            select_pair_func=_select_pair_full,
+            select_ancestor_func=_choose_parent_full_nj,
+            full_information=full_information
+        )
+    # give the function a name for analyzer display
+    _variant.__name__ = (
+        f"neighbor_joining_full_{'full' if full_information else 'partial'}"
     )
+    return _variant
 
 
-def neighbor_joining_hybrid(dist_matrix, cells, max_id,
-                            alpha=1.0, beta=0.5,
-                            seed=7, existing_tree=None, full_information=False):
+def make_nj_full_cps_variant(full_information: bool):
     """
-    Hybrid neighbor joining: prefers pairs that are both close (small D[x,y])
-    and asymmetric in centrality (|c(x) - c(y)| large).
-
-    Parameters
-    ----------
-    dist_matrix : np.ndarray
-        Pairwise distance matrix between cells.
-    cells : list
-        List of Genotype-like cell objects (must have .node_id, .cell_id, .genome).
-    max_id : int
-        Max node ID so far; new nodes start from max_id + 1.
-    alpha : float
-        Weight for distance term (default 1.0).
-    beta : float
-        Weight for asymmetry term (default 0.5).
-    seed : int
-        Random seed for tie-breaking.
-    existing_tree : nx.DiGraph, optional
-        If provided, new nodes will be added to this tree.
-
-    Returns
-    -------
-    tree : nx.DiGraph
-    new_nodes : dict
-    root_cell_id : any
+    Factory generating variants of neighbor_joining_full_cps
+    with different full_information settings.
     """
-    select_pair_func = partial(
-        _select_pair_hybrid,
-        alpha=alpha,
-        beta=beta
+    def _variant(dist_matrix, cells, max_id, seed=7, existing_tree=None):
+        return neighbour_joining_core(
+            dist_matrix=dist_matrix,
+            cells=cells,
+            max_id=max_id,
+            seed=seed,
+            existing_tree=existing_tree,
+            select_pair_func=_select_pair_cps,
+            select_ancestor_func=_choose_parent_full_nj,
+            full_information=full_information,
+        )
+
+    # Give the function a unique readable name
+    _variant.__name__ = (
+        f"neighbor_joining_full_cps_{'full' if full_information else 'partial'}"
     )
-
-    return neighbour_joining_core(
-        dist_matrix=dist_matrix,
-        cells=cells,
-        max_id=max_id,
-        seed=seed,
-        existing_tree=existing_tree,
-        select_pair_func=select_pair_func,
-        select_ancestor_func=_choose_parent_full_nj,
-        full_information=full_information
-    )
+    return _variant
 
 
-def neighbor_joining_full_cps(
-    dist_matrix,
-    cells,
-    max_id,
-    seed=7,
-    existing_tree=None,
-    full_information: bool = False,
-):
+def make_nj_hybrid_variant(full_information: bool, alpha=1.0, beta=0.5):
     """
-    Centrality-guided neighbor joining (CPS).
-    1. Find all pairs with minimal distance.
-    2. For each, compute centrality = sum of distances to all other cells.
-    3. Pick pair (x, y) such that:
-         - the smaller centrality is minimal (most central ancestor)
-         - if tie, the larger centrality is maximal (most peripheral child)
-    4. Parent = the node with smaller centrality (more central one).
-    If full_information=False:
-        - CPS selects pairs using the shrinking matrix D.
-        - Parent choice (when both directions are biologically allowed)
-          uses centrality on the shrinking D.
-
-    If full_information=True:
-        - CPS still selects pairs using the shrinking D (unchanged).
-        - BUT parent choice uses the FULL original matrix D_full,
-          via select_ancestor_func and origin_index.
+    Factory producing hybrid-NJ variants differing only in their
+    full_information setting.
     """
-    return neighbour_joining_core(
-        dist_matrix=dist_matrix,
-        cells=cells,
-        max_id=max_id,
-        seed=seed,
-        existing_tree=existing_tree,
-        select_pair_func=_select_pair_cps,          # CPS pair selector
-        select_ancestor_func=_choose_parent_full_nj,
-        full_information=full_information,
+    def _variant(dist_matrix, cells, max_id, seed=7, existing_tree=None):
+        select_pair_func = partial(
+            _select_pair_hybrid,
+            alpha=alpha,
+            beta=beta
+        )
+
+        return neighbour_joining_core(
+            dist_matrix=dist_matrix,
+            cells=cells,
+            max_id=max_id,
+            seed=seed,
+            existing_tree=existing_tree,
+            select_pair_func=select_pair_func,
+            select_ancestor_func=_choose_parent_full_nj,
+            full_information=full_information
+        )
+
+    # Assign a clear and unique name
+    _variant.__name__ = (
+        f"neighbor_joining_hybrid_{'full' if full_information else 'partial'}"
     )
+    return _variant
 
 
-def neighbor_joining_hybrid_inverse_centrality(dist_matrix, cells, max_id,
-                                               alpha=1.0, beta=0.5, epsilon=1e-6,
-                                               seed=7, existing_tree=None, full_information=False):
+def make_nj_hybrid_inv_cent_variant(full_information: bool,
+                                    alpha=1.0, beta=0.5, epsilon=1e-6):
     """
-    Hybrid neighbor joining with inverse-distance centrality.
-    Prefers pairs that are both close (small D[x,y]) and asymmetric
-    in weighted centrality c'(x) = sum(1 / (D[x,i] + eps)).
-
-    Parameters
-    ----------
-    dist_matrix : np.ndarray
-        Pairwise distance matrix between cells.
-    cells : list
-        List of Genotype-like objects with .node_id, .cell_id, .genome.
-    max_id : int
-        Maximum node ID so far; new nodes start from max_id + 1.
-    alpha : float
-        Weight for distance term (default 1.0).
-    beta : float
-        Weight for centrality asymmetry term (default 0.5).
-    epsilon : float
-        Small constant to prevent division by zero (default 1e-6).
-    seed : int
-        Random seed for tie-breaking.
-    existing_tree : nx.DiGraph, optional
-        If provided, new nodes will be added to this tree.
-
-    Returns
-    -------
-    tree : nx.DiGraph
-    new_nodes : dict
-    root_cell_id : any
+    Factory producing hybrid-inverse-centrality NJ variants differing only
+    in their full_information setting.
     """
-    select_pair_func = partial(
-        _select_pair_hybrid_inv_centrality,
-        alpha=alpha,
-        beta=beta,
-        epsilon=epsilon
-    )
+    def _variant(dist_matrix, cells, max_id, seed=7, existing_tree=None):
+        select_pair_func = partial(
+            _select_pair_hybrid_inv_centrality,
+            alpha=alpha,
+            beta=beta,
+            epsilon=epsilon
+        )
 
-    select_ancestor_func = partial(
-        _choose_parent_hybrid_inv_centrality,
-        epsilon=epsilon
-    )
+        select_ancestor_func = partial(
+            _choose_parent_hybrid_inv_centrality,
+            epsilon=epsilon
+        )
 
-    return neighbour_joining_core(
-        dist_matrix=dist_matrix,
-        cells=cells,
-        max_id=max_id,
-        seed=seed,
-        existing_tree=existing_tree,
-        select_pair_func=select_pair_func,
-        select_ancestor_func=select_ancestor_func,
-        full_information=full_information,
+        return neighbour_joining_core(
+            dist_matrix=dist_matrix,
+            cells=cells,
+            max_id=max_id,
+            seed=seed,
+            existing_tree=existing_tree,
+            select_pair_func=select_pair_func,
+            select_ancestor_func=select_ancestor_func,
+            full_information=full_information
+        )
+
+    # Assign stable, analyzer-friendly unique names
+    _variant.__name__ = (
+        f"neighbor_joining_hybrid_inverse_centrality_"
+        f"{'full' if full_information else 'partial'}"
     )
+    return _variant
 
 
 def neighbor_joining_adaptive_centrality(dist_matrix, cells, max_id, alpha=1.0, beta=0.5, epsilon=1e-6, seed=7, existing_tree=None):

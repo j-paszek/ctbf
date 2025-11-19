@@ -10,7 +10,7 @@ import random
 from concurrent.futures import ProcessPoolExecutor
 
 from simulator import CancerCellEvolutionSimulator, Genotype
-from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full, neighbor_joining_full_cps, \
+from reconstructor import build_evolution_tree, visualize_tree_plotly, \
     neighbor_joining_hybrid_anticentral_opt, neighbor_joining_hybrid_anticentral_adaptive_v3
 from evaluator import grf_tree
 from evaluator_full import evaluate_4, named_label
