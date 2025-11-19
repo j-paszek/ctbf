@@ -43,15 +43,15 @@ def get_algorithms_to_test():
             neighbor_joining_hybrid_partial,
             neighbor_joining_hybrid_inverse_centrality_full,
             neighbor_joining_hybrid_inverse_centrality_partial,
-            # neighbor_joining_adaptive_centrality,
-            # neighbor_joining_adaptive_centrality_nonlinear,
-            # neighbor_joining_adaptive_centrality_reversed,
-            # neighbor_joining_hybrid_opt,
-            # neighbor_joining_hybrid_opt_adaptive,
-            # neighbor_joining_hybrid_opt_v2,
-            # neighbor_joining_hybrid_opt_refined,
-            # neighbor_joining_hybrid_anticentral_opt,
-            # neighbor_joining_hybrid_anticentral_adaptive_v3
+            neighbor_joining_adaptive_centrality,
+            neighbor_joining_adaptive_centrality_nonlinear,
+            neighbor_joining_adaptive_centrality_reversed,
+            neighbor_joining_hybrid_opt,
+            neighbor_joining_hybrid_opt_adaptive,
+            neighbor_joining_hybrid_opt_v2,
+            neighbor_joining_hybrid_opt_refined,
+            neighbor_joining_hybrid_anticentral_opt,
+            neighbor_joining_hybrid_anticentral_adaptive_v3
             ]
 
 
@@ -164,7 +164,7 @@ if __name__ == "__main__":
     counter = -1
     for algo in get_algorithms_to_test():
         counter += 1 # 0-21/31, 1-23/34, 2-24/27, 3-25
-        if counter != 8:
+        if counter != 17:
             continue
 
         algo_name = getattr(algo, "__name__", str(algo))
