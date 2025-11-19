@@ -1,0 +1,15 @@
+seed,ancestors_multiset_precision_failures,ancestors_multiset_f1_failures,ancestors_unique_precision_failures,ancestors_unique_f1_failures,ancestors_unique_restricted_precision_failures,ancestors_unique_restricted_f1_failures,total_failures
+9,1,1,1,1,1,1,6
+63,0,0,1,0,1,0,2
+102,1,1,1,1,1,1,6
+107,0,1,1,0,1,0,3
+144,1,1,1,1,1,1,6
+158,1,1,1,1,1,1,6
+208,0,1,0,0,0,0,1
+361,0,1,0,0,0,0,1
+457,0,1,0,0,0,0,1
+498,1,1,1,1,1,1,6
+706,0,1,0,0,0,0,1
+834,0,0,1,0,1,0,2
+884,1,1,0,0,0,0,2
+894,0,1,1,1,1,1,5

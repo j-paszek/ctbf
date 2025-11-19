@@ -113,10 +113,12 @@ def check_one_alg(algo, counter):
         try:
             a, b, c = run_single_test(
                 seed=seed,
-                config="data/config_for_pic.json",
-                bedfile="data/pic.csv",
+                config="data/config_high.json",
+                # bedfile="data/pic.csv",
+                bedfile=None,
                 biopsy_size_scalable=0.5,
                 biopsy_generations=[4, 6, 8],
+                # r_dist=4,
                 r_dist=4,
                 write_newick=True,
                 reconstruction_algorithm=algo,
@@ -169,8 +171,8 @@ if __name__ == "__main__":
     counter = -1
     for algo in get_algorithms_to_test():
         counter += 1 # 0-21/31, 1-23/34, 2-24/27, 3-25
-        if counter != 20:
-            continue
+        # if counter != 20:
+        #     continue
 
         algo_name = getattr(algo, "__name__", str(algo))
         print(f"\n--- Running tests with {algo_name} ---")

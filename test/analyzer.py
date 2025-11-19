@@ -247,14 +247,16 @@ def compare_two(i, j, rec=False):
 
 
 if __name__ == "__main__":
+    test_variant = "r4bss05high"
+
     alg_names = get_algorithms_to_test()
     df = pd.read_csv("data/f1results.csv", delimiter="\t")
     all_seeds = df["seed"].unique().tolist()
 
     for i in range(len(alg_names)):
-        a = os.path.join("results", str(i) + "out.csv")
-        b = os.path.join("results", str(i) + "rec.csv")
-        c = os.path.join("results", str(i) + "nj.csv")
+        a = os.path.join("results", test_variant, str(i) + "out.csv")
+        b = os.path.join("results", test_variant, str(i) + "rec.csv")
+        c = os.path.join("results", test_variant, str(i) + "nj.csv")
         analize(i, alg_names[i], len(all_seeds), a, b, c)
 
         res = compare_two_results(b, c)
@@ -273,14 +275,14 @@ if __name__ == "__main__":
         alg2_name = alg_names[j].__name__
 
         # --- NJ-like comparison ---
-        nj_file_1 = os.path.join("results", f"{i}nj.csv")
-        nj_file_2 = os.path.join("results", f"{j}nj.csv")
+        nj_file_1 = os.path.join("results", test_variant, f"{i}nj.csv")
+        nj_file_2 = os.path.join("results", test_variant, f"{j}nj.csv")
         res_nj = compare_two_results(nj_file_1, nj_file_2)
         paired_results_nj[(alg1_name, alg2_name)] = res_nj
 
         # --- REC comparison ---
-        rec_file_1 = os.path.join("results", f"{i}rec.csv")
-        rec_file_2 = os.path.join("results", f"{j}rec.csv")
+        rec_file_1 = os.path.join("results", test_variant, f"{i}rec.csv")
+        rec_file_2 = os.path.join("results", test_variant, f"{j}rec.csv")
         res_rec = compare_two_results(rec_file_1, rec_file_2)
         paired_results_rec[(alg1_name, alg2_name)] = res_rec
 
