@@ -1987,6 +1987,174 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible(
     return tree, new_nodes, root.cell_id
 
 
+def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony(
+    dist_matrix,
+    cells,
+    max_id,
+    seed=None,
+    existing_tree=None,
+    alpha: float = 1.0,
+    beta: float = 1.0,
+    gamma: float = 0.5,
+    baseline_cn: int = 2,
+):
+    """
+    Anticentral Adaptive NJ (v3) with biological plausibility + parsimony bias.
+
+    Differences vs plain v3:
+    -------------------------
+    - Pair (i, j) is still chosen purely by v3 anticentral score.
+    - Biological plausibility is enforced on direction:
+        * if only x->y plausible: x is parent
+        * if only y->x plausible: y is parent
+        * if both directions plausible:
+             - parent is genome closer to baseline CN (parsimony)
+             - if still tied, fall back to anticentral rule
+        * if neither direction plausible:
+             - fall back to anticentral direction (very rare / late merges)
+
+    This keeps the strong v3 pair selection but orients edges in a more
+    biologically realistic way (ancestor is less aberrant).
+    """
+
+    rng = random.Random(seed)
+    D = dist_matrix.copy().astype(float)
+    tree = existing_tree or nx.DiGraph()
+    new_nodes = {}
+
+    # Initialize leaves
+    node_list = [cells[i] for i in range(len(cells))]
+    for node in node_list:
+        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
+
+    next_id = max_id + 1
+
+    # Base "centrality" (inverse mean distance)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        c = 1.0 / (np.mean(D, axis=1) + 1e-9)
+    c = (c - np.min(c)) / (np.ptp(c) + 1e-12)
+
+    def _total_deviation(genome: np.ndarray) -> float:
+        """How far this genome is from baseline copy number."""
+        # cast to np.array in case genome is some wrapper
+        g = np.asarray(genome, dtype=float)
+        return float(np.sum(np.abs(g - baseline_cn)))
+
+    while len(node_list) > 1:
+        n = len(D)
+        score = np.full((n, n), np.inf)
+
+        # --- compute v3 scores as before ---
+        for i in range(n):
+            for j in range(i + 1, n):
+                c_diff = abs(c[i] - c[j])
+                adaptive = np.exp(-gamma * c_diff / (np.std(c) + 1e-9))
+                anticentral_term = (2 - (c[i] + c[j]))  # penalize high-centrality nodes
+                score[i, j] = (
+                    alpha * D[i, j] * (1 + gamma * adaptive)
+                    - beta * anticentral_term
+                )
+                score[i, j] += rng.random() * 1e-6  # tie-breaking noise
+
+        # best pair by score (unchanged v3 behavior)
+        i_best, j_best = divmod(np.argmin(score), n)
+        if j_best < i_best:
+            i_best, j_best = j_best, i_best
+
+        a = node_list[i_best]
+        b = node_list[j_best]
+
+        # --- biological plausibility of directions ---
+        can_a_parent_b = _is_biologically_plausible_ancestor(a, b)
+        can_b_parent_a = _is_biologically_plausible_ancestor(b, a)
+
+        if can_a_parent_b and not can_b_parent_a:
+            # only a -> b allowed
+            parent_idx, child_idx = i_best, j_best
+
+        elif can_b_parent_a and not can_a_parent_b:
+            # only b -> a allowed
+            parent_idx, child_idx = j_best, i_best
+
+        elif can_a_parent_b and can_b_parent_a:
+            # both directions allowed → apply parsimony rule
+            dev_a = _total_deviation(a.genome)
+            dev_b = _total_deviation(b.genome)
+
+            if dev_a < dev_b:
+                parent_idx, child_idx = i_best, j_best
+            elif dev_b < dev_a:
+                parent_idx, child_idx = j_best, i_best
+            else:
+                # same deviation → fall back to anticentral preference
+                if c[i_best] > c[j_best]:
+                    parent_idx, child_idx = i_best, j_best
+                elif c[j_best] > c[i_best]:
+                    parent_idx, child_idx = j_best, i_best
+                else:
+                    # total tie → random but seeded
+                    parent_idx, child_idx = (
+                        (i_best, j_best)
+                        if rng.random() < 0.5
+                        else (j_best, i_best)
+                    )
+
+        else:
+            # Neither direction is plausible (very rare).
+            # To avoid breaking good v3 behavior, just keep anticentral rule.
+            if c[i_best] > c[j_best]:
+                parent_idx, child_idx = i_best, j_best
+            elif c[j_best] > c[i_best]:
+                parent_idx, child_idx = j_best, i_best
+            else:
+                parent_idx, child_idx = (
+                    (i_best, j_best)
+                    if rng.random() < 0.5
+                    else (j_best, i_best)
+                )
+
+        parent_leaf = node_list[parent_idx]
+        child_leaf = node_list[child_idx]
+
+        # create internal node (copy of parent)
+        internal_node = type(parent_leaf)(
+            genome=parent_leaf.genome,
+            node_id=next_id,
+            cell_id=parent_leaf.cell_id,
+        )
+        next_id += 1
+
+        tree.add_node(
+            internal_node.node_id,
+            genome=internal_node.genome,
+            cell_id=internal_node.cell_id,
+        )
+        tree.add_edge(
+            internal_node.node_id,
+            parent_leaf.node_id,
+            weight=float(D[parent_idx, child_idx]),
+        )
+        tree.add_edge(
+            internal_node.node_id,
+            child_leaf.node_id,
+            weight=float(D[parent_idx, child_idx]),
+        )
+
+        new_nodes[internal_node] = (parent_leaf, child_leaf)
+
+        # update D and centrality
+        keep = [k for k in range(n) if k != child_idx]
+        D = D[np.ix_(keep, keep)]
+        node_list[parent_idx] = internal_node
+        node_list.pop(child_idx)
+
+        c[parent_idx] = np.mean([c[parent_idx], c[child_idx]])
+        c = np.delete(c, child_idx)
+
+    root = node_list[0]
+    return tree, new_nodes, root.cell_id
+
+
 def _extend_biopsies(cell_lists):
     """
     Ensures that if a cell_id appears in multiple biopsy levels (e.g., 1 and 3),
