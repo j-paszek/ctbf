@@ -247,7 +247,7 @@ def compare_two(i, j, rec=False):
 
 
 if __name__ == "__main__":
-    test_variant = "r4bss05high"
+    test_variant = "r4bss05highdm"
 
     alg_names = get_algorithms_to_test()
     df = pd.read_csv("data/f1results.csv", delimiter="\t")

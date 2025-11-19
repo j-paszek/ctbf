@@ -113,7 +113,7 @@ def check_one_alg(algo, counter):
         try:
             a, b, c = run_single_test(
                 seed=seed,
-                config="data/config_high.json",
+                config="data/config_high_dm.json",
                 # bedfile="data/pic.csv",
                 bedfile=None,
                 biopsy_size_scalable=0.5,
