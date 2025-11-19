@@ -10,27 +10,20 @@ import numpy as np
 # --------------------------------------------------------------
 #  Compare two algorithms based on Wilcoxon test results
 # --------------------------------------------------------------
-def _decide_winner(metric_result, alpha=0.05):
+def _decide_winner(res_for_metric, alg1, alg2, alpha=0.05):
     """
-    Decide winner between two algorithms based on a single metric.
-
-    metric_result: dict with keys:
-        - "p_value"
-        - "rec_mean" (algorithm 1)
-        - "nj_mean"  (algorithm 2)
+    res_for_metric is the dict:
+        {"p_value": ..., "rec_mean": ..., "nj_mean": ...}
     """
-    p = metric_result["p_value"]
-    m1 = metric_result["rec_mean"]
-    m2 = metric_result["nj_mean"]
+    p = float(res_for_metric["p_value"])
+    m1 = float(res_for_metric["rec_mean"])
+    m2 = float(res_for_metric["nj_mean"])
 
-    # If p is NaN or not comparable, treat as no difference
-    if p is None or (isinstance(p, float) and math.isnan(p)):
-        return "tie"
-
-    # If not significant -> no winner
+    # No significant difference -> tie
     if p > alpha:
         return "tie"
 
+    # Significant difference -> higher score wins
     if m1 > m2:
         return "alg1"
     elif m2 > m1:
@@ -42,43 +35,33 @@ def _decide_winner(metric_result, alpha=0.05):
 # --------------------------------------------------------------
 #  Build win/loss/tie matrices
 # --------------------------------------------------------------
-def build_pairwise_ranking(all_algorithms, paired_results, metric_preference=("3-f1", "3-precision", "grf")):
+def build_pairwise_ranking(all_algorithms, paired_results, metric):
     """
-    Build a ranking table from pairwise comparison results.
-
-    all_algorithms: list of algorithm names (strings)
-    paired_results: dict keyed by (alg1_name, alg2_name) -> {
-        metric_name -> { "p_value", "rec_mean", "nj_mean" }
+    paired_results[(alg1_name, alg2_name)] = {
+        '3-precision': {...}, '3-f1': {...}, 'grf': {...}
     }
-    metric_preference: ordered tuple of metric names; we pick the first one
-                       that exists in the result dict (default: "3-f1", then "3-precision", then "grf").
+
+    metric ∈ {"3-precision", "3-f1", "grf"}
     """
-    import pandas as pd
 
     table = pd.DataFrame(
         0,
-        index=list(all_algorithms),
+        index=all_algorithms,
         columns=["wins", "losses", "ties", "score"],
+        dtype=int
     )
 
-    for (alg1, alg2), metrics in paired_results.items():
-        # choose which metric to use for ranking
-        chosen_metric = None
-        for m in metric_preference:
-            if m in metrics:
-                chosen_metric = m
-                break
-        if chosen_metric is None:
-            # nothing usable, skip this pair
+    for (alg1, alg2), metrics_dict in paired_results.items():
+        if metric not in metrics_dict:
             continue
 
-        metric_result = metrics[chosen_metric]  # dict with p_value, rec_mean, nj_mean
-        outcome = _decide_winner(metric_result)
+        res_for_metric = metrics_dict[metric]
+        winner = _decide_winner(res_for_metric, alg1, alg2)
 
-        if outcome == "alg1":
+        if winner == "alg1":
             table.loc[alg1, "wins"] += 1
             table.loc[alg2, "losses"] += 1
-        elif outcome == "alg2":
+        elif winner == "alg2":
             table.loc[alg2, "wins"] += 1
             table.loc[alg1, "losses"] += 1
         else:
@@ -86,7 +69,7 @@ def build_pairwise_ranking(all_algorithms, paired_results, metric_preference=("3
             table.loc[alg2, "ties"] += 1
 
     table["score"] = table["wins"] - table["losses"]
-    return table.sort_values("score", ascending=False)
+    return table
 
 
 # --------------------------------------------------------------
@@ -103,23 +86,29 @@ def print_ranking_table(table, title="Algorithm ranking"):
 # --------------------------------------------------------------
 #  Example of usage inside analyzer
 # --------------------------------------------------------------
-def rank_algorithms_from_results(all_algorithms, paired_results):
+def rank_algorithms_from_results(all_algorithms, paired_results, title="RANKING"):
     """
-    all_algorithms : ["baseline", "full", "cps", "hybrid", "inverse"]
-    paired_results : dict with structure:
-        {
-          ("baseline","full"): {
-              "3-precision": (p, a1, a2),
-              "3-f1": (p, a1, a2),
-              "grf": (p, a1, a2)
-          },
-          ...
-        }
+    all_algorithms: list of algorithm identifiers (functions or strings)
+    paired_results: dict keyed by (alg1_name, alg2_name) -> metrics dict
     """
 
-    ranking = build_pairwise_ranking(all_algorithms, paired_results)
-    print_ranking_table(ranking, "Final NJ-like Ranking Table")
-    return ranking
+    # --- Normalize algorithm identifiers to names (strings) ---
+    alg_names = [
+        alg if isinstance(alg, str) else alg.__name__
+        for alg in all_algorithms
+    ]
+
+    metrics = ["3-precision", "3-f1", "grf"]
+
+    print(f"\n=============== {title} ===============\n")
+
+    for metric in metrics:
+        print(f"------ Metric: {metric} ------")
+        ranking = build_pairwise_ranking(alg_names, paired_results, metric)
+        print("=" * 80)
+        print(ranking)
+        print("=" * 80)
+        print()
 
 
 def compare_two_results(file_local, file_full):
@@ -308,14 +297,5 @@ if __name__ == "__main__":
     # Build algorithm IDs (strings) that match the keys used in paired_results_*
     algo_ids = [f.__name__ for f in alg_names]
 
-    print("\n\n=============== NJ-like RANKING ===============")
-    rank_algorithms_from_results(algo_ids, paired_results_nj)
-
-    print("\n\n=============== Standard-level RANKING ===============")
-    rank_algorithms_from_results(algo_ids, paired_results_rec)
-    all_pvals = [
-        float(metric_dict["p_value"])
-        for pair_dict in paired_results_rec.values()
-        for metric_dict in pair_dict.values()
-    ]
-    print(all_pvals)
+    rank_algorithms_from_results(alg_names, paired_results_nj, title="NJ-like RANKING")
+    rank_algorithms_from_results(alg_names, paired_results_rec, title="Standard-level RANKING")
