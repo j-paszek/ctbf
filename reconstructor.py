@@ -83,6 +83,99 @@ def neighbor_joining_standard(dist_matrix, cells, max_id, seed=7, existing_tree=
     return tree, new_nodes, NJ_REC_TR_ROOT_ID
 
 
+def neighbor_joining_baseline(dist_matrix, cells, max_id, seed=7, existing_tree=None):
+    """
+    Simplest NJ-like reconstruction.
+    - Always pick the pair with minimal D[i,j]
+    - Parent = node with smaller sum of distances
+    - No biological plausibility
+    - No full-information root correction
+    - No CPS/Hybrid scoring
+    - No global heuristics
+
+    This is the best "baseline" NJ reconstruction to compare improvements against.
+    """
+    rng = random.Random(seed)
+    D = dist_matrix.copy().astype(float)
+    tree = existing_tree or nx.DiGraph()
+    new_nodes = {}
+
+    # node list aligned with D
+    node_list = [cells[i] for i in range(len(cells))]
+
+    # add original leaves
+    for node in node_list:
+        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
+
+    next_id = max_id + 1
+
+    while len(node_list) > 1:
+        n = len(D)
+
+        # ----------------------------
+        # 1. Find pair with minimal distance
+        # ----------------------------
+        min_val = None
+        best_pair = (0, 1)
+
+        tri_i, tri_j = np.triu_indices(n, k=1)
+        for i, j in zip(tri_i, tri_j):
+            d = D[i, j]
+            if min_val is None or d < min_val:
+                min_val = d
+                best_pair = (i, j)
+
+        i, j = best_pair
+
+        # ----------------------------
+        # 2. Choose parent by minimal sum to others
+        # ----------------------------
+        others = [k for k in range(n) if k != i and k != j]
+        sum_i = D[i, others].sum() if others else 0
+        sum_j = D[j, others].sum() if others else 0
+
+        if sum_i < sum_j:
+            parent_idx, child_idx = i, j
+        elif sum_j < sum_i:
+            parent_idx, child_idx = j, i
+        else:
+            parent_idx, child_idx = (i, j) if rng.random() < 0.5 else (j, i)
+
+        parent_leaf = node_list[parent_idx]
+        child_leaf = node_list[child_idx]
+
+        # ----------------------------
+        # 3. Create internal node = copy of parent
+        # ----------------------------
+        internal = type(parent_leaf)(
+            genome=parent_leaf.genome,
+            node_id=next_id,
+            cell_id=parent_leaf.cell_id
+        )
+        next_id += 1
+
+        tree.add_node(internal.node_id,
+                      genome=internal.genome,
+                      cell_id=internal.cell_id)
+
+        tree.add_edge(internal.node_id, parent_leaf.node_id, weight=0.0)
+        tree.add_edge(internal.node_id, child_leaf.node_id, weight=float(D[parent_idx, child_idx]))
+
+        new_nodes[internal] = (parent_leaf, child_leaf)
+
+        # ----------------------------
+        # 4. Update D and node list
+        # ----------------------------
+        keep = [k for k in range(n) if k != child_idx]
+        D = D[np.ix_(keep, keep)]
+
+        node_list[parent_idx] = internal
+        node_list.pop(child_idx)
+
+    root = node_list[0]
+    return tree, new_nodes, root.cell_id
+
+
 # ============================================================
 #  BIOLOGICAL PLAUSIBILITY
 # ============================================================

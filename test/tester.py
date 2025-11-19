@@ -3,31 +3,42 @@ import pandas as pd
 from ctbs import run_single_test
 from ctbs_utils import get_biopsy_nodes_ids
 from evaluator_full import evaluate_4
+from evaluator import grf_tree
 from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full, neighbor_joining_full_cps, \
     neighbor_joining_hybrid, neighbor_joining_hybrid_inverse_centrality, neighbor_joining_adaptive_centrality, \
     neighbor_joining_adaptive_centrality_nonlinear, neighbor_joining_adaptive_centrality_reversed, \
     neighbor_joining_hybrid_opt, neighbor_joining_hybrid_opt_adaptive, neighbor_joining_hybrid_opt_v2, \
     neighbor_joining_hybrid_opt_refined, neighbor_joining_hybrid_anticentral_opt, \
-    neighbor_joining_hybrid_anticentral_adaptive_v2, neighbor_joining_hybrid_anticentral_adaptive_v3
+    neighbor_joining_hybrid_anticentral_adaptive_v2, neighbor_joining_hybrid_anticentral_adaptive_v3, \
+    neighbor_joining_baseline
 
 df = pd.read_csv("data/f1results.csv", delimiter="\t")
 all_seeds = df["seed"].unique().tolist()
 
+
+def get_root_id(tr):
+    roots = [n for n, indeg in tr.in_degree() if indeg == 0]
+    if len(roots) != 1:
+        raise ValueError(f"Tree must have exactly one root (found {len(roots)})")
+    return roots[0]
+
+
 def get_algorithms_to_test():
     return [
+            neighbor_joining_baseline,
             neighbor_joining_full,
             neighbor_joining_full_cps,
             neighbor_joining_hybrid,
             neighbor_joining_hybrid_inverse_centrality,
-            neighbor_joining_adaptive_centrality,
-            neighbor_joining_adaptive_centrality_nonlinear,
-            neighbor_joining_adaptive_centrality_reversed,
-            neighbor_joining_hybrid_opt,
-            neighbor_joining_hybrid_opt_adaptive,
-            neighbor_joining_hybrid_opt_v2,
-            neighbor_joining_hybrid_opt_refined,
-            neighbor_joining_hybrid_anticentral_opt,
-            neighbor_joining_hybrid_anticentral_adaptive_v3
+            # neighbor_joining_adaptive_centrality,
+            # neighbor_joining_adaptive_centrality_nonlinear,
+            # neighbor_joining_adaptive_centrality_reversed,
+            # neighbor_joining_hybrid_opt,
+            # neighbor_joining_hybrid_opt_adaptive,
+            # neighbor_joining_hybrid_opt_v2,
+            # neighbor_joining_hybrid_opt_refined,
+            # neighbor_joining_hybrid_anticentral_opt,
+            # neighbor_joining_hybrid_anticentral_adaptive_v3
             ]
 
 
@@ -76,9 +87,9 @@ def check_one_alg(algo, counter):
         "ancestors_unique_restricted_f1_failures": []
     }
     rec_output = {"seed": [], "1-precision": [], "1-f1": [],
-                  "2-precision": [], "2-f1": [], "3-precision": [], "3-f1": []}
+                  "2-precision": [], "2-f1": [], "3-precision": [], "3-f1": [], "grf": [],}
     nj_output = {"seed": [], "1-precision": [], "1-f1": [],
-                 "2-precision": [], "2-f1": [], "3-precision": [], "3-f1": []}
+                 "2-precision": [], "2-f1": [], "3-precision": [], "3-f1": [], "grf": [],}
     for seed in all_seeds:
         print(f"\nTesting seed: {seed}")
         try:
@@ -96,10 +107,15 @@ def check_one_alg(algo, counter):
             biopsy_cell_ids = get_biopsy_nodes_ids(b, c)
             rec = evaluate_4(a, b, restrict_labels=biopsy_cell_ids)
             nj = evaluate_4(a, c, restrict_labels=biopsy_cell_ids)
+            # --- GRF: true vs reconstructed, true vs NJ ---
+            grf_rec = grf_tree(a, get_root_id(a), b, get_root_id(b))
+            grf_nj = grf_tree(a, get_root_id(a), c, get_root_id(c))
 
             # Make sure seed is added once
             rec_output["seed"].append(seed)
             nj_output["seed"].append(seed)
+            rec_output["grf"].append(grf_rec)
+            nj_output["grf"].append(grf_nj)
 
             for mode in ["ancestors_multiset", "ancestors_unique", "ancestors_unique_restricted"]:
                 provide_summary(rec, nj, mode, seed, results_store, rec_output, nj_output)
@@ -135,8 +151,8 @@ if __name__ == "__main__":
     counter = -1
     for algo in get_algorithms_to_test():
         counter += 1 # 0-21/31, 1-23/34, 2-24/27, 3-25
-        if counter != 2:
-            continue
+        # if counter > 3:
+        #     continue
 
         algo_name = getattr(algo, "__name__", str(algo))
         print(f"\n--- Running tests with {algo_name} ---")
