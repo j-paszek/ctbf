@@ -1853,6 +1853,140 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible(
     return tree, new_nodes, root.cell_id
 
 
+def neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible(
+    dist_matrix,
+    cells,
+    max_id,
+    seed=None,
+    existing_tree=None,
+    alpha: float = 1.0,
+    beta: float = 1.0,
+    gamma: float = 0.5,
+):
+    """
+    Anticentral Adaptive NJ (v3) with biological plausibility *pair skipping*.
+
+    CORE IDEA:
+    After computing scores for all pairs (i, j):
+        -> iterate pairs in increasing score order
+        -> pick the first pair where at least one direction
+           is biologically plausible (a->b or b->a).
+        -> if both directions plausible: keep anticentral orientation
+        -> if exactly one direction plausible: force that parent
+        -> if none are plausible for ANY pair: fallback to best pair
+
+    This enforces biological realism without destroying the NJ-like ordering.
+    """
+
+    rng = random.Random(seed)
+    D = dist_matrix.copy().astype(float)
+    tree = existing_tree or nx.DiGraph()
+    new_nodes = {}
+
+    # Init leaves
+    node_list = list(cells)
+    for node in node_list:
+        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
+
+    next_id = max_id + 1
+
+    # Base centrality
+    with np.errstate(divide='ignore', invalid='ignore'):
+        c = 1.0 / (np.mean(D, axis=1) + 1e-9)
+    c = (c - np.min(c)) / (np.ptp(c) + 1e-12)
+
+    while len(node_list) > 1:
+        n = len(D)
+
+        # --- compute score matrix ---
+        score = np.full((n, n), np.inf)
+        for i in range(n):
+            for j in range(i + 1, n):
+                c_diff = abs(c[i] - c[j])
+                adaptive = np.exp(-gamma * c_diff / (np.std(c) + 1e-9))
+                anticentral_term = (2 - (c[i] + c[j]))
+                score[i, j] = (
+                    alpha * D[i, j] * (1 + gamma * adaptive)
+                    - beta * anticentral_term
+                )
+                score[i, j] += rng.random() * 1e-6
+
+        # --- sorted list of pairs by score ---
+        pair_order = [
+            (i, j)
+            for (i, j) in sorted(
+                [(i, j) for i in range(n) for j in range(i + 1, n)],
+                key=lambda p: score[p[0], p[1]],
+            )
+        ]
+
+        picked_pair = None
+        picked_parent_is_i = True  # orientation
+
+        # --- try pairs in order until one is plausible ---
+        for (i, j) in pair_order:
+            a = node_list[i]
+            b = node_list[j]
+            can_ai_bj = _is_biologically_plausible_ancestor(a, b)
+            can_bj_ai = _is_biologically_plausible_ancestor(b, a)
+
+            if can_ai_bj or can_bj_ai:        # we accept this pair
+                picked_pair = (i, j)
+                if can_ai_bj and not can_bj_ai:
+                    picked_parent_is_i = True
+                elif can_bj_ai and not can_ai_bj:
+                    picked_parent_is_i = False
+                else:
+                    # both plausible → keep anticentral's default “more anticentral parent”
+                    picked_parent_is_i = (c[i] > c[j])
+                break
+
+        # If no plausible pair found → fallback to best pair
+        if picked_pair is None:
+            i_best, j_best = pair_order[0]
+            picked_parent_is_i = (c[i_best] > c[j_best])
+            picked_pair = (i_best, j_best)
+
+        i_best, j_best = picked_pair
+
+        # assign actual leaves
+        parent_idx = i_best if picked_parent_is_i else j_best
+        child_idx  = j_best if picked_parent_is_i else i_best
+
+        parent_leaf = node_list[parent_idx]
+        child_leaf  = node_list[child_idx]
+
+        # ---- Create internal node ----
+        internal_node = type(parent_leaf)(
+            genome=parent_leaf.genome,
+            node_id=next_id,
+            cell_id=parent_leaf.cell_id,
+        )
+        next_id += 1
+
+        tree.add_node(internal_node.node_id,
+                      genome=internal_node.genome,
+                      cell_id=internal_node.cell_id)
+        tree.add_edge(internal_node.node_id, parent_leaf.node_id,
+                      weight=float(D[parent_idx, child_idx]))
+        tree.add_edge(internal_node.node_id, child_leaf.node_id,
+                      weight=float(D[parent_idx, child_idx]))
+
+        new_nodes[internal_node] = (parent_leaf, child_leaf)
+
+        # ---- Update D and centrality ----
+        keep = [k for k in range(n) if k != child_idx]
+        D = D[np.ix_(keep, keep)]
+        node_list[parent_idx] = internal_node
+        node_list.pop(child_idx)
+
+        c[parent_idx] = np.mean([c[parent_idx], c[child_idx]])
+        c = np.delete(c, child_idx)
+
+    root = node_list[0]
+    return tree, new_nodes, root.cell_id
+
+
 def _extend_biopsies(cell_lists):
     """
     Ensures that if a cell_id appears in multiple biopsy levels (e.g., 1 and 3),

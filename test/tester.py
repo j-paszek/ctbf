@@ -9,9 +9,10 @@ from reconstructor import build_evolution_tree, visualize_tree_plotly, \
     neighbor_joining_adaptive_centrality_nonlinear, neighbor_joining_adaptive_centrality_reversed, \
     neighbor_joining_hybrid_opt, neighbor_joining_hybrid_opt_adaptive, neighbor_joining_hybrid_opt_v2, \
     neighbor_joining_hybrid_opt_refined, neighbor_joining_hybrid_anticentral_opt, \
-    neighbor_joining_hybrid_anticentral_adaptive_v2, neighbor_joining_hybrid_anticentral_adaptive_v3, \
+    neighbor_joining_hybrid_anticentral_adaptive_v3, \
     neighbor_joining_baseline, make_nj_full_variant, make_nj_full_cps_variant, make_nj_hybrid_variant, \
-    make_nj_hybrid_inv_cent_variant, neighbor_joining_hybrid_anticentral_adaptive_v3_plausible
+    make_nj_hybrid_inv_cent_variant, neighbor_joining_hybrid_anticentral_adaptive_v3_plausible, \
+    neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible
 
 df = pd.read_csv("data/f1results.csv", delimiter="\t")
 all_seeds = df["seed"].unique().tolist()
@@ -52,7 +53,8 @@ def get_algorithms_to_test():
             neighbor_joining_hybrid_opt_refined,
             neighbor_joining_hybrid_anticentral_opt,
             neighbor_joining_hybrid_anticentral_adaptive_v3,
-            neighbor_joining_hybrid_anticentral_adaptive_v3_plausible
+            neighbor_joining_hybrid_anticentral_adaptive_v3_plausible,
+            neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible
             ]
 
 
@@ -165,7 +167,7 @@ if __name__ == "__main__":
     counter = -1
     for algo in get_algorithms_to_test():
         counter += 1 # 0-21/31, 1-23/34, 2-24/27, 3-25
-        if counter != 18:
+        if counter != 19:
             continue
 
         algo_name = getattr(algo, "__name__", str(algo))
