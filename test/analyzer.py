@@ -86,7 +86,7 @@ def print_ranking_table(table, title="Algorithm ranking"):
 # --------------------------------------------------------------
 #  Example of usage inside analyzer
 # --------------------------------------------------------------
-def rank_algorithms_from_results(all_algorithms, paired_results, title="RANKING"):
+def rank_algorithms_from_results(all_algorithms, paired_results, title="RANKING", tv="VariantName"):
     """
     all_algorithms: list of algorithm identifiers (functions or strings)
     paired_results: dict keyed by (alg1_name, alg2_name) -> metrics dict
@@ -98,6 +98,7 @@ def rank_algorithms_from_results(all_algorithms, paired_results, title="RANKING"
         for alg in all_algorithms
     ]
 
+    mode = "nj" if "NJ" in title.upper() else "rec"
     metrics = ["3-precision", "3-f1", "grf"]
 
     print(f"\n=============== {title} ===============\n")
@@ -109,6 +110,13 @@ def rank_algorithms_from_results(all_algorithms, paired_results, title="RANKING"
         print(ranking)
         print("=" * 80)
         print()
+        out_file = os.path.join(
+            "results",
+            f"ranking_{tv}_{metric}_{mode}.csv"
+        )
+        ranking.to_csv(out_file, index=True)
+        print(f"Saved ranking table → {out_file}")
+
 
 
 def compare_two_results(file_local, file_full):
@@ -247,57 +255,58 @@ def compare_two(i, j, rec=False):
 
 
 if __name__ == "__main__":
-    test_variant = "r4bss05highdm"
+    test_variants = ["r2bss05", "r2bss025", "r2bss075", "r4bss05", "r4bss05high", "r4bss075", "r4bss05highdm"]
 
     alg_names = get_algorithms_to_test()
     df = pd.read_csv("data/f1results.csv", delimiter="\t")
     all_seeds = df["seed"].unique().tolist()
 
-    for i in range(len(alg_names)):
-        a = os.path.join("results", test_variant, str(i) + "out.csv")
-        b = os.path.join("results", test_variant, str(i) + "rec.csv")
-        c = os.path.join("results", test_variant, str(i) + "nj.csv")
-        analize(i, alg_names[i], len(all_seeds), a, b, c)
+    for test_variant in test_variants:
+        for i in range(len(alg_names)):
+            a = os.path.join("results", test_variant, str(i) + "out.csv")
+            b = os.path.join("results", test_variant, str(i) + "rec.csv")
+            c = os.path.join("results", test_variant, str(i) + "nj.csv")
+            analize(i, alg_names[i], len(all_seeds), a, b, c)
 
-        res = compare_two_results(b, c)
-        print("\nWilcoxon paired comparison:")
-        for m, r in res.items():
-            print(f"{m}: p={r['p_value']:.4g}, rec={r['rec_mean']:.3f}, nj={r['nj_mean']:.3f}")
+            res = compare_two_results(b, c)
+            print("\nWilcoxon paired comparison:")
+            for m, r in res.items():
+                print(f"{m}: p={r['p_value']:.4g}, rec={r['rec_mean']:.3f}, nj={r['nj_mean']:.3f}")
 
-        print()
+            print()
 
-    paired_results_nj = {}
-    paired_results_rec = {}
+        paired_results_nj = {}
+        paired_results_rec = {}
 
-    for i, j in combinations(range(len(alg_names)), 2):
+        for i, j in combinations(range(len(alg_names)), 2):
 
-        alg1_name = alg_names[i].__name__
-        alg2_name = alg_names[j].__name__
+            alg1_name = alg_names[i].__name__
+            alg2_name = alg_names[j].__name__
 
-        # --- NJ-like comparison ---
-        nj_file_1 = os.path.join("results", test_variant, f"{i}nj.csv")
-        nj_file_2 = os.path.join("results", test_variant, f"{j}nj.csv")
-        res_nj = compare_two_results(nj_file_1, nj_file_2)
-        paired_results_nj[(alg1_name, alg2_name)] = res_nj
+            # --- NJ-like comparison ---
+            nj_file_1 = os.path.join("results", test_variant, f"{i}nj.csv")
+            nj_file_2 = os.path.join("results", test_variant, f"{j}nj.csv")
+            res_nj = compare_two_results(nj_file_1, nj_file_2)
+            paired_results_nj[(alg1_name, alg2_name)] = res_nj
 
-        # --- REC comparison ---
-        rec_file_1 = os.path.join("results", test_variant, f"{i}rec.csv")
-        rec_file_2 = os.path.join("results", test_variant, f"{j}rec.csv")
-        res_rec = compare_two_results(rec_file_1, rec_file_2)
-        paired_results_rec[(alg1_name, alg2_name)] = res_rec
+            # --- REC comparison ---
+            rec_file_1 = os.path.join("results", test_variant, f"{i}rec.csv")
+            rec_file_2 = os.path.join("results", test_variant, f"{j}rec.csv")
+            res_rec = compare_two_results(rec_file_1, rec_file_2)
+            paired_results_rec[(alg1_name, alg2_name)] = res_rec
 
-        print("\nWilcoxon paired comparison:", alg1_name, " and ", alg2_name)
-        print("\nNJ like reconstructions")
-        for m, r in res_nj.items():
-            print(f"{m}: p={r['p_value']:.4g}, alg1={r['rec_mean']:.3f}, alg2={r['nj_mean']:.3f}")
+            print("\nWilcoxon paired comparison:", alg1_name, " and ", alg2_name)
+            print("\nNJ like reconstructions")
+            for m, r in res_nj.items():
+                print(f"{m}: p={r['p_value']:.4g}, alg1={r['rec_mean']:.3f}, alg2={r['nj_mean']:.3f}")
 
-        print("\nStandard leveled reconstructions")
-        for m, r in res_rec.items():
-            print(f"{m}: p={r['p_value']:.4g}, alg1={r['rec_mean']:.3f}, alg2={r['nj_mean']:.3f}")
+            print("\nStandard leveled reconstructions")
+            for m, r in res_rec.items():
+                print(f"{m}: p={r['p_value']:.4g}, alg1={r['rec_mean']:.3f}, alg2={r['nj_mean']:.3f}")
 
 
-    # Build algorithm IDs (strings) that match the keys used in paired_results_*
-    algo_ids = [f.__name__ for f in alg_names]
+        # Build algorithm IDs (strings) that match the keys used in paired_results_*
+        algo_ids = [f.__name__ for f in alg_names]
 
-    rank_algorithms_from_results(alg_names, paired_results_nj, title="NJ-like RANKING")
-    rank_algorithms_from_results(alg_names, paired_results_rec, title="Standard-level RANKING")
+        rank_algorithms_from_results(alg_names, paired_results_nj, title="NJ-like RANKING", tv=test_variant)
+        rank_algorithms_from_results(alg_names, paired_results_rec, title="Standard-level RANKING", tv=test_variant)
