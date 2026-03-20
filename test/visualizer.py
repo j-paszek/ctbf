@@ -139,7 +139,104 @@ def _plot_stacked_heatmaps_core(results_dict, algorithms, test_variants, out_fil
     fig.savefig(out_file, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
+def plot_side_by_side_heatmaps():
+    """
+    Creates a 2×2 grid of heatmaps:
+        3-F1 (NJ)      | 3-F1 (Rec)
+        GRF (NJ)       | GRF (Rec)
+
+    Algorithms -> Y axis
+    Test variants -> X axis
+    """
+
+    # Load algorithm order from one file (same as earlier)
+    sample_file = os.path.join(
+        "results",
+        f"ranking_{TEST_VARIANTS[0]}_{METRIC_PAIRS[0][0]}_{METRIC_PAIRS[0][1]}.csv"
+    )
+    df0 = pd.read_csv(sample_file)
+
+    if "algorithm" in df0.columns:
+        df0 = df0.set_index("algorithm")
+    else:
+        df0 = df0.set_index(df0.columns[0])
+
+    algorithms = df0.index.tolist()
+    short_algs = [a.replace("neighbor_joining_", "") for a in algorithms]
+
+    # Build all four matrices
+    matrices = {}
+    for metric, mode in METRIC_PAIRS:
+        key = f"{metric}_{mode}"
+        matrices[key], _ = build_wins_minus_losses_matrix(TEST_VARIANTS, metric, mode)
+
+    fig = plt.figure(figsize=(24, 14))
+    gs = gridspec.GridSpec(
+        nrows=2,
+        ncols=3,              # <-- EXTRA COLUMN for single shared colorbar
+        width_ratios=[1, 1, 0.05],   # 3rd column is colorbar
+        hspace=0.25,
+        wspace=0.20,
+        figure=fig
+    )
+
+    heatmap_titles = {
+        "3-f1_nj":  "AD-F1 — Pairwise NJ-like inference (wins-losses)",
+        "3-f1_rec": "AD-F1 — Biopsy guided inference (wins-losses)",
+        "grf_nj":   "GRF — Pairwise NJ-like inference (wins-losses)",
+        "grf_rec":  "GRF — Biopsy guided inference (wins-losses)"
+    }
+
+    order = ["3-f1_nj", "3-f1_rec", "grf_nj", "grf_rec"]
+
+    # --- shared colorbar will be created on the last call ---
+    cbar_ax = fig.add_subplot(gs[:, 2])   # entire right column
+
+    last_im = None  # store last heatmap for colorbar binding
+
+    for idx, key in enumerate(order):
+        row = idx // 2
+        col = idx % 2
+
+        ax = fig.add_subplot(gs[row, col])
+
+        # Reindex matrix to consistent algorithm order
+        M = matrices[key].loc[TEST_VARIANTS, algorithms]
+        M_plot = M.T.astype(float)
+
+        # Only first column shows y labels
+        show_y = (col == 0)
+        y_labels = short_algs if show_y else []
+
+        im = sns.heatmap(
+            M_plot,
+            annot=True,
+            fmt=".0f",                 # avoids errors for float → int formatting
+            cmap="coolwarm",
+            center=0,
+            xticklabels=TEST_VARIANTS,
+            yticklabels=y_labels,
+            ax=ax,
+            cbar=(idx == len(order)-1),   # ONLY last heatmap gets a colorbar
+            cbar_ax=cbar_ax if idx == len(order)-1 else None
+        )
+        last_im = im
+
+        ax.set_title(heatmap_titles[key], fontsize=14)
+        ax.set_xlabel("Test variants")
+
+        if show_y:
+            ax.set_ylabel("Algorithms")
+        else:
+            ax.set_ylabel("")
+
+    # fig.suptitle("Wins - Losses (Algorithms × Test Variants)", fontsize=18)
+    fig.savefig("heatmaps_side_by_side.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    print("Saved: heatmaps_side_by_side.png")
 
 
 if __name__ == "__main__":
-    plot_stacked_heatmaps()
+    # plot_stacked_heatmaps()
+    plot_side_by_side_heatmaps()

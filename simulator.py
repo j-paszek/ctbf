@@ -808,4 +808,5 @@ class CancerCellEvolutionSimulator:
         if output_file is not None:
             fig.write_image(output_file+".png", width=1200, height=800, scale=2)
             fig.write_html(output_file+".html")
+            fig.write_image(output_file + ".svg", width=1200, height=800, scale=2)
         fig.show()

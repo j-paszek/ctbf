@@ -222,6 +222,12 @@ def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, 
         sim.plot_tree(biopsy_lists=cell_lists, highlight_nodes=all_in_one_sample[0],
                       legend_y_offset=-170, output_file="simulated_tree")
 
+        # true tree
+        only_nodes = [c.cell_id for c in all_in_one_sample[0]]
+        sim.plot_tree(biopsy_lists=cell_lists, legend_y_offset=-170,
+                      highlight_nodes=all_in_one_sample[0],extended=False,
+                      only_nodes=only_nodes,node_numbers=True,output_file="true_tree_new")
+
     # # Options for True tree pic
     # only_nodes = [0, 1, 3, 5, 4, 7, 13, 12, 19]
     # if visualize:
@@ -496,15 +502,16 @@ if __name__ == "__main__":
     #                 reconstruction_algorithm=neighbor_joining_full)
 
     # seed 35 !!!
-    a,b,c = run_single_test(seed=632, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
-                    biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
+    # seed 632
+    a,b,c = run_single_test(seed=2, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
+                    biopsy_size_scalable=0.5, biopsy_generations=[3, 5], r_dist=4, write_newick=True,
+                    visualize=True,
                     reconstruction_algorithm=neighbor_joining_hybrid_anticentral_adaptive_v3)
 
     biopsy_nodes_ids = get_biopsy_nodes_ids(b, c)
 
     out = evaluate_4(a, b, restrict_labels=biopsy_nodes_ids, print_debug=True)
     print(out)
-    # vizualize_nx_tree(b)
 
     out = evaluate_4(a, c, restrict_labels=biopsy_nodes_ids, print_debug=True)
     print(out)

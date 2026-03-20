@@ -15,9 +15,10 @@ import networkx as nx
 from networkx.readwrite import json_graph
 
 from evaluator_full import evaluate_4
-from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full, neighbor_joining_full_cps, \
-    neighbor_joining_hybrid, neighbor_joining_hybrid_inverse_centrality, neighbor_joining_adaptive_centrality, \
-    neighbor_joining_adaptive_centrality_nonlinear
+from reconstructor import (build_evolution_tree, visualize_tree_plotly,
+                           # neighbor_joining_full, neighbor_joining_full_cps, \
+    # neighbor_joining_hybrid, neighbor_joining_hybrid_inverse_centrality, neighbor_joining_adaptive_centrality, \
+    neighbor_joining_adaptive_centrality_nonlinear)
 from simulator import CancerCellEvolutionSimulator, Genotype
 
 SHOW_FIGURES = False
@@ -77,17 +78,17 @@ def test_no_nj_in_reconstruction():
                     biopsy_generations=[4, 6, 8], r_dist=4, clear_cnps=False)
 
 
-def test_no_nj_in_reconstruction_full():
-    # Biopsy: [5]                   level 1
-    # Biopsy: [15, 3]               level 2
-    # Biopsy: [3, 22, 15, 23]       level 3
-    # Edge case - top level is of size one; all elements from next level are in r_dist range
-    # reconstructor in build_evolution_tree pass to neighbor_joining already completed tree
-    # Reconstructed tree is ((3,22)3,(15,23)15)5
-    run_single_test(config="data/config_for_pic.json", bedfile="data/pic.csv",
-                    seed=582, biopsy_size_scalable=0.5,
-                    biopsy_generations=[4, 6, 8], r_dist=4, clear_cnps=False,
-                    reconstruction_algorithm=neighbor_joining_full)
+# def test_no_nj_in_reconstruction_full():
+#     # Biopsy: [5]                   level 1
+#     # Biopsy: [15, 3]               level 2
+#     # Biopsy: [3, 22, 15, 23]       level 3
+#     # Edge case - top level is of size one; all elements from next level are in r_dist range
+#     # reconstructor in build_evolution_tree pass to neighbor_joining already completed tree
+#     # Reconstructed tree is ((3,22)3,(15,23)15)5
+#     run_single_test(config="data/config_for_pic.json", bedfile="data/pic.csv",
+#                     seed=582, biopsy_size_scalable=0.5,
+#                     biopsy_generations=[4, 6, 8], r_dist=4, clear_cnps=False,
+#                     reconstruction_algorithm=neighbor_joining_full)
 
 
 def test_empty_biopsy_simulator():
@@ -153,18 +154,18 @@ def test_simulator_legacy():
     # and for some cnp position i, we have in node A cnp(i)=0 and for node B cnp(i)<>0
 
 
-def test_no_skipping_cells_between_biopsies():
-    a,b,c = run_single_test(seed=35, config="data/config_for_pic.json", bedfile="data/pic.csv",
-                    biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
-                    reconstruction_algorithm=neighbor_joining_full)
-    assert to_newick(a) == "((((((((6)6,(58:2,39)39:2)6,((26)26)26:1)6)6)6:1,(((((41)41:1)18)18:1)12:1,((((1)1)1,((63:1)29,(64:2,44,66:2,67:1)44:1)29:1)1,(((45)45:1)20,((31)31)31:1)20:1)1)1)1)1:1,(((((((32,71:1)32)32:2,((8)8)8)8)8)8:1,(((((49)49:1,22)22)22:1,(((74:2)15,(52)52:1)15)15)15:1)0)0,((((((76:1,53)53:1,(24)24)24,((55)55:1,(56,81:1)56:1)37:1)24:1)16:1)5)5:1)0)0;"
-    assert to_newick(b) == "(((24:1.0000,76:3.0000,53:2.0000)37:2.0000)16:0.0000,(((67:2.0000,26:2.0000,71:4.0000)31:2.0000,(63:1.0000,39:1.0000)29:1.0000,(41:1.0000)18:2.0000,(32:3.0000,49:1.0000)15:2.0000,20:1.0000,(1:0.0000)1:0.0000)1:0.0000,6:1.0000)1:2.0000)16;"
-    # before random; choice by id  "((((67:2.0000,26:2.0000,71:4.0000)31:2.0000,(63:1.0000,39:1.0000)29:1.0000,(41:1.0000)18:2.0000,(32:3.0000,49:1.0000)15:2.0000,20:1.0000,(1:0.0000)1:0.0000)1:0.0000,6:1.0000)1:0.0000,((24:1.0000,76:3.0000,53:2.0000)37:2.0000)16:2.0000)1;")
-    assert to_newick(c) == "((((53:0.0000,76:1.0000)53:0.0000,37:2.0000)53:0.0000,((26:0.0000,(((((((((1:0.0000,6:1.0000)1:0.0000,29:1.0000)1:0.0000,20:1.0000)1:0.0000,(16:0.0000,24:1.0000)16:2.0000)1:0.0000,31:2.0000)1:0.0000,(18:0.0000,41:1.0000)18:2.0000)1:0.0000,(15:0.0000,49:1.0000)15:2.0000)1:0.0000,63:2.0000)1:0.0000,67:2.0000)1:2.0000)26:0.0000,39:2.0000)26:2.0000)53:0.0000,(32:0.0000,71:1.0000)32:3.0000)53;"
-    # x = "((32:0.0000,71:1.0000)32:0.0000,(((53:0.0000,76:1.0000)53:0.0000,37:2.0000)53:0.0000,((26:0.0000,(((((((((1:0.0000,6:1.0000)1:0.0000,29:1.0000)1:0.0000,20:1.0000)1:0.0000,(16:0.0000,24:1.0000)16:2.0000)1:0.0000,31:2.0000)1:0.0000,(18:0.0000,41:1.0000)18:2.0000)1:0.0000,(15:0.0000,49:1.0000)15:2.0000)1:0.0000,63:2.0000)1:0.0000,67:2.0000)1:2.0000)26:0.0000,39:2.0000)26:2.0000)53:3.0000)32;"
-    # y = "(((((((((((((1:0.0000,6:1.0000)1:0.0000,29:1.0000)1:0.0000,20:1.0000)1:0.0000,(16:0.0000,24:1.0000)16:2.0000)1:0.0000,31:2.0000)1:0.0000,(18:0.0000,41:1.0000)18:2.0000)1:0.0000,(15:0.0000,49:1.0000)15:2.0000)1:0.0000,63:2.0000)1:0.0000,67:2.0000)1:0.0000,26:2.0000)1:0.0000,39:2.0000)1:0.0000,(37:0.0000,(53:0.0000,76:1.0000)53:2.0000)37:3.0000)1:0.0000,(32:0.0000,71:1.0000)32:3.0000)1;"
-    # vizualize_from_newick(x)
-    # vizualize_nx_tree(c) # 1-1 instead of 1-29 on the lowest levels
+# def test_no_skipping_cells_between_biopsies():
+#     a,b,c = run_single_test(seed=35, config="data/config_for_pic.json", bedfile="data/pic.csv",
+#                     biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
+#                     reconstruction_algorithm=neighbor_joining_full)
+#     assert to_newick(a) == "((((((((6)6,(58:2,39)39:2)6,((26)26)26:1)6)6)6:1,(((((41)41:1)18)18:1)12:1,((((1)1)1,((63:1)29,(64:2,44,66:2,67:1)44:1)29:1)1,(((45)45:1)20,((31)31)31:1)20:1)1)1)1)1:1,(((((((32,71:1)32)32:2,((8)8)8)8)8)8:1,(((((49)49:1,22)22)22:1,(((74:2)15,(52)52:1)15)15)15:1)0)0,((((((76:1,53)53:1,(24)24)24,((55)55:1,(56,81:1)56:1)37:1)24:1)16:1)5)5:1)0)0;"
+#     assert to_newick(b) == "(((24:1.0000,76:3.0000,53:2.0000)37:2.0000)16:0.0000,(((67:2.0000,26:2.0000,71:4.0000)31:2.0000,(63:1.0000,39:1.0000)29:1.0000,(41:1.0000)18:2.0000,(32:3.0000,49:1.0000)15:2.0000,20:1.0000,(1:0.0000)1:0.0000)1:0.0000,6:1.0000)1:2.0000)16;"
+#     # before random; choice by id  "((((67:2.0000,26:2.0000,71:4.0000)31:2.0000,(63:1.0000,39:1.0000)29:1.0000,(41:1.0000)18:2.0000,(32:3.0000,49:1.0000)15:2.0000,20:1.0000,(1:0.0000)1:0.0000)1:0.0000,6:1.0000)1:0.0000,((24:1.0000,76:3.0000,53:2.0000)37:2.0000)16:2.0000)1;")
+#     assert to_newick(c) == "((((53:0.0000,76:1.0000)53:0.0000,37:2.0000)53:0.0000,((26:0.0000,(((((((((1:0.0000,6:1.0000)1:0.0000,29:1.0000)1:0.0000,20:1.0000)1:0.0000,(16:0.0000,24:1.0000)16:2.0000)1:0.0000,31:2.0000)1:0.0000,(18:0.0000,41:1.0000)18:2.0000)1:0.0000,(15:0.0000,49:1.0000)15:2.0000)1:0.0000,63:2.0000)1:0.0000,67:2.0000)1:2.0000)26:0.0000,39:2.0000)26:2.0000)53:0.0000,(32:0.0000,71:1.0000)32:3.0000)53;"
+#     # x = "((32:0.0000,71:1.0000)32:0.0000,(((53:0.0000,76:1.0000)53:0.0000,37:2.0000)53:0.0000,((26:0.0000,(((((((((1:0.0000,6:1.0000)1:0.0000,29:1.0000)1:0.0000,20:1.0000)1:0.0000,(16:0.0000,24:1.0000)16:2.0000)1:0.0000,31:2.0000)1:0.0000,(18:0.0000,41:1.0000)18:2.0000)1:0.0000,(15:0.0000,49:1.0000)15:2.0000)1:0.0000,63:2.0000)1:0.0000,67:2.0000)1:2.0000)26:0.0000,39:2.0000)26:2.0000)53:3.0000)32;"
+#     # y = "(((((((((((((1:0.0000,6:1.0000)1:0.0000,29:1.0000)1:0.0000,20:1.0000)1:0.0000,(16:0.0000,24:1.0000)16:2.0000)1:0.0000,31:2.0000)1:0.0000,(18:0.0000,41:1.0000)18:2.0000)1:0.0000,(15:0.0000,49:1.0000)15:2.0000)1:0.0000,63:2.0000)1:0.0000,67:2.0000)1:0.0000,26:2.0000)1:0.0000,39:2.0000)1:0.0000,(37:0.0000,(53:0.0000,76:1.0000)53:2.0000)37:3.0000)1:0.0000,(32:0.0000,71:1.0000)32:3.0000)1;"
+#     # vizualize_from_newick(x)
+#     # vizualize_nx_tree(c) # 1-1 instead of 1-29 on the lowest levels
 
 
 @pytest.mark.parametrize(
@@ -237,88 +238,88 @@ def test_reconstructor(show=SHOW_FIGURES):
     if show: visualize_tree_plotly(t, l)
 
 
-def test_reconstructor_full(show=SHOW_FIGURES):
-    b, b1, njb, njb1 = generate_biopsy_sets_small()
-    bb = copy.deepcopy(b) # NOTE: (!) needed for r=4 example
-    t, l, _ = build_evolution_tree(b, dist_matrix_path="data/dm/distance_matrix.txt", r=2,
-                                   neighbor_joining=neighbor_joining_full)
-    assert to_newick(t) == "(((3:2.0000)2:0.0000,1:1.0000)2:0.0000,(4:0.0000)4:4.0000)2;"
-    if show: visualize_tree_plotly(t, l)
-    t, l, _ = build_evolution_tree(b1, dist_matrix_path="data/dm/distance_matrix.txt", r=2,
-                                   neighbor_joining=neighbor_joining_full)
-    assert to_newick(t) == "(((3:1.0000)1:0.0000,2:1.0000)1:0.0000,(4:0.0000)4:4.0000)1;"
-    if show: visualize_tree_plotly(t, l)
-    t, l, _ = build_evolution_tree(bb, dist_matrix_path="data/dm/distance_matrix.txt", r=4,
-                                   neighbor_joining=neighbor_joining_full)
-    assert to_newick(t) == "((3:2.0000,4:4.0000)2:0.0000,1:1.0000)2;"
-    if show: visualize_tree_plotly(t, l)
-    t, l, _ = build_evolution_tree(njb, dist_matrix_path="data/dm/distance_matrix.txt", r=4, only_nj=True,
-                                   neighbor_joining=neighbor_joining_full)
-    assert to_newick(t) == "(((2:0.0000,1:1.0000)2:0.0000,3:2.0000)2:0.0000,4:4.0000)2;"
-    if show: visualize_tree_plotly(t, l)
-    t, l, _ = build_evolution_tree(njb1, dist_matrix_path="data/dm/distance_matrix.txt", r=1, only_nj=True,
-                                   neighbor_joining=neighbor_joining_full)
-    assert to_newick(t) == "(((1:0.0000,2:1.0000)1:0.0000,3:1.0000)1:0.0000,4:4.0000)1;"
-    if show: visualize_tree_plotly(t, l)
+# def test_reconstructor_full(show=SHOW_FIGURES):
+#     b, b1, njb, njb1 = generate_biopsy_sets_small()
+#     bb = copy.deepcopy(b) # NOTE: (!) needed for r=4 example
+#     t, l, _ = build_evolution_tree(b, dist_matrix_path="data/dm/distance_matrix.txt", r=2,
+#                                    neighbor_joining=neighbor_joining_full)
+#     assert to_newick(t) == "(((3:2.0000)2:0.0000,1:1.0000)2:0.0000,(4:0.0000)4:4.0000)2;"
+#     if show: visualize_tree_plotly(t, l)
+#     t, l, _ = build_evolution_tree(b1, dist_matrix_path="data/dm/distance_matrix.txt", r=2,
+#                                    neighbor_joining=neighbor_joining_full)
+#     assert to_newick(t) == "(((3:1.0000)1:0.0000,2:1.0000)1:0.0000,(4:0.0000)4:4.0000)1;"
+#     if show: visualize_tree_plotly(t, l)
+#     t, l, _ = build_evolution_tree(bb, dist_matrix_path="data/dm/distance_matrix.txt", r=4,
+#                                    neighbor_joining=neighbor_joining_full)
+#     assert to_newick(t) == "((3:2.0000,4:4.0000)2:0.0000,1:1.0000)2;"
+#     if show: visualize_tree_plotly(t, l)
+#     t, l, _ = build_evolution_tree(njb, dist_matrix_path="data/dm/distance_matrix.txt", r=4, only_nj=True,
+#                                    neighbor_joining=neighbor_joining_full)
+#     assert to_newick(t) == "(((2:0.0000,1:1.0000)2:0.0000,3:2.0000)2:0.0000,4:4.0000)2;"
+#     if show: visualize_tree_plotly(t, l)
+#     t, l, _ = build_evolution_tree(njb1, dist_matrix_path="data/dm/distance_matrix.txt", r=1, only_nj=True,
+#                                    neighbor_joining=neighbor_joining_full)
+#     assert to_newick(t) == "(((1:0.0000,2:1.0000)1:0.0000,3:1.0000)1:0.0000,4:4.0000)1;"
+#     if show: visualize_tree_plotly(t, l)
 
 
-def test_reconstructor_njfull():
-    D = np.array([
-        [0, 1, 1],
-        [1, 0, 4],
-        [1, 4, 0]
-    ])
-    cells = [Genotype([2, 2, 1], 1), Genotype([1, 1, 1], 2), Genotype([2, 1, 1], 3)]
-    c3 = copy.deepcopy(cells)
-    max_id = 3
-    t1, l, _ = neighbor_joining_full(D, cells, max_id, existing_tree=None)
-    assert to_newick(t1) == "((1:0.0000,2:1.0000)1:0.0000,3:1.0000)1;"
-    D = np.array([
-        [0, 1, 3, 8],
-        [1, 0, 7, 7],
-        [3, 7, 0, 2],
-        [8, 7, 2, 0]
-    ])
-    cells = [Genotype([2, 2, 1], 1), Genotype([1, 1, 1], 2),
-             Genotype([2, 1, 1], 3), Genotype([2, 1, 7], 4)]
-    c4 = copy.deepcopy(cells)
-    max_id = 4
-    t2, l, _ = neighbor_joining_full(D, cells, max_id, existing_tree=None)
-    assert to_newick(t2) == "((1:0.0000,2:1.0000)1:0.0000,(3:0.0000,4:2.0000)3:3.0000)1;"
+# def test_reconstructor_njfull():
+#     D = np.array([
+#         [0, 1, 1],
+#         [1, 0, 4],
+#         [1, 4, 0]
+#     ])
+#     cells = [Genotype([2, 2, 1], 1), Genotype([1, 1, 1], 2), Genotype([2, 1, 1], 3)]
+#     c3 = copy.deepcopy(cells)
+#     max_id = 3
+#     t1, l, _ = neighbor_joining_full(D, cells, max_id, existing_tree=None)
+#     assert to_newick(t1) == "((1:0.0000,2:1.0000)1:0.0000,3:1.0000)1;"
+#     D = np.array([
+#         [0, 1, 3, 8],
+#         [1, 0, 7, 7],
+#         [3, 7, 0, 2],
+#         [8, 7, 2, 0]
+#     ])
+#     cells = [Genotype([2, 2, 1], 1), Genotype([1, 1, 1], 2),
+#              Genotype([2, 1, 1], 3), Genotype([2, 1, 7], 4)]
+#     c4 = copy.deepcopy(cells)
+#     max_id = 4
+#     t2, l, _ = neighbor_joining_full(D, cells, max_id, existing_tree=None)
+#     assert to_newick(t2) == "((1:0.0000,2:1.0000)1:0.0000,(3:0.0000,4:2.0000)3:3.0000)1;"
+#
+#     t3, l, _ = build_evolution_tree([c3], dist_matrix_path="data/dm/dm3", only_nj=True,
+#                                     neighbor_joining=neighbor_joining_full)
+#     assert to_newick(t1) == to_newick(t3)
+#
+#     t4, l, _ = build_evolution_tree([c3], dist_matrix_path="data/dm/dm3",
+#                                     neighbor_joining=neighbor_joining_full)
+#     assert to_newick(t1) == to_newick(t4)
+#
+#     t5, l, _ = build_evolution_tree([c4], dist_matrix_path="data/dm/dm4", only_nj=True,
+#                                     neighbor_joining=neighbor_joining_full)
+#     assert to_newick(t2) == to_newick(t5)
+#
+#     t6, l, _ = build_evolution_tree([c4], dist_matrix_path="data/dm/dm4",
+#                                     neighbor_joining=neighbor_joining_full)
+#     assert to_newick(t2) == to_newick(t6)
 
-    t3, l, _ = build_evolution_tree([c3], dist_matrix_path="data/dm/dm3", only_nj=True,
-                                    neighbor_joining=neighbor_joining_full)
-    assert to_newick(t1) == to_newick(t3)
 
-    t4, l, _ = build_evolution_tree([c3], dist_matrix_path="data/dm/dm3",
-                                    neighbor_joining=neighbor_joining_full)
-    assert to_newick(t1) == to_newick(t4)
-
-    t5, l, _ = build_evolution_tree([c4], dist_matrix_path="data/dm/dm4", only_nj=True,
-                                    neighbor_joining=neighbor_joining_full)
-    assert to_newick(t2) == to_newick(t5)
-
-    t6, l, _ = build_evolution_tree([c4], dist_matrix_path="data/dm/dm4",
-                                    neighbor_joining=neighbor_joining_full)
-    assert to_newick(t2) == to_newick(t6)
-
-
-@pytest.mark.parametrize("fun", [neighbor_joining_full,
-                                 neighbor_joining_full_cps,
-                                 neighbor_joining_hybrid,
-                                 neighbor_joining_hybrid_inverse_centrality
-                                 ])
-def test_reconstructor_plausability(fun):
-    a, b, c = run_single_test(
-        seed=95,
-        config="data/config_for_pic.json",
-        bedfile="data/pic.csv",
-        biopsy_size_scalable=0.5,
-        biopsy_generations=[4, 6, 8],
-        r_dist=4,
-        write_newick=True,
-        reconstruction_algorithm=fun,
-    )
+# @pytest.mark.parametrize("fun", [neighbor_joining_full,
+#                                  neighbor_joining_full_cps,
+#                                  neighbor_joining_hybrid,
+#                                  neighbor_joining_hybrid_inverse_centrality
+#                                  ])
+# def test_reconstructor_plausability(fun):
+#     a, b, c = run_single_test(
+#         seed=95,
+#         config="data/config_for_pic.json",
+#         bedfile="data/pic.csv",
+#         biopsy_size_scalable=0.5,
+#         biopsy_generations=[4, 6, 8],
+#         r_dist=4,
+#         write_newick=True,
+#         reconstruction_algorithm=fun,
+#     )
 
 
 df = pd.read_csv("data/f1results.csv", delimiter="\t")

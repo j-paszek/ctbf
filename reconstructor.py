@@ -2407,6 +2407,7 @@ def visualize_tree_plotly(tree, node_levels=None, output_file="reconstructed.htm
                         paper_bgcolor='white')
                    )
     fig.write_html(output_file)
+    fig.write_image(output_file + ".svg", width=1200, height=800, scale=2)
     fig.show()
 
 

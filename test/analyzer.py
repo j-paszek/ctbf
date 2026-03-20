@@ -87,10 +87,10 @@ def print_ranking_table(table, title="Algorithm ranking"):
 #  Example of usage inside analyzer
 # --------------------------------------------------------------
 def rank_algorithms_from_results(all_algorithms, paired_results, title="RANKING", tv="VariantName"):
-    """
-    all_algorithms: list of algorithm identifiers (functions or strings)
-    paired_results: dict keyed by (alg1_name, alg2_name) -> metrics dict
-    """
+    # """
+    # all_algorithms: list of algorithm identifiers (functions or strings)
+    # paired_results: dict keyed by (alg1_name, alg2_name) -> metrics dict
+    # """
 
     # --- Normalize algorithm identifiers to names (strings) ---
     alg_names = [
