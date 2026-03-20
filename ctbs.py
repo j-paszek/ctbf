@@ -10,9 +10,11 @@ import random
 from concurrent.futures import ProcessPoolExecutor
 
 from simulator import CancerCellEvolutionSimulator, Genotype
-from reconstructor import build_evolution_tree, visualize_tree_plotly, neighbor_joining_full
+from reconstructor import build_evolution_tree, visualize_tree_plotly, \
+    neighbor_joining_hybrid_anticentral_opt, neighbor_joining_hybrid_anticentral_adaptive_v3
 from evaluator import grf_tree
-from ctbs_utils import to_newick
+from evaluator_full import evaluate_4, named_label
+from ctbs_utils import to_newick, vizualize_nx_tree, get_biopsy_nodes_ids
 
 IN_FILE_NAME = "biopsy.txt"
 OUT_FILE_NAME = "cnp_distance_matrix.txt"
@@ -190,24 +192,26 @@ def _handle_small_biopsy(time_collector):
 def _compute_distance_matrix(all_in_one_sample, parallel, time_collector):
     # for parallel case single distances are being computed
     # for not parallel we write biopsy to cnp2cnp format file, and proces that
+    unique_cells = list({cell.cell_id: cell for cell in all_in_one_sample[0]}.values())
+
     if not parallel:
-        to_file(IN_FILE_NAME, all_in_one_sample[0])
+        to_file(IN_FILE_NAME, unique_cells)
 
     inid = indm = None
     if time_collector is not None:
         with Timer("Computing cnp2cnp distance matrix: ", time_collector):
             if parallel:
-                inid, indm = distance_matrix_from_biopsy(all_in_one_sample[0])
+                inid, indm = distance_matrix_from_biopsy(unique_cells)
             else:
                 use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
     else:
         if parallel:
-            inid, indm = distance_matrix_from_biopsy(all_in_one_sample[0])
+            inid, indm = distance_matrix_from_biopsy(unique_cells)
         else:
             use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
     return inid, indm
 
-def _reconstruct_and_evaluate(sim, cell_lists, all_in_one_sample, r_dist, visualize,
+def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, visualize,
                               clear_cnps, parallel, write_newick, reconstruction_algorithm,
                               inid, indm, time_collector):
     cl, osl = deepcopy(cell_lists), deepcopy(all_in_one_sample)
@@ -217,6 +221,12 @@ def _reconstruct_and_evaluate(sim, cell_lists, all_in_one_sample, r_dist, visual
     if visualize:
         sim.plot_tree(biopsy_lists=cell_lists, highlight_nodes=all_in_one_sample[0],
                       legend_y_offset=-170, output_file="simulated_tree")
+
+        # true tree
+        only_nodes = [c.cell_id for c in all_in_one_sample[0]]
+        sim.plot_tree(biopsy_lists=cell_lists, legend_y_offset=-170,
+                      highlight_nodes=all_in_one_sample[0],extended=False,
+                      only_nodes=only_nodes,node_numbers=True,output_file="true_tree_new")
 
     # # Options for True tree pic
     # only_nodes = [0, 1, 3, 5, 4, 7, 13, 12, 19]
@@ -254,6 +264,7 @@ def _reconstruct_and_evaluate(sim, cell_lists, all_in_one_sample, r_dist, visual
 
     # --- unified build config ---
     build_kwargs = {"r": r_dist}
+    build_kwargs.update({"seed": seed})
     if parallel:
         build_kwargs.update({"dist_matrix_path": None, "inids": inid, "indm": indm})
     else:
@@ -345,6 +356,7 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
     # 4. Tree reconstruction and evaluation
     return _reconstruct_and_evaluate(
         sim,
+        seed,
         cell_lists,
         all_in_one_sample,
         r_dist,
@@ -485,9 +497,34 @@ if __name__ == "__main__":
     # run_single_test(seed=773, config="test/data/config_for_pic.json",
     #                            bedfile="test/data/pic.csv") #, parallel=True)
 
-    run_single_test(seed=773, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
-                    biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
-                    reconstruction_algorithm=neighbor_joining_full)
+    # run_single_test(seed=773, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
+    #                 biopsy_size_scalable=0.5, biopsy_generations=[4, 6, 8], r_dist=4, write_newick=True,
+    #                 reconstruction_algorithm=neighbor_joining_full)
+
+    # seed 35 !!!
+    # seed 632
+    a,b,c = run_single_test(seed=2, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
+                    biopsy_size_scalable=0.5, biopsy_generations=[3, 5], r_dist=4, write_newick=True,
+                    visualize=True,
+                    reconstruction_algorithm=neighbor_joining_hybrid_anticentral_adaptive_v3)
+
+    biopsy_nodes_ids = get_biopsy_nodes_ids(b, c)
+
+    out = evaluate_4(a, b, restrict_labels=biopsy_nodes_ids, print_debug=True)
+    print(out)
+
+    out = evaluate_4(a, c, restrict_labels=biopsy_nodes_ids, print_debug=True)
+    print(out)
+    # print(c.edges)
+    # print(len(c.nodes))
+    # l = [(named_label(c, x), named_label(c, y)) for x, y in c.edges]
+    # print(l)
+    # roots = [n for n, indeg in c.in_degree() if indeg == 0]
+    # if len(roots) != 1:
+    #     raise ValueError(f"Tree must have exactly one root (found {len(roots)})")
+    # root = roots[0]
+    # vizualize_nx_tree(c)
+
     # run_single_test(seed=773, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
     #                 biopsy_size_scalable=0.5, biopsy_generatons=[3, 5, 7, 9], r_dist=4)
 

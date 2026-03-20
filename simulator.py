@@ -397,7 +397,7 @@ class CancerCellEvolutionSimulator:
                 for pos in range(i, j + 1):
                     if genome[pos] > 0: # IMPORTANT genes cannot appear from nothing
                         genome[pos] = max(0, genome[pos] + num_copies)
-                    if self.model_crucial_for_survival and self._get_ith_crucial(i) and genome[pos] == 0:
+                    if self.model_crucial_for_survival and self._get_ith_crucial(pos) and genome[pos] == 0:
                         return None, None  # Prevent genome generation if crucial CN drops to 0
                 pos_label = f"{i}-{j}" if i != j else f"{i}"
                 events_summary.append(f"{event_type}(pos={pos_label}, copies={num_copies})")
@@ -808,4 +808,5 @@ class CancerCellEvolutionSimulator:
         if output_file is not None:
             fig.write_image(output_file+".png", width=1200, height=800, scale=2)
             fig.write_html(output_file+".html")
+            fig.write_image(output_file + ".svg", width=1200, height=800, scale=2)
         fig.show()
