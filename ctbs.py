@@ -57,6 +57,8 @@ def load_ctbs_config(config_path=CTBS_CONFIG_PATH):
 def resolve_reconstruction_algorithm(algorithm_name):
     if algorithm_name is None:
         return None
+    if isinstance(algorithm_name, str) and algorithm_name.strip().lower() in {"", "none"}:
+        return None
     if algorithm_name not in RECONSTRUCTION_ALGORITHMS:
         available = ", ".join(sorted(RECONSTRUCTION_ALGORITHMS))
         raise ValueError(
