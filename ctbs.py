@@ -25,8 +25,24 @@ DEFAULT_CTBS_CONFIG = {
     "cnp2cnp_FOLDER": "/Users/voronwe/Work/PyCharmProjects/cnp2cnp/examples",
     "cnp2cnp_FILE": "/Users/voronwe/Work/PyCharmProjects/cnp2cnp/cnp2cnp.py",
     "TRUE_TREE_ROOT_ID": 0,
+    "RUN_SINGLE_TEST": {
+        "seed": 2,
+        "config": "test/data/config_for_pic.json",
+        "bedfile": "test/data/pic.csv",
+        "biopsy_size_scalable": 0.5,
+        "biopsy_generations": [3, 5],
+        "r_dist": 4,
+        "write_newick": True,
+        "visualize": True,
+        "reconstruction_algorithm": "neighbor_joining_hybrid_anticentral_adaptive_v3",
+    },
 }
 CTBS_CONFIG_PATH = Path(__file__).with_name("ctbs_config.json")
+
+RECONSTRUCTION_ALGORITHMS = {
+    "neighbor_joining_hybrid_anticentral_opt": neighbor_joining_hybrid_anticentral_opt,
+    "neighbor_joining_hybrid_anticentral_adaptive_v3": neighbor_joining_hybrid_anticentral_adaptive_v3,
+}
 
 
 def load_ctbs_config(config_path=CTBS_CONFIG_PATH):
@@ -38,6 +54,17 @@ def load_ctbs_config(config_path=CTBS_CONFIG_PATH):
     return config
 
 
+def resolve_reconstruction_algorithm(algorithm_name):
+    if algorithm_name is None:
+        return None
+    if algorithm_name not in RECONSTRUCTION_ALGORITHMS:
+        available = ", ".join(sorted(RECONSTRUCTION_ALGORITHMS))
+        raise ValueError(
+            f"Unknown reconstruction algorithm '{algorithm_name}'. Available options: {available}"
+        )
+    return RECONSTRUCTION_ALGORITHMS[algorithm_name]
+
+
 CTBS_CONFIG = load_ctbs_config()
 IN_FILE_NAME = CTBS_CONFIG["IN_FILE_NAME"]
 OUT_FILE_NAME = CTBS_CONFIG["OUT_FILE_NAME"]
@@ -45,6 +72,7 @@ SIM_DM = CTBS_CONFIG["SIM_DM"]
 cnp2cnp_FOLDER = CTBS_CONFIG["cnp2cnp_FOLDER"]
 cnp2cnp_FILE = CTBS_CONFIG["cnp2cnp_FILE"]
 TRUE_TREE_ROOT_ID = CTBS_CONFIG["TRUE_TREE_ROOT_ID"]
+RUN_SINGLE_TEST_CONFIG = CTBS_CONFIG["RUN_SINGLE_TEST"]
 
 
 class Timer:
@@ -526,10 +554,11 @@ if __name__ == "__main__":
 
     # seed 35 !!!
     # seed 632
-    a,b,c = run_single_test(seed=2, config="test/data/config_for_pic.json", bedfile="test/data/pic.csv",
-                    biopsy_size_scalable=0.5, biopsy_generations=[3, 5], r_dist=4, write_newick=True,
-                    visualize=True,
-                    reconstruction_algorithm=neighbor_joining_hybrid_anticentral_adaptive_v3)
+    run_config = RUN_SINGLE_TEST_CONFIG.copy()
+    run_config["reconstruction_algorithm"] = resolve_reconstruction_algorithm(
+        run_config.get("reconstruction_algorithm")
+    )
+    a, b, c = run_single_test(**run_config)
 
     biopsy_nodes_ids = get_biopsy_nodes_ids(b, c)
 

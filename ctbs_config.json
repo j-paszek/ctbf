@@ -4,5 +4,16 @@
   "SIM_DM": "sim_dm.txt",
   "cnp2cnp_FOLDER": "/Users/voronwe/Work/PyCharmProjects/cnp2cnp/examples",
   "cnp2cnp_FILE": "/Users/voronwe/Work/PyCharmProjects/cnp2cnp/cnp2cnp.py",
-  "TRUE_TREE_ROOT_ID": 0
+  "TRUE_TREE_ROOT_ID": 0,
+  "RUN_SINGLE_TEST": {
+    "seed": 2,
+    "config": "test/data/config_for_pic.json",
+    "bedfile": "test/data/pic.csv",
+    "biopsy_size_scalable": 0.5,
+    "biopsy_generations": [3, 5],
+    "r_dist": 4,
+    "write_newick": true,
+    "visualize": true,
+    "reconstruction_algorithm": "neighbor_joining_hybrid_anticentral_adaptive_v3"
+  }
 }

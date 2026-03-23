@@ -22,6 +22,20 @@ To run CTBF simply run:
 Important note, to run pairwise CNP comparisons we use [cnp2cnp](https://github.com/AEVO-lab/cnp2cnp) tool.
 Set the paths `cnp2cnp_FOLDER` and `cnp2cnp_FILE` in `ctbs_config.json`.
 
+The default `python ctbs.py` run is also configured in `ctbs_config.json`, in the `RUN_SINGLE_TEST` section.
+
+`RUN_SINGLE_TEST` options:
+- `seed` - random seed used by the simulator and biopsy sampling.
+- `config` - path to the main simulator JSON config.
+- `bedfile` - optional CSV file with genome-position-specific simulator parameters.
+- `biopsy_size_scalable` - fraction of cells sampled from each requested generation.
+- `biopsy_generations` - list of generations from which biopsy samples are taken.
+- `r_dist` - reconstruction radius used while connecting biopsy cells into the inferred tree.
+- `write_newick` - if `true`, prints the simulated, reconstructed, and NJ trees in Newick format.
+- `visualize` - if `true`, writes HTML visualizations of the simulated and reconstructed trees.
+- `reconstruction_algorithm` - reconstruction backend used inside `run_single_test`; currently supported:
+  `neighbor_joining_hybrid_anticentral_opt`, `neighbor_joining_hybrid_anticentral_adaptive_v3`.
+
 _____
 
 Repository contains:
