@@ -2,7 +2,8 @@
 
 ### Authors: Jarosław Paszek, Agnieszka Mykowiecka, Krzysztof Gogolewski
 
-Presented on ISMB/ECCB 2025. For Recomb submision version see branch newmetrics (release will be soon).
+Version 1.0.0 (only partial CNP-tres reconstruction) presented on ISMB/ECCB 2025 (poster). 
+Version 1.1.0 extends reconstruction to full CNP-trees, adds reconstruction algorithm analyzer, adds distance matrix analyzer.
 
 _____
 
