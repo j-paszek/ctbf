@@ -73,6 +73,13 @@ For sample output see `sample_output.txt`. To reproduce this clear output, pleas
 
 Note, AD-F1 is F1 related shown as `ancestors_unique_restricted`. Ancestor descendant relations are counted only once, 
 and nodes considered are restricted to biopsy nodes. 
+
+_____
+
+For the information about the Evaluation of NJ-derived Reconstruction Algorithms (described in Appendix E, 
+results provided in Figure 4) please see `test/README.md`.
+
+
 _____
 
 Description of the project version 1.0.0 is available here:
