@@ -20,7 +20,7 @@ To run CTBF simply run:
 `python ctbs.py`
 
 Important note, to run pairwise CNP comparisons we use [cnp2cnp](https://github.com/AEVO-lab/cnp2cnp) tool.
-We encourage you to download the tool and set paths `cnp2cnp_FOLDER` and `cnp2cnp_FILE` in `ctbs.py`.
+Set the paths `cnp2cnp_FOLDER` and `cnp2cnp_FILE` in `ctbs_config.json`.
 
 _____
 

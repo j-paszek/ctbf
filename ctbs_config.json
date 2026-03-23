@@ -1,0 +1,8 @@
+{
+  "IN_FILE_NAME": "biopsy.txt",
+  "OUT_FILE_NAME": "cnp_distance_matrix.txt",
+  "SIM_DM": "sim_dm.txt",
+  "cnp2cnp_FOLDER": "/Users/voronwe/Work/PyCharmProjects/cnp2cnp/examples",
+  "cnp2cnp_FILE": "/Users/voronwe/Work/PyCharmProjects/cnp2cnp/cnp2cnp.py",
+  "TRUE_TREE_ROOT_ID": 0
+}

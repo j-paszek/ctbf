@@ -4,6 +4,8 @@ import os.path
 import sys
 import tempfile
 import time
+import json
+from pathlib import Path
 from copy import deepcopy
 import numpy as np
 import random
@@ -16,12 +18,33 @@ from evaluator import grf_tree
 from evaluator_full import evaluate_4, named_label
 from ctbs_utils import to_newick, vizualize_nx_tree, get_biopsy_nodes_ids
 
-IN_FILE_NAME = "biopsy.txt"
-OUT_FILE_NAME = "cnp_distance_matrix.txt"
-SIM_DM = "sim_dm.txt"
-cnp2cnp_FOLDER = r"/Users/voronwe/Work/PyCharmProjects/cnp2cnp/examples"
-cnp2cnp_FILE = r"/Users/voronwe/Work/PyCharmProjects/cnp2cnp/cnp2cnp.py"
-TRUE_TREE_ROOT_ID = 0
+DEFAULT_CTBS_CONFIG = {
+    "IN_FILE_NAME": "biopsy.txt",
+    "OUT_FILE_NAME": "cnp_distance_matrix.txt",
+    "SIM_DM": "sim_dm.txt",
+    "cnp2cnp_FOLDER": "/Users/voronwe/Work/PyCharmProjects/cnp2cnp/examples",
+    "cnp2cnp_FILE": "/Users/voronwe/Work/PyCharmProjects/cnp2cnp/cnp2cnp.py",
+    "TRUE_TREE_ROOT_ID": 0,
+}
+CTBS_CONFIG_PATH = Path(__file__).with_name("ctbs_config.json")
+
+
+def load_ctbs_config(config_path=CTBS_CONFIG_PATH):
+    with open(config_path, "r") as f:
+        loaded_config = json.load(f)
+
+    config = DEFAULT_CTBS_CONFIG.copy()
+    config.update(loaded_config)
+    return config
+
+
+CTBS_CONFIG = load_ctbs_config()
+IN_FILE_NAME = CTBS_CONFIG["IN_FILE_NAME"]
+OUT_FILE_NAME = CTBS_CONFIG["OUT_FILE_NAME"]
+SIM_DM = CTBS_CONFIG["SIM_DM"]
+cnp2cnp_FOLDER = CTBS_CONFIG["cnp2cnp_FOLDER"]
+cnp2cnp_FILE = CTBS_CONFIG["cnp2cnp_FILE"]
+TRUE_TREE_ROOT_ID = CTBS_CONFIG["TRUE_TREE_ROOT_ID"]
 
 
 class Timer:
