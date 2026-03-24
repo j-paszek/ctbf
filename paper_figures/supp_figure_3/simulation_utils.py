@@ -8,17 +8,6 @@ from pathlib import Path
 import os
 import sys
 
-# Reuse the tracked repo ctbs.py, but point it at the study-local cnp2cnp copy.
-study_dir = os.path.dirname(__file__)
-os.environ.setdefault(
-    "CNP2CNP_FOLDER",
-    os.path.join(study_dir, "cnp2cnp", "cnp2cnp", "examples"),
-)
-os.environ.setdefault(
-    "CNP2CNP_FILE",
-    os.path.join(study_dir, "cnp2cnp", "cnp2cnp", "cnp2cnp.py"),
-)
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from ctbs import distance_matrix_from_biopsy, use_cnp2cnp_to_compute_pairwise_distance

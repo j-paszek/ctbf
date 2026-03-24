@@ -10,11 +10,16 @@ Figure 3.
   tools are needed
 - For re-running the study from scratch, `MEDICC2` must be installed and
   available in the environment
+- For re-running the study from scratch, `cnp2cnp` must be installed in the
+  location configured in `ctbs_config.json`
 
 References:
 
 - MEDICC2: <https://anaconda.org/bioconda/medicc2>
 - cnp2cnp: <https://github.com/AEVO-lab/cnp2cnp>
+
+The `paper_figures/supp_figure_3` code now resolves `cnp2cnp` from the same
+`ctbs_config.json` file used by the main CTBF codebase.
 
 ## Exact reproduction
 
@@ -45,6 +50,9 @@ conda run --no-capture-output -n medicc2_src \
   --data-source generate \
   --results-dir paper_figures/supp_figure_3/results
 ```
+
+Before running from scratch, make sure `ctbs_config.json` points to a working
+`cnp2cnp` installation.
 
 If you already have a results directory and only want to redraw the panels:
 

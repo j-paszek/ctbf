@@ -9,11 +9,13 @@ from pathlib import Path
 import sys
 import os
 
-# Add local cnp2cnp path
-local_cnp2cnp = os.path.join(os.path.dirname(__file__), 'cnp2cnp', 'cnp2cnp')
-if local_cnp2cnp not in sys.path:
-    sys.path.insert(0, local_cnp2cnp)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
+from _ctbs_config import configured_cnp2cnp_module_dir
+
+configured_cnp2cnp = str(configured_cnp2cnp_module_dir())
+if configured_cnp2cnp not in sys.path:
+    sys.path.insert(0, configured_cnp2cnp)
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import subprocess
@@ -27,13 +29,13 @@ except ImportError:
     def tqdm(iterable, **kwargs):
         return iterable
 
-# Import cnp2cnp functions directly
+# Import cnp2cnp functions directly from the location configured for CTBF.
 try:
     from cnpsolver import CNPSolver
     CNP2CNP_AVAILABLE = True
 except ImportError:
     CNP2CNP_AVAILABLE = False
-    print("Warning: Could not import CNPSolver. Falling back to subprocess method.")
+    print("Warning: Could not import CNPSolver from configured cnp2cnp. Falling back to subprocess method.")
 
 
 def compute_cnp2cnp_distance_direct(cnp1, cnp2, use_dbl=False):
