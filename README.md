@@ -68,12 +68,14 @@ and nodes considered are restricted to biopsy nodes.
 _____
 
 For the information about the **Evaluation of NJ-derived Reconstruction Algorithms** (described in Appendix E, 
-results provided in Figure 4) please see `test/README.md`.
+results provided in Figure 4) and the code and frozen data that can be used used to reproduce the Figure please see 
+[test/README](https://github.com/j-paszek/ctbf/tree/main/test).
 
 _____
 
-For the code and frozen data used to reproduce **Supplementary Figure 3**, see
-[supp_figure_3/README.md](https://github.com/j-paszek/ctbf/tree/main/paper_figures/supp_figure_3).
+For the information about the **Simulation-Based Evaluation of Distance Measures for CNP Evolution**
+(described in Appendix C, results provided in Figure 3) and the code and frozen data that can be used used to reproduce the Figure please see 
+[supp_figure_3/README](https://github.com/j-paszek/ctbf/tree/main/paper_figures/supp_figure_3).
 
 _____
 
