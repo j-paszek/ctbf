@@ -1,4 +1,13 @@
+import argparse
+import json
+from pathlib import Path
+import sys
+
 import pandas as pd
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from ctbs import run_single_test
 from ctbs_utils import get_biopsy_nodes_ids
@@ -15,8 +24,13 @@ from reconstructor import build_evolution_tree, visualize_tree_plotly, \
     neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible, \
     neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony
 
-df = pd.read_csv("data/f1results.csv", delimiter="\t")
-all_seeds = df["seed"].unique().tolist()
+CONFIG_BY_PROFILE = {
+    "base": "data/config_for_pic.json",
+    "high": "data/config_high.json",
+    "highdm": "data/config_high_dm.json",
+}
+DEFAULT_BIOPSY_GENERATIONS = [4, 6, 8]
+DEFAULT_SEEDS_FILE = "data/seeds.json"
 
 
 def get_root_id(tr):
@@ -60,6 +74,85 @@ def get_algorithms_to_test():
             ]
 
 
+def format_bss_token(bss):
+    return str(bss).replace(".", "")
+
+
+def build_variant_name(r_dist, biopsy_size_scalable, profile):
+    variant = f"r{r_dist}bss{format_bss_token(biopsy_size_scalable)}"
+    if profile == "high":
+        variant += "high"
+    elif profile == "highdm":
+        variant += "highdm"
+    return variant
+
+
+def _normalize_seed_values(values):
+    seeds = []
+    seen = set()
+    for value in values:
+        seed = int(value)
+        if seed not in seen:
+            seen.add(seed)
+            seeds.append(seed)
+    return seeds
+
+
+def load_seeds(seed_file):
+    path = Path(seed_file)
+    suffix = path.suffix.lower()
+
+    if suffix == ".csv":
+        df = pd.read_csv(path)
+        if "seeds" in df.columns:
+            return _normalize_seed_values(df["seeds"].dropna().tolist())
+        if "seed" in df.columns:
+            return _normalize_seed_values(df["seed"].dropna().tolist())
+        raise ValueError(f"CSV seed file {path} must contain a 'seeds' or 'seed' column.")
+
+    if suffix == ".json":
+        with open(path, "r") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            if "seeds" in data:
+                return _normalize_seed_values(data["seeds"])
+            if "seed" in data:
+                return _normalize_seed_values(data["seed"])
+            raise ValueError(f"JSON seed file {path} must contain a 'seeds' or 'seed' field.")
+        if isinstance(data, list):
+            return _normalize_seed_values(data)
+        raise ValueError(f"Unsupported JSON seed file structure in {path}.")
+
+    raise ValueError(f"Unsupported seed file format for {path}. Use .csv or .json.")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Run CTBF appendix benchmark for one test variant."
+    )
+    parser.add_argument("--r", type=int, required=True, dest="r_dist",
+                        help="Reconstruction radius, e.g. 2 or 4.")
+    parser.add_argument("--bss", type=float, required=True, dest="biopsy_size_scalable",
+                        help="Biopsy-size scaling coefficient, e.g. 0.25, 0.5, 0.75.")
+    parser.add_argument("--profile", choices=sorted(CONFIG_BY_PROFILE), default="base",
+                        help="Simulation profile: base, high, or highdm.")
+    parser.add_argument("--config", type=str, default=None,
+                        help="Optional config override. If omitted, derived from --profile.")
+    parser.add_argument("--bedfile", type=str, default=None,
+                        help="Optional simulator CSV file. Default: none.")
+    parser.add_argument("--seeds-file", type=str, default=DEFAULT_SEEDS_FILE,
+                        help="Path to a CSV or JSON file describing benchmark seeds.")
+    parser.add_argument("--output-dir", type=str, default=None,
+                        help="Optional output directory. Default: results/<derived-variant>.")
+    parser.add_argument("--seed", type=int, action="append", default=None,
+                        help="Limit the run to selected seed(s). Can be passed multiple times.")
+    parser.add_argument("--algorithm-index", type=int, action="append", default=None,
+                        help="Limit the run to selected algorithm index/indices.")
+    parser.add_argument("--write-newick", action="store_true",
+                        help="Print Newick trees during runs.")
+    return parser.parse_args()
+
+
 # === Summary function ===
 def provide_summary(rec, nj, mode, seed, failures, rec_report, nj_report):
     p1 = rec[mode]["precision"]
@@ -95,7 +188,8 @@ def provide_summary(rec, nj, mode, seed, failures, rec_report, nj_report):
         failures[f"{mode}_f1_failures"].append(seed)
 
 
-def check_one_alg(algo, counter):
+def check_one_alg(algo, counter, *, seeds, config_path, bedfile, biopsy_size_scalable,
+                  biopsy_generations, r_dist, output_dir, write_newick):
     results_store = {
         "ancestors_multiset_precision_failures": [],
         "ancestors_multiset_f1_failures": [],
@@ -108,19 +202,18 @@ def check_one_alg(algo, counter):
                   "2-precision": [], "2-f1": [], "3-precision": [], "3-f1": [], "grf": [],}
     nj_output = {"seed": [], "1-precision": [], "1-f1": [],
                  "2-precision": [], "2-f1": [], "3-precision": [], "3-f1": [], "grf": [],}
-    for seed in all_seeds:
+    algo_name = getattr(algo, "__name__", str(algo))
+    for seed in seeds:
         print(f"\nTesting seed: {seed}")
         try:
             a, b, c = run_single_test(
                 seed=seed,
-                config="data/config_high_dm.json",
-                # bedfile="data/pic.csv",
-                bedfile=None,
-                biopsy_size_scalable=0.5,
-                biopsy_generations=[4, 6, 8],
-                # r_dist=4,
-                r_dist=4,
-                write_newick=True,
+                config=config_path,
+                bedfile=bedfile,
+                biopsy_size_scalable=biopsy_size_scalable,
+                biopsy_generations=biopsy_generations,
+                r_dist=r_dist,
+                write_newick=write_newick,
                 reconstruction_algorithm=algo,
             )
 
@@ -152,28 +245,51 @@ def check_one_alg(algo, counter):
     for key, seeds in results_store.items():
         df_fail[key] = df_fail["seed"].apply(lambda x: 1 if x in seeds else 0)
     df_fail["total_failures"] = df_fail.drop(columns=["seed"]).sum(axis=1)
-    name1 = "results/" + str(counter) + "out.csv"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    name1 = output_dir / f"{counter}out.csv"
     df_fail.to_csv(name1, index=False)
 
     # Save REC and NJ metric reports
     df_rec = pd.DataFrame(rec_output)
-    name2 = "results/" + str(counter) + "rec.csv"
+    name2 = output_dir / f"{counter}rec.csv"
     df_rec.to_csv(name2, index=False)
 
     df_nj = pd.DataFrame(nj_output)
-    name3 = "results/" + str(counter) + "nj.csv"
+    name3 = output_dir / f"{counter}nj.csv"
     df_nj.to_csv(name3, index=False)
 
     print("Results saved: ", name1, name2, name3)
 
 if __name__ == "__main__":
-    # === Run tests ===
-    counter = -1
-    for algo in get_algorithms_to_test():
-        counter += 1 # 0-21/31, 1-23/34, 2-24/27, 3-25
-        # if counter != 20:
-        #     continue
+    args = parse_args()
+    config_path = args.config or CONFIG_BY_PROFILE[args.profile]
+    variant_name = build_variant_name(args.r_dist, args.biopsy_size_scalable, args.profile)
+    output_dir = Path(args.output_dir) if args.output_dir else Path("results") / variant_name
+    selected_seeds = args.seed if args.seed else load_seeds(args.seeds_file)
 
+    algorithms = get_algorithms_to_test()
+    selected_indices = args.algorithm_index if args.algorithm_index is not None else list(range(len(algorithms)))
+
+    print(f"Variant: {variant_name}")
+    print(f"Config: {config_path}")
+    print(f"Seeds source: {'CLI --seed' if args.seed else args.seeds_file}")
+    print(f"Output directory: {output_dir}")
+    print(f"Seeds: {len(selected_seeds)}")
+    print(f"Algorithms: {selected_indices}")
+
+    for counter in selected_indices:
+        algo = algorithms[counter]
         algo_name = getattr(algo, "__name__", str(algo))
-        print(f"\n--- Running tests with {algo_name} ---")
-        check_one_alg(algo, counter)
+        print(f"\n--- Running tests with {algo_name} (index {counter}) ---")
+        check_one_alg(
+            algo,
+            counter,
+            seeds=selected_seeds,
+            config_path=config_path,
+            bedfile=args.bedfile,
+            biopsy_size_scalable=args.biopsy_size_scalable,
+            biopsy_generations=DEFAULT_BIOPSY_GENERATIONS,
+            r_dist=args.r_dist,
+            output_dir=output_dir,
+            write_newick=args.write_newick,
+        )
