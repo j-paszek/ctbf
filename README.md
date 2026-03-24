@@ -72,6 +72,11 @@ results provided in Figure 4) please see `test/README.md`.
 
 _____
 
+For the code and frozen data used to reproduce **Supplementary Figure 3**, see
+`paper_figures/supp_figure_3/README.md`.
+
+_____
+
 Description of the project version 1.0.0 is available here:
 
 [ISMBECCB2025_Long_Abstract_1886](https://j-paszek.github.io/ctbf/ISMBECCB2025_Long_Abstract_1886.pdf)
