@@ -1,0 +1,28 @@
+{
+  "figure": "Figure 3",
+  "purpose": "Frozen minimal data bundle for exact reproduction of the preprint Figure 3 subfigures.",
+  "source_results_dir": "explorations/sim_grid_results_default_parameter_grid_final_g-10-25-50",
+  "panel_ab": {
+    "run_id": 47,
+    "seed": 47042,
+    "parameters": {
+      "GENERAL_EVENT_PROB": 0.05,
+      "GENERAL_DUPLICATION_PROB": 0.5,
+      "GENERAL_DUPLICATION_MULTIPLICITY": 1,
+      "GENERAL_LOSS_PROB": 0.5,
+      "GENERAL_SINGLE_OR_MULTIPLE_EVENT_PROB": 0.5,
+      "genome_length": 20
+    },
+    "matrix_files": [
+      "matrix_gt/matrix_gt_047.txt",
+      "matrix_c2c/matrix_c2c_047.txt",
+      "matrix_other/matrix_other_047.txt",
+      "matrix_medicc2/matrix_medicc2_047.txt"
+    ]
+  },
+  "panel_c": {
+    "metadata_file": "metadata.csv",
+    "parameter_grid_file": "parameter_grid.json",
+    "aggregation": "mean over rows in metadata.csv grouped by GENERAL_DUPLICATION_MULTIPLICITY and GENERAL_SINGLE_OR_MULTIPLE_EVENT_PROB"
+  }
+}
