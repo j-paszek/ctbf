@@ -81,7 +81,7 @@ _____
 
 For the information about the **Evaluation of NJ-derived Reconstruction Algorithms** (described in Appendix E, 
 results provided in Figure 4) and the code and frozen data that can be used used to reproduce the Figure please see 
-[test/README](https://github.com/j-paszek/ctbf/tree/main/test).
+[algorithm_evaluation/README](https://github.com/j-paszek/ctbf/tree/main/algorithm_evaluation).
 
 _____
 
