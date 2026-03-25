@@ -75,7 +75,7 @@ _____
 
 For the information about the **Simulation-Based Evaluation of Distance Measures for CNP Evolution**
 (described in Appendix C, results provided in Figure 3) and the code and frozen data that can be used used to reproduce the Figure please see 
-[supp_figure_3/README](https://github.com/j-paszek/ctbf/tree/main/paper_figures/supp_figure_3).
+[supp_figure_3/README](https://github.com/j-paszek/ctbf/tree/main/measures_evaluation/supp_figure_3).
 
 _____
 

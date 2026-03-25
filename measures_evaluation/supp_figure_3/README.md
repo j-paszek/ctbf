@@ -18,7 +18,7 @@ References:
 - MEDICC2: <https://anaconda.org/bioconda/medicc2>
 - cnp2cnp: <https://github.com/AEVO-lab/cnp2cnp>
 
-The `paper_figures/supp_figure_3` code now resolves `cnp2cnp` from the same
+The `measures_evaluation/supp_figure_3` code now resolves `cnp2cnp` from the same
 `ctbs_config.json` file used by the main CTBF codebase.
 
 ## Exact reproduction
@@ -28,15 +28,15 @@ Frozen input data is included in
 panels:
 
 ```bash
-cd /Users/krzysiek/PROJECTS-MIMUW/ctbf_appendix_fig_3
-python paper_figures/supp_figure_3/generate_subfigures_figure_3.py
+cd /Users/voronwe/Work/PyCharmProjects/ctbf
+python measures_evaluation/supp_figure_3/generate_subfigures_figure_3.py
 ```
 
 The generated files are written to:
 
-- `paper_figures/supp_figure_3/figures/subfigure_a.png`
-- `paper_figures/supp_figure_3/figures/subfigure_b.png`
-- `paper_figures/supp_figure_3/figures/subfigure_c.png`
+- `measures_evaluation/supp_figure_3/figures/subfigure_a.png`
+- `measures_evaluation/supp_figure_3/figures/subfigure_b.png`
+- `measures_evaluation/supp_figure_3/figures/subfigure_c.png`
 
 ## Re-run from scratch
 
@@ -46,9 +46,9 @@ Example:
 
 ```bash
 conda run --no-capture-output -n medicc2_src \
-  python paper_figures/supp_figure_3/generate_subfigures_figure_3.py \
+  python measures_evaluation/supp_figure_3/generate_subfigures_figure_3.py \
   --data-source generate \
-  --results-dir paper_figures/supp_figure_3/results
+  --results-dir measures_evaluation/supp_figure_3/results
 ```
 
 Before running from scratch, make sure `ctbs_config.json` points to a working
@@ -57,7 +57,7 @@ Before running from scratch, make sure `ctbs_config.json` points to a working
 If you already have a results directory and only want to redraw the panels:
 
 ```bash
-python paper_figures/supp_figure_3/generate_subfigures_figure_3.py \
+python measures_evaluation/supp_figure_3/generate_subfigures_figure_3.py \
   --data-source existing \
   --results-dir /path/to/results
 ```

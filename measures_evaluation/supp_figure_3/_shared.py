@@ -9,7 +9,7 @@ import pandas as pd
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 
-utils_dir = REPO_ROOT / "utils"
+utils_dir = SCRIPT_DIR.parent / "utils"
 if str(utils_dir) not in sys.path:
     sys.path.insert(0, str(utils_dir))
 
