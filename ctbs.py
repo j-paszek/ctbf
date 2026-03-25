@@ -279,7 +279,7 @@ def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, 
         only_nodes = [c.cell_id for c in all_in_one_sample[0]]
         sim.plot_tree(biopsy_lists=cell_lists, legend_y_offset=-170,
                       highlight_nodes=all_in_one_sample[0],extended=False,
-                      only_nodes=only_nodes,node_numbers=True,output_file="true_tree_new")
+                      only_nodes=only_nodes,node_numbers=True,output_file="true_tree")
 
     # # Options for True tree pic
     # only_nodes = [0, 1, 3, 5, 4, 7, 13, 12, 19]
