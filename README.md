@@ -26,6 +26,12 @@ The default `python ctbs.py` run is also configured in `ctbs_config.json`, in th
 - `visualize` - if `true`, writes HTML visualizations of the simulated and reconstructed trees.
 - `reconstruction_algorithm` - to select reconstruction algorithm inside `run_single_test`;
 
+In `ctbs_config.json`, the simulator is controlled through the `config` and `bedfile` options:
+- `config` points to the main JSON simulator configuration,
+- `bedfile` points to the optional BED-like CSV file with per-locus simulator settings.
+
+An updated simulator manual is available in [presentation/simulator_manual.md](presentation/simulator_manual.md).
+
 To reconstruct full CNP-trees select interesting algorithm, by setting `reconstruction_algorithm` to in example 
 `neighbor_joining_hybrid_anticentral_opt`, or `neighbor_joining_hybrid_anticentral_adaptive_v3`.
 
