@@ -33,6 +33,29 @@ CONFIG_BY_PROFILE = {
 }
 DEFAULT_BIOPSY_GENERATIONS = [4, 6, 8]
 DEFAULT_SEEDS_FILE = TEST_DATA_DIR / "seeds.json"
+LEGACY_ALGORITHM_NAMES = [
+    "neighbor_joining_baseline",
+    "neighbor_joining_full_full",
+    "neighbor_joining_full_partial",
+    "neighbor_joining_full_cps_full",
+    "neighbor_joining_full_cps_partial",
+    "neighbor_joining_hybrid_full",
+    "neighbor_joining_hybrid_partial",
+    "neighbor_joining_hybrid_inverse_centrality_full",
+    "neighbor_joining_hybrid_inverse_centrality_partial",
+    "neighbor_joining_adaptive_centrality",
+    "neighbor_joining_adaptive_centrality_nonlinear",
+    "neighbor_joining_adaptive_centrality_reversed",
+    "neighbor_joining_hybrid_opt",
+    "neighbor_joining_hybrid_opt_adaptive",
+    "neighbor_joining_hybrid_opt_v2",
+    "neighbor_joining_hybrid_opt_refined",
+    "neighbor_joining_hybrid_anticentral_opt",
+    "neighbor_joining_hybrid_anticentral_adaptive_v3",
+    "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible",
+    "neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible",
+    "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
+]
 
 
 def get_root_id(tr):
@@ -42,7 +65,7 @@ def get_root_id(tr):
     return roots[0]
 
 
-def get_algorithms_to_test():
+def get_legacy_algorithms_to_test():
     neighbor_joining_full_full = make_nj_full_variant(True)
     neighbor_joining_full_partial = make_nj_full_variant(False)
     neighbor_joining_full_cps_full = make_nj_full_cps_variant(True)
@@ -74,6 +97,14 @@ def get_algorithms_to_test():
             neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible,
             neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony
             ]
+
+
+def get_experimental_algorithms_to_test():
+    return []
+
+
+def get_algorithms_to_test():
+    return get_legacy_algorithms_to_test() + get_experimental_algorithms_to_test()
 
 
 def format_bss_token(bss):
@@ -150,9 +181,44 @@ def parse_args():
                         help="Limit the run to selected seed(s). Can be passed multiple times.")
     parser.add_argument("--algorithm-index", type=int, action="append", default=None,
                         help="Limit the run to selected algorithm index/indices.")
+    parser.add_argument("--algorithm-name", action="append", default=None,
+                        help="Limit the run to selected algorithm name(s). Can be passed multiple times.")
     parser.add_argument("--write-newick", action="store_true",
                         help="Print Newick trees during runs.")
     return parser.parse_args()
+
+
+def select_algorithm_indices(algorithms, algorithm_indexes=None, algorithm_names=None):
+    selected = []
+    algorithm_indexes = algorithm_indexes or []
+    algorithm_names = algorithm_names or []
+
+    for index in algorithm_indexes:
+        if index < 0 or index >= len(algorithms):
+            raise ValueError(f"Algorithm index {index} is out of range 0..{len(algorithms) - 1}.")
+        selected.append(index)
+
+    if algorithm_names:
+        names_to_indices = {}
+        duplicate_names = set()
+        for index, algorithm in enumerate(algorithms):
+            name = getattr(algorithm, "__name__", str(algorithm))
+            if name in names_to_indices:
+                duplicate_names.add(name)
+            names_to_indices[name] = index
+        if duplicate_names:
+            duplicates = ", ".join(sorted(duplicate_names))
+            raise ValueError(f"Algorithm names must be unique to select by name. Duplicates: {duplicates}")
+
+        for name in algorithm_names:
+            if name not in names_to_indices:
+                available = ", ".join(names_to_indices)
+                raise ValueError(f"Unknown algorithm name '{name}'. Available algorithms: {available}")
+            selected.append(names_to_indices[name])
+
+    if not selected:
+        return list(range(len(algorithms)))
+    return list(dict.fromkeys(selected))
 
 
 # === Summary function ===
@@ -271,7 +337,11 @@ if __name__ == "__main__":
     selected_seeds = args.seed if args.seed else load_seeds(args.seeds_file)
 
     algorithms = get_algorithms_to_test()
-    selected_indices = args.algorithm_index if args.algorithm_index is not None else list(range(len(algorithms)))
+    selected_indices = select_algorithm_indices(
+        algorithms,
+        algorithm_indexes=args.algorithm_index,
+        algorithm_names=args.algorithm_name,
+    )
 
     print(f"Variant: {variant_name}")
     print(f"Config: {config_path}")

@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from algorithm_evaluation.tester import get_algorithms_to_test
+from algorithm_evaluation.tester import get_legacy_algorithms_to_test
 from ctbs_utils import get_biopsy_nodes_ids, to_newick
 from evaluator_full import evaluate_4
 from reconstructor import build_evolution_tree
@@ -34,7 +34,7 @@ def load_case_simulator(case):
 
 
 def algorithm_by_name():
-    return {algorithm.__name__: algorithm for algorithm in get_algorithms_to_test()}
+    return {algorithm.__name__: algorithm for algorithm in get_legacy_algorithms_to_test()}
 
 
 def expand_case_expectations(case):

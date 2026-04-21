@@ -14,7 +14,7 @@ RUN_SLOW_BENCHMARKS = os.environ.get("CTBF_RUN_SLOW_BENCHMARKS") == "1"
 from algorithm_evaluation.tester import (  # noqa: E402
     CONFIG_BY_PROFILE,
     DEFAULT_BIOPSY_GENERATIONS,
-    get_algorithms_to_test,
+    get_legacy_algorithms_to_test,
     get_root_id,
 )
 from ctbs import run_single_test  # noqa: E402
@@ -56,7 +56,7 @@ def _selected_variants():
 def _selected_algorithm_indexes():
     requested = _parse_env_list("CTBF_BENCHMARK_ALGORITHM_INDEXES", int)
     if requested is None:
-        return set(range(len(get_algorithms_to_test())))
+        return set(range(len(get_legacy_algorithms_to_test())))
     return requested
 
 
@@ -101,7 +101,7 @@ def _benchmark_cases():
     for variant_name in BENCHMARK_VARIANTS:
         if variant_name not in selected_variants:
             continue
-        for algorithm_index in range(len(get_algorithms_to_test())):
+        for algorithm_index in range(len(get_legacy_algorithms_to_test())):
             if algorithm_index not in selected_algorithms:
                 continue
             cases.extend(_load_expected_rows(variant_name, algorithm_index))
@@ -116,7 +116,7 @@ def _case_id(case):
 
 def _current_metrics(case):
     variant = BENCHMARK_VARIANTS[case["variant_name"]]
-    algorithm = get_algorithms_to_test()[case["algorithm_index"]]
+    algorithm = get_legacy_algorithms_to_test()[case["algorithm_index"]]
     true_tree, rec_tree, nj_tree = run_single_test(
         seed=case["seed"],
         config=CONFIG_BY_PROFILE[variant["profile"]],

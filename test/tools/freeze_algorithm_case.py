@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from algorithm_evaluation.tester import CONFIG_BY_PROFILE, get_algorithms_to_test
+from algorithm_evaluation.tester import CONFIG_BY_PROFILE, get_legacy_algorithms_to_test
 from ctbs import distance_matrix_from_biopsy, use_cnp2cnp_to_compute_pairwise_distance
 from ctbs_utils import get_biopsy_nodes_ids, to_newick
 from evaluator_full import evaluate_4
@@ -125,7 +125,7 @@ def _algorithm_expectations(case, true_tree, cell_lists):
     ids = case["distance_matrix"]["ids"]
     dist_matrix = np.array(case["distance_matrix"]["matrix"], dtype=float)
 
-    for algorithm in get_algorithms_to_test():
+    for algorithm in get_legacy_algorithms_to_test():
         build_kwargs = {
             "r": case["r_dist"],
             "seed": case["seed"],

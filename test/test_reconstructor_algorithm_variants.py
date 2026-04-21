@@ -10,39 +10,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from algorithm_evaluation.tester import get_algorithms_to_test
+from algorithm_evaluation.tester import (
+    LEGACY_ALGORITHM_NAMES,
+    get_algorithms_to_test,
+    get_legacy_algorithms_to_test,
+)
 from ctbs_utils import to_newick
 from reconstructor import build_evolution_tree
 from simulator import Genotype
 
 
-EXPECTED_LEGACY_ALGORITHM_NAMES = [
-    "neighbor_joining_baseline",
-    "neighbor_joining_full_full",
-    "neighbor_joining_full_partial",
-    "neighbor_joining_full_cps_full",
-    "neighbor_joining_full_cps_partial",
-    "neighbor_joining_hybrid_full",
-    "neighbor_joining_hybrid_partial",
-    "neighbor_joining_hybrid_inverse_centrality_full",
-    "neighbor_joining_hybrid_inverse_centrality_partial",
-    "neighbor_joining_adaptive_centrality",
-    "neighbor_joining_adaptive_centrality_nonlinear",
-    "neighbor_joining_adaptive_centrality_reversed",
-    "neighbor_joining_hybrid_opt",
-    "neighbor_joining_hybrid_opt_adaptive",
-    "neighbor_joining_hybrid_opt_v2",
-    "neighbor_joining_hybrid_opt_refined",
-    "neighbor_joining_hybrid_anticentral_opt",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
-]
-
-
 def _legacy_algorithms():
-    return get_algorithms_to_test()
+    return get_legacy_algorithms_to_test()
 
 
 def _simple_four_cell_case():
@@ -123,7 +102,14 @@ def _assert_valid_rooted_tree(tree, original_ids):
 
 
 def test_legacy_algorithm_registry_order_is_stable():
-    assert [algorithm.__name__ for algorithm in _legacy_algorithms()] == EXPECTED_LEGACY_ALGORITHM_NAMES
+    assert [algorithm.__name__ for algorithm in _legacy_algorithms()] == LEGACY_ALGORITHM_NAMES
+
+
+def test_combined_algorithm_registry_keeps_legacy_prefix_and_unique_names():
+    algorithm_names = [algorithm.__name__ for algorithm in get_algorithms_to_test()]
+
+    assert algorithm_names[:len(LEGACY_ALGORITHM_NAMES)] == LEGACY_ALGORITHM_NAMES
+    assert len(algorithm_names) == len(set(algorithm_names))
 
 
 @pytest.mark.parametrize("algorithm", _legacy_algorithms(), ids=lambda algorithm: algorithm.__name__)

@@ -69,3 +69,23 @@ python test/tools/freeze_algorithm_case.py \
 The script refuses to overwrite existing files unless `--overwrite` is provided.
 
 By default, distance matrices are computed serially to avoid multiprocessing restrictions in sandboxed environments. Pass `--parallel-distance` if you want to use the existing multiprocessing distance helper.
+
+## Adding New Algorithm Variants
+
+The committed benchmark CSV files use legacy algorithm indexes from `algorithm_evaluation/tester.py`. Do not reorder or insert into `get_legacy_algorithms_to_test()`, because that changes the meaning of files such as `20rec.csv` and `20nj.csv`.
+
+For exploratory variants, add the callable to `get_experimental_algorithms_to_test()`. The public `get_algorithms_to_test()` function returns legacy algorithms first and experimental algorithms afterward, so old result indexes remain stable while new variants can still be selected by their appended index.
+
+Once an experimental variant is accepted, freeze expected behavior for it deliberately by adding committed result files or a frozen case fixture rather than changing legacy indexes.
+
+`algorithm_evaluation/tester.py` can select algorithms by either index or name. Name selection is useful for experimental variants whose appended index may change while you are developing:
+
+```bash
+python algorithm_evaluation/tester.py \
+  --r 4 \
+  --bss 0.5 \
+  --seed 295 \
+  --algorithm-name neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony
+```
+
+`--algorithm-index` and `--algorithm-name` can be combined; duplicates are ignored while preserving the requested order.
