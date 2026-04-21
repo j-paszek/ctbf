@@ -44,6 +44,16 @@ CTBF_BENCHMARK_SEEDS=295,689 \
 pytest -q test/test_algorithm_benchmark_regression.py
 ```
 
+Algorithms can also be selected by name:
+
+```bash
+CTBF_RUN_SLOW_BENCHMARKS=1 \
+CTBF_BENCHMARK_VARIANTS=r4bss05 \
+CTBF_BENCHMARK_ALGORITHM_NAMES=neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony \
+CTBF_BENCHMARK_SEEDS=295 \
+pytest -q test/test_algorithm_benchmark_regression.py
+```
+
 The benchmark path uses the existing `cnp2cnp` file-based workflow configured by `ctbs_config.json`, so it must be able to write into the configured `cnp2cnp` examples/output location.
 
 ## Freezing New Algorithm Cases
@@ -79,6 +89,21 @@ For exploratory variants, add the callable to `get_experimental_algorithms_to_te
 Once an experimental variant is accepted, freeze expected behavior for it deliberately by adding committed result files or a frozen case fixture rather than changing legacy indexes.
 
 `algorithm_evaluation/tester.py` can select algorithms by either index or name. Name selection is useful for experimental variants whose appended index may change while you are developing:
+
+```bash
+python algorithm_evaluation/tester.py --r 4 --bss 0.5 --list-algorithms
+```
+
+Preview a benchmark run without running simulations:
+
+```bash
+python algorithm_evaluation/tester.py \
+  --r 4 \
+  --bss 0.5 \
+  --seed 295 \
+  --algorithm-name neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony \
+  --dry-run
+```
 
 ```bash
 python algorithm_evaluation/tester.py \

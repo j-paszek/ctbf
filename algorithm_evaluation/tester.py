@@ -183,6 +183,10 @@ def parse_args():
                         help="Limit the run to selected algorithm index/indices.")
     parser.add_argument("--algorithm-name", action="append", default=None,
                         help="Limit the run to selected algorithm name(s). Can be passed multiple times.")
+    parser.add_argument("--list-algorithms", action="store_true",
+                        help="Print available algorithm indexes and names, then exit.")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print the resolved benchmark plan without running simulations.")
     parser.add_argument("--write-newick", action="store_true",
                         help="Print Newick trees during runs.")
     return parser.parse_args()
@@ -219,6 +223,36 @@ def select_algorithm_indices(algorithms, algorithm_indexes=None, algorithm_names
     if not selected:
         return list(range(len(algorithms)))
     return list(dict.fromkeys(selected))
+
+
+def format_algorithm_listing(algorithms, legacy_count=None):
+    lines = []
+    for index, algorithm in enumerate(algorithms):
+        name = getattr(algorithm, "__name__", str(algorithm))
+        if legacy_count is None:
+            category = "algorithm"
+        elif index < legacy_count:
+            category = "legacy"
+        else:
+            category = "experimental"
+        lines.append(f"{index}: {name} [{category}]")
+    return "\n".join(lines)
+
+
+def format_run_plan(variant_name, config_path, seeds_source, output_dir, seeds, algorithms, selected_indices):
+    lines = [
+        f"Variant: {variant_name}",
+        f"Config: {config_path}",
+        f"Seeds source: {seeds_source}",
+        f"Output directory: {output_dir}",
+        f"Seeds: {len(seeds)}",
+        "Seed values: " + ", ".join(str(seed) for seed in seeds),
+        f"Algorithms: {selected_indices}",
+    ]
+    for index in selected_indices:
+        algorithm_name = getattr(algorithms[index], "__name__", str(algorithms[index]))
+        lines.append(f"  {index}: {algorithm_name}")
+    return "\n".join(lines)
 
 
 # === Summary function ===
@@ -334,18 +368,34 @@ if __name__ == "__main__":
     config_path = Path(args.config) if args.config else CONFIG_BY_PROFILE[args.profile]
     variant_name = build_variant_name(args.r_dist, args.biopsy_size_scalable, args.profile)
     output_dir = Path(args.output_dir) if args.output_dir else SCRIPT_DIR / "results" / variant_name
+    algorithms = get_algorithms_to_test()
+    if args.list_algorithms:
+        print(format_algorithm_listing(algorithms, legacy_count=len(get_legacy_algorithms_to_test())))
+        sys.exit(0)
     selected_seeds = args.seed if args.seed else load_seeds(args.seeds_file)
 
-    algorithms = get_algorithms_to_test()
     selected_indices = select_algorithm_indices(
         algorithms,
         algorithm_indexes=args.algorithm_index,
         algorithm_names=args.algorithm_name,
     )
+    seeds_source = "CLI --seed" if args.seed else args.seeds_file
+
+    if args.dry_run:
+        print(format_run_plan(
+            variant_name,
+            config_path,
+            seeds_source,
+            output_dir,
+            selected_seeds,
+            algorithms,
+            selected_indices,
+        ))
+        sys.exit(0)
 
     print(f"Variant: {variant_name}")
     print(f"Config: {config_path}")
-    print(f"Seeds source: {'CLI --seed' if args.seed else args.seeds_file}")
+    print(f"Seeds source: {seeds_source}")
     print(f"Output directory: {output_dir}")
     print(f"Seeds: {len(selected_seeds)}")
     print(f"Algorithms: {selected_indices}")

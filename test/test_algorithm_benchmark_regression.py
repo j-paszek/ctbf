@@ -16,6 +16,7 @@ from algorithm_evaluation.tester import (  # noqa: E402
     DEFAULT_BIOPSY_GENERATIONS,
     get_legacy_algorithms_to_test,
     get_root_id,
+    select_algorithm_indices,
 )
 from ctbs import run_single_test  # noqa: E402
 from ctbs_utils import get_biopsy_nodes_ids  # noqa: E402
@@ -54,10 +55,16 @@ def _selected_variants():
 
 
 def _selected_algorithm_indexes():
-    requested = _parse_env_list("CTBF_BENCHMARK_ALGORITHM_INDEXES", int)
-    if requested is None:
-        return set(range(len(get_legacy_algorithms_to_test())))
-    return requested
+    algorithms = get_legacy_algorithms_to_test()
+    requested_indexes = _parse_env_list("CTBF_BENCHMARK_ALGORITHM_INDEXES", int)
+    requested_names = _parse_env_list("CTBF_BENCHMARK_ALGORITHM_NAMES")
+    return set(
+        select_algorithm_indices(
+            algorithms,
+            algorithm_indexes=list(requested_indexes or []),
+            algorithm_names=list(requested_names or []),
+        )
+    )
 
 
 def _selected_seeds():

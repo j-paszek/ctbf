@@ -1,4 +1,5 @@
 from pathlib import Path
+import importlib
 import sys
 
 import pytest
@@ -7,7 +8,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from algorithm_evaluation.tester import get_legacy_algorithms_to_test, select_algorithm_indices
+from algorithm_evaluation.tester import (
+    format_algorithm_listing,
+    format_run_plan,
+    get_legacy_algorithms_to_test,
+    select_algorithm_indices,
+)
 
 
 def test_select_algorithm_indices_defaults_to_all_algorithms():
@@ -53,3 +59,49 @@ def test_select_algorithm_indices_rejects_out_of_range_index():
     with pytest.raises(ValueError, match="out of range"):
         select_algorithm_indices(algorithms, algorithm_indexes=[len(algorithms)])
 
+
+def test_benchmark_regression_env_filter_accepts_algorithm_names(monkeypatch):
+    monkeypatch.setenv("CTBF_RUN_SLOW_BENCHMARKS", "1")
+    monkeypatch.setenv("CTBF_BENCHMARK_ALGORITHM_NAMES", "neighbor_joining_hybrid_anticentral_opt")
+    monkeypatch.delenv("CTBF_BENCHMARK_ALGORITHM_INDEXES", raising=False)
+
+    benchmark_regression = importlib.import_module("test_algorithm_benchmark_regression")
+    benchmark_regression = importlib.reload(benchmark_regression)
+
+    assert benchmark_regression._selected_algorithm_indexes() == {16}
+
+
+def test_format_algorithm_listing_marks_legacy_and_experimental_algorithms():
+    algorithms = get_legacy_algorithms_to_test()
+
+    def experimental_algorithm():
+        return None
+
+    listing = format_algorithm_listing(
+        algorithms + [experimental_algorithm],
+        legacy_count=len(algorithms),
+    )
+
+    assert "0: neighbor_joining_baseline [legacy]" in listing
+    assert "20: neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony [legacy]" in listing
+    assert "21: experimental_algorithm [experimental]" in listing
+
+
+def test_format_run_plan_shows_resolved_seeds_and_algorithms():
+    algorithms = get_legacy_algorithms_to_test()
+
+    plan = format_run_plan(
+        variant_name="r4bss05",
+        config_path="test/data/config_for_pic.json",
+        seeds_source="CLI --seed",
+        output_dir="algorithm_evaluation/results/r4bss05",
+        seeds=[295],
+        algorithms=algorithms,
+        selected_indices=[20],
+    )
+
+    assert "Variant: r4bss05" in plan
+    assert "Seeds source: CLI --seed" in plan
+    assert "Seed values: 295" in plan
+    assert "Algorithms: [20]" in plan
+    assert "20: neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony" in plan
