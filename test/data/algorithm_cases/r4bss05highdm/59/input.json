@@ -1,0 +1,388 @@
+{
+  "case_id": "r4bss05highdm_seed59",
+  "variant": "r4bss05highdm",
+  "seed": 59,
+  "profile": "highdm",
+  "config": "/Users/voronwe/Work/PyCharmProjects/ctbf/test/data/config_high_dm.json",
+  "bedfile": null,
+  "r_dist": 4,
+  "biopsy_size_scalable": 0.5,
+  "biopsy_generations": [
+    4,
+    6,
+    8
+  ],
+  "true_tree": {
+    "directed": true,
+    "multigraph": false,
+    "graph": {},
+    "nodes": [
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "generation": 0,
+        "cell_id": 0,
+        "id": 0
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "generation": 1,
+        "cell_id": 0,
+        "id": 1
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "generation": 2,
+        "cell_id": 0,
+        "id": 2
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "generation": 3,
+        "cell_id": 0,
+        "id": 3
+      },
+      {
+        "genome": [
+          2,
+          2,
+          8,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "generation": 4,
+        "cell_id": 4,
+        "id": 4
+      },
+      {
+        "genome": [
+          2,
+          2,
+          8,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "generation": 5,
+        "cell_id": 4,
+        "id": 5
+      },
+      {
+        "genome": [
+          2,
+          5,
+          11,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          2
+        ],
+        "generation": 6,
+        "cell_id": 6,
+        "id": 6
+      },
+      {
+        "genome": [
+          2,
+          5,
+          11,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          2
+        ],
+        "generation": 7,
+        "cell_id": 6,
+        "id": 7
+      },
+      {
+        "genome": [
+          2,
+          9,
+          15,
+          9,
+          9,
+          9,
+          9,
+          9,
+          9,
+          6
+        ],
+        "generation": 7,
+        "cell_id": 8,
+        "id": 8
+      },
+      {
+        "genome": [
+          2,
+          5,
+          11,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          2
+        ],
+        "generation": 8,
+        "cell_id": 6,
+        "id": 9
+      },
+      {
+        "genome": [
+          2,
+          9,
+          15,
+          9,
+          9,
+          9,
+          9,
+          9,
+          9,
+          12
+        ],
+        "generation": 8,
+        "cell_id": 10,
+        "id": 10
+      },
+      {
+        "genome": [
+          1,
+          9,
+          15,
+          9,
+          9,
+          9,
+          9,
+          9,
+          9,
+          6
+        ],
+        "generation": 8,
+        "cell_id": 11,
+        "id": 11
+      },
+      {
+        "genome": [
+          7,
+          9,
+          15,
+          9,
+          9,
+          9,
+          9,
+          9,
+          9,
+          5
+        ],
+        "generation": 8,
+        "cell_id": 12,
+        "id": 12
+      }
+    ],
+    "links": [
+      {
+        "events": "",
+        "source": 0,
+        "target": 1
+      },
+      {
+        "events": "",
+        "source": 1,
+        "target": 2
+      },
+      {
+        "events": "",
+        "source": 2,
+        "target": 3
+      },
+      {
+        "events": "duplication(pos=2, copies=6)",
+        "source": 3,
+        "target": 4
+      },
+      {
+        "events": "",
+        "source": 4,
+        "target": 5
+      },
+      {
+        "events": "duplication(pos=1-8, copies=3)",
+        "source": 5,
+        "target": 6
+      },
+      {
+        "events": "",
+        "source": 6,
+        "target": 7
+      },
+      {
+        "events": "duplication(pos=1-9, copies=4)",
+        "source": 6,
+        "target": 8
+      },
+      {
+        "events": "",
+        "source": 7,
+        "target": 9
+      },
+      {
+        "events": "duplication(pos=9, copies=6)",
+        "source": 8,
+        "target": 10
+      },
+      {
+        "events": "loss(pos=0, copies=-1)",
+        "source": 8,
+        "target": 11
+      },
+      {
+        "events": "duplication(pos=0, copies=5);loss(pos=9, copies=-1)",
+        "source": 8,
+        "target": 12
+      }
+    ]
+  },
+  "biopsies": [
+    {
+      "generation": 4,
+      "cells": []
+    },
+    {
+      "generation": 6,
+      "cells": []
+    },
+    {
+      "generation": 8,
+      "cells": [
+        {
+          "node_id": 11,
+          "cell_id": 11,
+          "generation": 8,
+          "genome": [
+            1,
+            9,
+            15,
+            9,
+            9,
+            9,
+            9,
+            9,
+            9,
+            6
+          ]
+        },
+        {
+          "node_id": 12,
+          "cell_id": 12,
+          "generation": 8,
+          "genome": [
+            7,
+            9,
+            15,
+            9,
+            9,
+            9,
+            9,
+            9,
+            9,
+            5
+          ]
+        }
+      ]
+    }
+  ],
+  "distance_matrices": {
+    "cnp2cnp": {
+      "ids": [
+        11,
+        12
+      ],
+      "matrix": [
+        [
+          0.0,
+          2.0
+        ],
+        [
+          2.0,
+          0.0
+        ]
+      ]
+    },
+    "true_tree": {
+      "ids": [
+        11,
+        12
+      ],
+      "matrix": [
+        [
+          0.0,
+          3.0
+        ],
+        [
+          3.0,
+          0.0
+        ]
+      ]
+    }
+  }
+}

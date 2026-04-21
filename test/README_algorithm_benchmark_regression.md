@@ -80,6 +80,53 @@ The script refuses to overwrite existing files unless `--overwrite` is provided.
 
 By default, distance matrices are computed serially to avoid multiprocessing restrictions in sandboxed environments. Pass `--parallel-distance` if you want to use the existing multiprocessing distance helper.
 
+## Freezing Nested Variant Fixtures
+
+Use `test/tools/freeze_algorithm_variant_cases.py` for the richer fixture layout used for fast algorithm iteration. By default it freezes all seven benchmark variants and the three reference algorithms:
+
+- `neighbor_joining_baseline`
+- `neighbor_joining_hybrid_anticentral_adaptive_v3`
+- `neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony`
+
+The output layout is:
+
+```text
+test/data/algorithm_cases/<variant>/<seed>/
+  input.json
+  full_cnp/<algorithm>.json
+  biopsy_guided_top/<algorithm>.json
+```
+
+`input.json` stores the true tree, biopsy cells, the frozen `cnp2cnp` distance matrix, and the true-tree distance matrix. Each algorithm result stores the reconstructed tree, Newick string, root, ancestor-F1 metrics, and GRF score.
+
+Preview a batch without writing files:
+
+```bash
+python test/tools/freeze_algorithm_variant_cases.py \
+  --variant r4bss05 \
+  --seed 295 \
+  --dry-run
+```
+
+Freeze one variant and one seed:
+
+```bash
+python test/tools/freeze_algorithm_variant_cases.py \
+  --variant r4bss05 \
+  --seed 295
+```
+
+Freeze only inputs, without algorithm outputs:
+
+```bash
+python test/tools/freeze_algorithm_variant_cases.py \
+  --variant r4bss05 \
+  --seed 295 \
+  --input-only
+```
+
+The tool skips no failures silently: it reports failures and exits non-zero at the end. Use `--fail-fast` to stop at the first failing case. Existing files are not overwritten unless `--overwrite` is passed.
+
 ## Adding New Algorithm Variants
 
 The committed benchmark CSV files use legacy algorithm indexes from `algorithm_evaluation/tester.py`. Do not reorder or insert into `get_legacy_algorithms_to_test()`, because that changes the meaning of files such as `20rec.csv` and `20nj.csv`.

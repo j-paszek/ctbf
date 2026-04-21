@@ -1,0 +1,69 @@
+{
+  "case_id": "r2bss025_seed894",
+  "variant": "r2bss025",
+  "seed": 894,
+  "algorithm": "neighbor_joining_baseline",
+  "mode": "full_cnp",
+  "root": 4,
+  "newick": "4;",
+  "reconstructed_tree": {
+    "directed": true,
+    "multigraph": false,
+    "graph": {},
+    "nodes": [
+      {
+        "genome": [
+          2,
+          3,
+          2,
+          2,
+          3,
+          1,
+          2,
+          2,
+          4,
+          2
+        ],
+        "cell_id": 4,
+        "id": 4
+      }
+    ],
+    "links": []
+  },
+  "metrics": {
+    "ancestors_unique_restricted": {
+      "TP": 0,
+      "FP": 0,
+      "FN": 1,
+      "precision": 0.0,
+      "recall": 0.0,
+      "F1": 0.0,
+      "IoU": 0.0,
+      "num_unique_pairs_true": 1,
+      "num_unique_pairs_rec": 0
+    },
+    "ancestors_multiset": {
+      "TP": 0,
+      "FP": 0,
+      "FN": 131,
+      "precision": 0.0,
+      "recall": 0.0,
+      "F1": 0.0,
+      "IoU": 0.0,
+      "num_pairs_true": 131,
+      "num_pairs_rec": 0
+    },
+    "ancestors_unique": {
+      "TP": 0,
+      "FP": 0,
+      "FN": 33,
+      "precision": 0.0,
+      "recall": 0.0,
+      "F1": 0.0,
+      "IoU": 0.0,
+      "num_unique_pairs_true": 33,
+      "num_unique_pairs_rec": 0
+    },
+    "grf": 0.09136746622674008
+  }
+}

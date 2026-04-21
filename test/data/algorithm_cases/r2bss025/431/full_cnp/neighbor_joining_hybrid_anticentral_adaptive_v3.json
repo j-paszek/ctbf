@@ -1,0 +1,112 @@
+{
+  "case_id": "r2bss025_seed431",
+  "variant": "r2bss025",
+  "seed": 431,
+  "algorithm": "neighbor_joining_hybrid_anticentral_adaptive_v3",
+  "mode": "full_cnp",
+  "root": 11,
+  "newick": "(11:3.0000,16:3.0000)11;",
+  "reconstructed_tree": {
+    "directed": true,
+    "multigraph": false,
+    "graph": {},
+    "nodes": [
+      {
+        "genome": [
+          4,
+          8,
+          2,
+          2,
+          1,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 11,
+        "id": 11
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 16,
+        "id": 16
+      },
+      {
+        "genome": [
+          4,
+          8,
+          2,
+          2,
+          1,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 11,
+        "id": 18
+      }
+    ],
+    "links": [
+      {
+        "weight": 3.0,
+        "source": 18,
+        "target": 11
+      },
+      {
+        "weight": 3.0,
+        "source": 18,
+        "target": 16
+      }
+    ]
+  },
+  "metrics": {
+    "ancestors_unique_restricted": {
+      "TP": 1,
+      "FP": 1,
+      "FN": 1,
+      "precision": 0.5,
+      "recall": 0.5,
+      "F1": 0.5,
+      "IoU": 0.3333333333333333,
+      "num_unique_pairs_true": 2,
+      "num_unique_pairs_rec": 2
+    },
+    "ancestors_multiset": {
+      "TP": 1,
+      "FP": 1,
+      "FN": 141,
+      "precision": 0.5,
+      "recall": 0.007042253521126761,
+      "F1": 0.01388888888888889,
+      "IoU": 0.006993006993006993,
+      "num_pairs_true": 142,
+      "num_pairs_rec": 2
+    },
+    "ancestors_unique": {
+      "TP": 1,
+      "FP": 1,
+      "FN": 23,
+      "precision": 0.5,
+      "recall": 0.041666666666666664,
+      "F1": 0.07692307692307693,
+      "IoU": 0.04,
+      "num_unique_pairs_true": 24,
+      "num_unique_pairs_rec": 2
+    },
+    "grf": 0.1501009031558751
+  }
+}

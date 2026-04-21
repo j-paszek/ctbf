@@ -1,0 +1,280 @@
+{
+  "case_id": "r2bss025_seed162",
+  "variant": "r2bss025",
+  "seed": 162,
+  "algorithm": "neighbor_joining_baseline",
+  "mode": "full_cnp",
+  "root": 33,
+  "newick": "((33:0.0000,((6:0.0000,12:1.0000)6:0.0000,22:2.0000)6:2.0000)33:0.0000,(24:0.0000,5:2.0000)24:3.0000)33;",
+  "reconstructed_tree": {
+    "directed": true,
+    "multigraph": false,
+    "graph": {},
+    "nodes": [
+      {
+        "genome": [
+          1,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          5
+        ],
+        "cell_id": 12,
+        "id": 12
+      },
+      {
+        "genome": [
+          2,
+          2,
+          4,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "cell_id": 22,
+        "id": 22
+      },
+      {
+        "genome": [
+          4,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          6
+        ],
+        "cell_id": 33,
+        "id": 33
+      },
+      {
+        "genome": [
+          1,
+          2,
+          2,
+          3,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 5,
+        "id": 5
+      },
+      {
+        "genome": [
+          1,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "cell_id": 6,
+        "id": 6
+      },
+      {
+        "genome": [
+          4,
+          2,
+          1,
+          3,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 24,
+        "id": 24
+      },
+      {
+        "genome": [
+          1,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "cell_id": 6,
+        "id": 35
+      },
+      {
+        "genome": [
+          1,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "cell_id": 6,
+        "id": 36
+      },
+      {
+        "genome": [
+          4,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          6
+        ],
+        "cell_id": 33,
+        "id": 37
+      },
+      {
+        "genome": [
+          4,
+          2,
+          1,
+          3,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 24,
+        "id": 38
+      },
+      {
+        "genome": [
+          4,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          6
+        ],
+        "cell_id": 33,
+        "id": 39
+      }
+    ],
+    "links": [
+      {
+        "weight": 0.0,
+        "source": 35,
+        "target": 6
+      },
+      {
+        "weight": 1.0,
+        "source": 35,
+        "target": 12
+      },
+      {
+        "weight": 0.0,
+        "source": 36,
+        "target": 35
+      },
+      {
+        "weight": 2.0,
+        "source": 36,
+        "target": 22
+      },
+      {
+        "weight": 0.0,
+        "source": 37,
+        "target": 33
+      },
+      {
+        "weight": 2.0,
+        "source": 37,
+        "target": 36
+      },
+      {
+        "weight": 0.0,
+        "source": 38,
+        "target": 24
+      },
+      {
+        "weight": 2.0,
+        "source": 38,
+        "target": 5
+      },
+      {
+        "weight": 0.0,
+        "source": 39,
+        "target": 37
+      },
+      {
+        "weight": 3.0,
+        "source": 39,
+        "target": 38
+      }
+    ]
+  },
+  "metrics": {
+    "ancestors_unique_restricted": {
+      "TP": 2,
+      "FP": 9,
+      "FN": 5,
+      "precision": 0.18181818181818182,
+      "recall": 0.2857142857142857,
+      "F1": 0.2222222222222222,
+      "IoU": 0.125,
+      "num_unique_pairs_true": 7,
+      "num_unique_pairs_rec": 11
+    },
+    "ancestors_multiset": {
+      "TP": 5,
+      "FP": 19,
+      "FN": 286,
+      "precision": 0.20833333333333334,
+      "recall": 0.01718213058419244,
+      "F1": 0.03174603174603175,
+      "IoU": 0.016129032258064516,
+      "num_pairs_true": 291,
+      "num_pairs_rec": 24
+    },
+    "ancestors_unique": {
+      "TP": 2,
+      "FP": 9,
+      "FN": 49,
+      "precision": 0.18181818181818182,
+      "recall": 0.0392156862745098,
+      "F1": 0.06451612903225806,
+      "IoU": 0.03333333333333333,
+      "num_unique_pairs_true": 51,
+      "num_unique_pairs_rec": 11
+    },
+    "grf": 0.15362858191324058
+  }
+}

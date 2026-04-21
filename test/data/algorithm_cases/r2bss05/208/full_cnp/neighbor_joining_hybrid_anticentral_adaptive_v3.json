@@ -1,0 +1,238 @@
+{
+  "case_id": "r2bss05_seed208",
+  "variant": "r2bss05",
+  "seed": 208,
+  "algorithm": "neighbor_joining_hybrid_anticentral_adaptive_v3",
+  "mode": "full_cnp",
+  "root": 0,
+  "newick": "(((0:1.0000,(11:1.0000,20:1.0000)11:1.0000)0:2.0000,23:2.0000)0:2.0000,4:2.0000)0;",
+  "reconstructed_tree": {
+    "directed": true,
+    "multigraph": false,
+    "graph": {},
+    "nodes": [
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "cell_id": 0,
+        "id": 0
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          3
+        ],
+        "cell_id": 11,
+        "id": 11
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          3,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 4,
+        "id": 4
+      },
+      {
+        "genome": [
+          2,
+          4,
+          1,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "cell_id": 23,
+        "id": 23
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          2,
+          2,
+          2,
+          3
+        ],
+        "cell_id": 20,
+        "id": 20
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          3
+        ],
+        "cell_id": 11,
+        "id": 25
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "cell_id": 0,
+        "id": 26
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "cell_id": 0,
+        "id": 27
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "cell_id": 0,
+        "id": 28
+      }
+    ],
+    "links": [
+      {
+        "weight": 1.0,
+        "source": 25,
+        "target": 11
+      },
+      {
+        "weight": 1.0,
+        "source": 25,
+        "target": 20
+      },
+      {
+        "weight": 1.0,
+        "source": 26,
+        "target": 0
+      },
+      {
+        "weight": 1.0,
+        "source": 26,
+        "target": 25
+      },
+      {
+        "weight": 2.0,
+        "source": 27,
+        "target": 26
+      },
+      {
+        "weight": 2.0,
+        "source": 27,
+        "target": 23
+      },
+      {
+        "weight": 2.0,
+        "source": 28,
+        "target": 27
+      },
+      {
+        "weight": 2.0,
+        "source": 28,
+        "target": 4
+      }
+    ]
+  },
+  "metrics": {
+    "ancestors_unique_restricted": {
+      "TP": 7,
+      "FP": 0,
+      "FN": 1,
+      "precision": 1.0,
+      "recall": 0.875,
+      "F1": 0.9333333333333333,
+      "IoU": 0.875,
+      "num_unique_pairs_true": 8,
+      "num_unique_pairs_rec": 7
+    },
+    "ancestors_multiset": {
+      "TP": 20,
+      "FP": 0,
+      "FN": 113,
+      "precision": 1.0,
+      "recall": 0.15037593984962405,
+      "F1": 0.26143790849673204,
+      "IoU": 0.15037593984962405,
+      "num_pairs_true": 133,
+      "num_pairs_rec": 20
+    },
+    "ancestors_unique": {
+      "TP": 7,
+      "FP": 0,
+      "FN": 4,
+      "precision": 1.0,
+      "recall": 0.6363636363636364,
+      "F1": 0.7777777777777778,
+      "IoU": 0.6363636363636364,
+      "num_unique_pairs_true": 11,
+      "num_unique_pairs_rec": 7
+    },
+    "grf": 0.3230130690292392
+  }
+}
