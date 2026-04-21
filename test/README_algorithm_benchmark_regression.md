@@ -45,3 +45,27 @@ pytest -q test/test_algorithm_benchmark_regression.py
 ```
 
 The benchmark path uses the existing `cnp2cnp` file-based workflow configured by `ctbs_config.json`, so it must be able to write into the configured `cnp2cnp` examples/output location.
+
+## Freezing New Algorithm Cases
+
+Use `test/tools/freeze_algorithm_case.py` to generate a new frozen regression fixture from a simulator run. The script stores:
+
+- the simulator tree in `test/data/tree_samples/`,
+- exact biopsy node IDs per generation,
+- the distance matrix used by reconstruction,
+- grouped expected outputs for all legacy algorithms unless `--no-expectations` is passed.
+
+Example:
+
+```bash
+python test/tools/freeze_algorithm_case.py \
+  --seed 689 \
+  --r 4 \
+  --bss 0.5 \
+  --profile base \
+  --case-id seed689_r4bss05_new
+```
+
+The script refuses to overwrite existing files unless `--overwrite` is provided.
+
+By default, distance matrices are computed serially to avoid multiprocessing restrictions in sandboxed environments. Pass `--parallel-distance` if you want to use the existing multiprocessing distance helper.
