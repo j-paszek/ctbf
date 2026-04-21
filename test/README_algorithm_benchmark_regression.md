@@ -127,6 +127,130 @@ python test/tools/freeze_algorithm_variant_cases.py \
 
 The tool skips no failures silently: it reports failures and exits non-zero at the end. Use `--fail-fast` to stop at the first failing case. Existing files are not overwritten unless `--overwrite` is passed.
 
+## JSON Fixture Workflows
+
+The nested JSON fixtures support fast checks that do not rerun the simulator except where explicitly noted.
+
+## Regenerating The Heatmap From JSON
+
+Run:
+
+```bash
+python test/tools/heatmaps_from_json.py
+```
+
+or from this readme
+
+```bash
+python tools/heatmaps_from_json.py
+```
+
+
+This reads:
+
+```text
+test/data/algorithm_cases/
+```
+
+and writes:
+
+```text
+test/data/results_from_json/
+test/heatmaps_side_by_side_from_json.png
+```
+
+If Matplotlib reports unwritable cache directories, use temporary cache paths:
+
+```bash
+MPLCONFIGDIR=/tmp/ctbf_mpl_config \
+XDG_CACHE_HOME=/tmp/ctbf_xdg_cache \
+MPLBACKEND=Agg \
+python test/tools/heatmaps_from_json.py
+```
+
+To write outputs outside the repo:
+
+```bash
+MPLCONFIGDIR=/tmp/ctbf_mpl_config \
+XDG_CACHE_HOME=/tmp/ctbf_xdg_cache \
+MPLBACKEND=Agg \
+python test/tools/heatmaps_from_json.py \
+  --rankings-dir /tmp/ctbf_json_rankings \
+  --output-file /tmp/ctbf_heatmaps_side_by_side_from_json.png
+```
+
+To regenerate only selected variants:
+
+```bash
+python test/tools/heatmaps_from_json.py \
+  --variant r4bss05 \
+  --variant r4bss05highdm
+```
+
+The test suite also validates these JSON workflows on a representative fixture:
+
+```bash
+pytest -q test/test_algorithm_case_json_workflows.py
+```
+
+Those tests cover:
+
+- loading `input.json.true_tree` and stored reconstructed trees to recompute evaluator metrics,
+- recomputing the frozen `cnp2cnp` matrix from biopsy cells,
+- recomputing the true-tree distance matrix,
+- rerunning reconstruction from frozen biopsies and matrices,
+- building pairwise rankings directly from JSON outputs.
+
+## Testing Evaluator Functions From JSON Trees
+
+To test evaluator behavior without rerunning simulation or reconstruction, load:
+
+```text
+test/data/algorithm_cases/<variant>/<seed>/input.json
+test/data/algorithm_cases/<variant>/<seed>/full_cnp/<algorithm>.json
+```
+
+Use:
+
+- `input.json["true_tree"]` as the true tree,
+- `full_cnp/<algorithm>.json["reconstructed_tree"]` as the reconstructed tree,
+- `full_cnp/<algorithm>.json["metrics"]` as the expected evaluator output.
+
+The existing test that does this is:
+
+```bash
+pytest -q test/test_algorithm_case_json_workflows.py::test_json_reconstructed_tree_metrics_match_stored_values
+```
+
+From inside the `test/` directory, omit the leading `test/`:
+
+```bash
+pytest -q test_algorithm_case_json_workflows.py::test_json_reconstructed_tree_metrics_match_stored_values
+```
+
+To run evaluator replay for every frozen variant, seed, mode, and stored algorithm:
+
+```bash
+pytest -q test/test_algorithm_case_json_workflows.py::test_all_json_reconstructed_tree_metrics_match_stored_values
+```
+
+From inside the `test/` directory:
+
+```bash
+pytest -q test_algorithm_case_json_workflows.py::test_all_json_reconstructed_tree_metrics_match_stored_values
+```
+
+That test:
+
+1. loads the stored true tree from `input.json.true_tree`,
+2. loads the stored reconstructed tree from `full_cnp/{algorithm}.json.reconstructed_tree` and `biopsy_guided_top/{algorithm}.json.reconstructed_tree`,
+3. rebuilds NetworkX trees from the JSON node-link format,
+4. reruns `evaluate_4(true_tree, reconstructed_tree, restrict_labels=...)`,
+5. reruns `grf_tree(true_tree, reconstructed_tree)`,
+6. compares the recomputed values to the metrics stored in the algorithm result JSON.
+
+This is useful when changing evaluator code: if reconstruction has not changed, evaluator regressions show up immediately against frozen tree pairs.
+
 ## Adding New Algorithm Variants
 
 The committed benchmark CSV files use legacy algorithm indexes from `algorithm_evaluation/tester.py`. Do not reorder or insert into `get_legacy_algorithms_to_test()`, because that changes the meaning of files such as `20rec.csv` and `20nj.csv`.
