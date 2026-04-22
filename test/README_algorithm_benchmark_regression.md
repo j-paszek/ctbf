@@ -131,6 +131,62 @@ The tool skips no failures silently: it reports failures and exits non-zero at t
 
 The nested JSON fixtures support fast checks that do not rerun the simulator except where explicitly noted.
 
+## Universal Legacy JSON Checker
+
+After adding a new algorithm result JSON, run the legacy checker from the repo root:
+
+```bash
+python test/tools/run_algorithm_case_json_checks.py
+```
+
+From inside the `test/` directory:
+
+```bash
+python tools/run_algorithm_case_json_checks.py
+```
+
+The default checker runs:
+
+- evaluator replay for every stored reconstructed tree,
+- reconstruction determinism for every stored algorithm result,
+- JSON heatmap and ranking CSV regeneration.
+
+This is the recommended default after adding a new algorithm because it verifies that stored trees still score correctly, reconstruction remains deterministic from frozen inputs, and the heatmap workflow can consume the new files.
+
+For the full infrastructure replay, run:
+
+```bash
+python test/tools/run_algorithm_case_json_checks.py --all
+```
+
+From inside the `test/` directory:
+
+```bash
+python tools/run_algorithm_case_json_checks.py --all
+```
+
+`--all` also recomputes both frozen distance matrices:
+
+- true-tree distance matrices from `input.json.true_tree`,
+- `cnp2cnp` distance matrices from `input.json.biopsies`.
+
+Useful runner options:
+
+```bash
+python test/tools/run_algorithm_case_json_checks.py --dry-run
+python test/tools/run_algorithm_case_json_checks.py --all --skip-heatmap
+python test/tools/run_algorithm_case_json_checks.py --check metrics
+python test/tools/run_algorithm_case_json_checks.py --check determinism --check heatmap
+```
+
+Available check names are:
+
+- `metrics`
+- `determinism`
+- `true-tree-matrix`
+- `cnp2cnp-matrix`
+- `heatmap`
+
 ## Regenerating The Heatmap From JSON
 
 Run:
