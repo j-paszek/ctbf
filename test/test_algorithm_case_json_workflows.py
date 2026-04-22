@@ -74,6 +74,13 @@ def _stored_reconstruction_cases():
     return _stored_tree_metric_cases()
 
 
+def _stored_input_cases():
+    return [
+        (variant, seed, seed_dir / "input.json")
+        for variant, seed, seed_dir in variant_seed_dirs(DEFAULT_CASES_ROOT)
+    ]
+
+
 @pytest.mark.parametrize("mode", ["full_cnp", "biopsy_guided_top"])
 @pytest.mark.parametrize("algorithm", ALGORITHMS)
 def test_json_reconstructed_tree_metrics_match_stored_values(mode, algorithm):
@@ -110,8 +117,45 @@ def test_json_biopsies_recompute_cnp2cnp_matrix():
     assert np.array_equal(matrix, np.array(expected["matrix"], dtype=float))
 
 
+@pytest.mark.json_full
+@pytest.mark.parametrize(
+    "case",
+    _stored_input_cases(),
+    ids=lambda case: f"{case[0]}-{case[1]}",
+)
+def test_all_json_biopsies_recompute_cnp2cnp_matrix(case):
+    _, _, input_file = case
+    input_case = load_json(input_file)
+    cell_lists = freeze_algorithm_variant_cases.cell_lists_from_input(input_case)
+    unique_cells = freeze_algorithm_variant_cases.unique_cells_by_cell_id(cell_lists)
+
+    ids, matrix = freeze_algorithm_variant_cases.cnp2cnp_distance_matrix(unique_cells)
+
+    expected = input_case["distance_matrices"]["cnp2cnp"]
+    assert ids == expected["ids"]
+    assert np.array_equal(matrix, np.array(expected["matrix"], dtype=float))
+
+
 def test_json_true_tree_recomputes_true_tree_distance_matrix():
     input_case = _input_case()
+    true_tree = freeze_algorithm_variant_cases.true_tree_from_input(input_case)
+    expected = input_case["distance_matrices"]["true_tree"]
+
+    ids, matrix = freeze_algorithm_variant_cases.true_tree_distance_matrix(true_tree, expected["ids"])
+
+    assert ids == expected["ids"]
+    assert np.array_equal(matrix, np.array(expected["matrix"], dtype=float))
+
+
+@pytest.mark.json_full
+@pytest.mark.parametrize(
+    "case",
+    _stored_input_cases(),
+    ids=lambda case: f"{case[0]}-{case[1]}",
+)
+def test_all_json_true_tree_recomputes_true_tree_distance_matrix(case):
+    _, _, input_file = case
+    input_case = load_json(input_file)
     true_tree = freeze_algorithm_variant_cases.true_tree_from_input(input_case)
     expected = input_case["distance_matrices"]["true_tree"]
 

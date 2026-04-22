@@ -300,6 +300,80 @@ That test:
 
 This is useful when changing reconstruction code: any behavioral change in a stored algorithm shows up as a deterministic tree mismatch.
 
+## Testing Frozen Distance Matrices From JSON
+
+The frozen `input.json` file stores two distance matrices:
+
+```text
+input.json["distance_matrices"]["cnp2cnp"]
+input.json["distance_matrices"]["true_tree"]
+```
+
+### cnp2cnp Matrix Replay
+
+To test `cnp2cnp` matrix generation on the representative fixture:
+
+```bash
+pytest -q test/test_algorithm_case_json_workflows.py::test_json_biopsies_recompute_cnp2cnp_matrix
+```
+
+From inside the `test/` directory:
+
+```bash
+pytest -q test_algorithm_case_json_workflows.py::test_json_biopsies_recompute_cnp2cnp_matrix
+```
+
+To run it for every frozen variant and seed:
+
+```bash
+pytest -q test/test_algorithm_case_json_workflows.py::test_all_json_biopsies_recompute_cnp2cnp_matrix
+```
+
+From inside the `test/` directory:
+
+```bash
+pytest -q test_algorithm_case_json_workflows.py::test_all_json_biopsies_recompute_cnp2cnp_matrix
+```
+
+That test:
+
+1. loads biopsy cells from `input.json.biopsies`,
+2. runs `cnp2cnp` matrix generation,
+3. compares the generated IDs and matrix to `input.json.distance_matrices.cnp2cnp`.
+
+### True-Tree Distance Matrix Replay
+
+To test true-tree distance matrix generation on the representative fixture:
+
+```bash
+pytest -q test/test_algorithm_case_json_workflows.py::test_json_true_tree_recomputes_true_tree_distance_matrix
+```
+
+From inside the `test/` directory:
+
+```bash
+pytest -q test_algorithm_case_json_workflows.py::test_json_true_tree_recomputes_true_tree_distance_matrix
+```
+
+To run it for every frozen variant and seed:
+
+```bash
+pytest -q test/test_algorithm_case_json_workflows.py::test_all_json_true_tree_recomputes_true_tree_distance_matrix
+```
+
+From inside the `test/` directory:
+
+```bash
+pytest -q test_algorithm_case_json_workflows.py::test_all_json_true_tree_recomputes_true_tree_distance_matrix
+```
+
+That test:
+
+1. loads the true tree from `input.json.true_tree`,
+2. reads biopsy-cell IDs from `input.json.distance_matrices.true_tree.ids`,
+3. recomputes distances on the stored true tree,
+4. compares the generated IDs and matrix to `input.json.distance_matrices.true_tree`.
+
 ## Adding New Algorithm Variants
 
 The committed benchmark CSV files use legacy algorithm indexes from `algorithm_evaluation/tester.py`. Do not reorder or insert into `get_legacy_algorithms_to_test()`, because that changes the meaning of files such as `20rec.csv` and `20nj.csv`.
