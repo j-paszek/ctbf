@@ -3,7 +3,6 @@ import random
 from functools import partial
 import networkx as nx
 import numpy as np
-import plotly.graph_objects as go
 from collections import defaultdict
 from simulator import Genotype
 from reconstructor_ancestor_selection import (
@@ -21,21 +20,19 @@ from reconstructor_pair_selection import (
     _select_pair_hybrid,
     _select_pair_hybrid_inv_centrality,
 )
+from reconstructor_anticentral import (
+    _initial_anticentral_v3_centrality,
+    _anticentral_adaptive_v3_score_matrix,
+    _best_pair_from_score,
+    _ordered_pairs_by_score,
+    _copy_parent_internal_node,
+    _merge_parent_child,
+    _total_deviation_from_baseline,
+)
+from reconstructor_utils import parse_distance_matrix, visualize_tree_plotly
 
 
 NJ_REC_TR_ROOT_ID = -1
-
-
-def parse_distance_matrix(path):
-    with open(path) as f:
-        n = int(f.readline())
-        ids = []
-        matrix = []
-        for _ in range(n):
-            parts = f.readline().strip().split()
-            ids.append(int(parts[0]))
-            matrix.append([float(x) for x in parts[1:]])
-    return ids, np.array(matrix)
 
 
 def neighbor_joining_standard(dist_matrix, cells, max_id, seed=7, existing_tree=None):
@@ -1355,49 +1352,26 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3(dist_matrix, cells, max_id,
 
     next_id = max_id + 1
 
-    # Compute base "centrality" (inverse mean distance)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        c = 1.0 / (np.mean(D, axis=1) + 1e-9)
-    c = (c - np.min(c)) / (np.ptp(c) + 1e-12)
+    c = _initial_anticentral_v3_centrality(D)
 
     while len(node_list) > 1:
-        n = len(D)
-        score = np.full((n, n), np.inf)
-
-        # Compute adaptive anticentral scores
-        for i in range(n):
-            for j in range(i + 1, n):
-                c_diff = abs(c[i] - c[j])
-                adaptive = np.exp(-gamma * c_diff / (np.std(c) + 1e-9))
-                anticentral_term = (2 - (c[i] + c[j]))  # penalize high-centrality nodes
-                score[i, j] = alpha * D[i, j] * (1 + gamma * adaptive) - beta * anticentral_term
-                score[i, j] += rng.random() * 1e-6  # break ties
-
-        i_best, j_best = divmod(np.argmin(score), n)
-        if j_best < i_best:
-            i_best, j_best = j_best, i_best
+        score = _anticentral_adaptive_v3_score_matrix(D, c, rng, alpha, beta, gamma)
+        i_best, j_best = _best_pair_from_score(score)
 
         a = node_list[i_best]
         b = node_list[j_best]
 
-        # Create internal node
-        internal_node = type(a)(
-            genome=a.genome, node_id=next_id, cell_id=a.cell_id
+        internal_node, next_id = _copy_parent_internal_node(
+            tree,
+            new_nodes,
+            a,
+            b,
+            next_id,
+            D[i_best, j_best],
         )
-        next_id += 1
-        tree.add_node(internal_node.node_id, genome=internal_node.genome, cell_id=internal_node.cell_id)
-        tree.add_edge(internal_node.node_id, a.node_id, weight=float(D[i_best, j_best]))
-        tree.add_edge(internal_node.node_id, b.node_id, weight=float(D[i_best, j_best]))
-
-        new_nodes[internal_node] = (a, b)
 
         # Update distance and centrality
-        keep = [k for k in range(n) if k != j_best]
-        D = D[np.ix_(keep, keep)]
-        node_list[i_best] = internal_node
-        node_list.pop(j_best)
-        c[i_best] = np.mean([c[i_best], c[j_best]])
-        c = np.delete(c, j_best)
+        D, c = _merge_parent_child(D, node_list, c, i_best, j_best, internal_node)
 
     root = node_list[0]
     return tree, new_nodes, root.cell_id
@@ -1448,33 +1422,11 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible(
 
     next_id = max_id + 1
 
-    # Compute base "centrality" (inverse mean distance)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        c = 1.0 / (np.mean(D, axis=1) + 1e-9)
-    c = (c - np.min(c)) / (np.ptp(c) + 1e-12)
+    c = _initial_anticentral_v3_centrality(D)
 
     while len(node_list) > 1:
-        n = len(D)
-        score = np.full((n, n), np.inf)
-
-        # --- adaptive anticentral score over all pairs ---
-        for i in range(n):
-            for j in range(i + 1, n):
-                c_diff = abs(c[i] - c[j])
-                adaptive = np.exp(-gamma * c_diff / (np.std(c) + 1e-9))
-                anticentral_term = (2 - (c[i] + c[j]))  # penalize high-central nodes
-                score[i, j] = (
-                    alpha * D[i, j] * (1 + gamma * adaptive)
-                    - beta * anticentral_term
-                )
-                # tiny noise to break exact ties
-                score[i, j] += rng.random() * 1e-6
-
-        # best pair index in score
-        flat_idx = np.argmin(score)
-        i_best, j_best = divmod(flat_idx, n)
-        if j_best < i_best:
-            i_best, j_best = j_best, i_best
+        score = _anticentral_adaptive_v3_score_matrix(D, c, rng, alpha, beta, gamma)
+        i_best, j_best = _best_pair_from_score(score)
 
         a = node_list[i_best]
         b = node_list[j_best]
@@ -1502,41 +1454,17 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible(
         parent_idx = i_best
         child_idx = j_best
 
-        # Create internal node as a copy of the parent_leaf
-        internal_node = type(parent_leaf)(
-            genome=parent_leaf.genome,
-            node_id=next_id,
-            cell_id=parent_leaf.cell_id,
+        internal_node, next_id = _copy_parent_internal_node(
+            tree,
+            new_nodes,
+            parent_leaf,
+            child_leaf,
+            next_id,
+            D[parent_idx, child_idx],
         )
-        next_id += 1
-
-        tree.add_node(
-            internal_node.node_id,
-            genome=internal_node.genome,
-            cell_id=internal_node.cell_id,
-        )
-        tree.add_edge(
-            internal_node.node_id,
-            parent_leaf.node_id,
-            weight=float(D[parent_idx, child_idx]),
-        )
-        tree.add_edge(
-            internal_node.node_id,
-            child_leaf.node_id,
-            weight=float(D[parent_idx, child_idx]),
-        )
-
-        new_nodes[internal_node] = (parent_leaf, child_leaf)
 
         # Update distance matrix and centrality
-        keep = [k for k in range(n) if k != child_idx]
-        D = D[np.ix_(keep, keep)]
-        node_list[parent_idx] = internal_node
-        node_list.pop(child_idx)
-
-        # centrality update: parent position becomes average of the two
-        c[parent_idx] = np.mean([c[parent_idx], c[child_idx]])
-        c = np.delete(c, child_idx)
+        D, c = _merge_parent_child(D, node_list, c, parent_idx, child_idx, internal_node)
 
     root = node_list[0]
     return tree, new_nodes, root.cell_id
@@ -1579,35 +1507,13 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible(
 
     next_id = max_id + 1
 
-    # Base centrality
-    with np.errstate(divide='ignore', invalid='ignore'):
-        c = 1.0 / (np.mean(D, axis=1) + 1e-9)
-    c = (c - np.min(c)) / (np.ptp(c) + 1e-12)
+    c = _initial_anticentral_v3_centrality(D)
 
     while len(node_list) > 1:
-        n = len(D)
-
-        # --- compute score matrix ---
-        score = np.full((n, n), np.inf)
-        for i in range(n):
-            for j in range(i + 1, n):
-                c_diff = abs(c[i] - c[j])
-                adaptive = np.exp(-gamma * c_diff / (np.std(c) + 1e-9))
-                anticentral_term = (2 - (c[i] + c[j]))
-                score[i, j] = (
-                    alpha * D[i, j] * (1 + gamma * adaptive)
-                    - beta * anticentral_term
-                )
-                score[i, j] += rng.random() * 1e-6
+        score = _anticentral_adaptive_v3_score_matrix(D, c, rng, alpha, beta, gamma)
 
         # --- sorted list of pairs by score ---
-        pair_order = [
-            (i, j)
-            for (i, j) in sorted(
-                [(i, j) for i in range(n) for j in range(i + 1, n)],
-                key=lambda p: score[p[0], p[1]],
-            )
-        ]
+        pair_order = _ordered_pairs_by_score(score)
 
         picked_pair = None
         picked_parent_is_i = True  # orientation
@@ -1645,32 +1551,17 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible(
         parent_leaf = node_list[parent_idx]
         child_leaf  = node_list[child_idx]
 
-        # ---- Create internal node ----
-        internal_node = type(parent_leaf)(
-            genome=parent_leaf.genome,
-            node_id=next_id,
-            cell_id=parent_leaf.cell_id,
+        internal_node, next_id = _copy_parent_internal_node(
+            tree,
+            new_nodes,
+            parent_leaf,
+            child_leaf,
+            next_id,
+            D[parent_idx, child_idx],
         )
-        next_id += 1
-
-        tree.add_node(internal_node.node_id,
-                      genome=internal_node.genome,
-                      cell_id=internal_node.cell_id)
-        tree.add_edge(internal_node.node_id, parent_leaf.node_id,
-                      weight=float(D[parent_idx, child_idx]))
-        tree.add_edge(internal_node.node_id, child_leaf.node_id,
-                      weight=float(D[parent_idx, child_idx]))
-
-        new_nodes[internal_node] = (parent_leaf, child_leaf)
 
         # ---- Update D and centrality ----
-        keep = [k for k in range(n) if k != child_idx]
-        D = D[np.ix_(keep, keep)]
-        node_list[parent_idx] = internal_node
-        node_list.pop(child_idx)
-
-        c[parent_idx] = np.mean([c[parent_idx], c[child_idx]])
-        c = np.delete(c, child_idx)
+        D, c = _merge_parent_child(D, node_list, c, parent_idx, child_idx, internal_node)
 
     root = node_list[0]
     return tree, new_nodes, root.cell_id
@@ -1718,37 +1609,11 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony(
 
     next_id = max_id + 1
 
-    # Base "centrality" (inverse mean distance)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        c = 1.0 / (np.mean(D, axis=1) + 1e-9)
-    c = (c - np.min(c)) / (np.ptp(c) + 1e-12)
-
-    def _total_deviation(genome: np.ndarray) -> float:
-        """How far this genome is from baseline copy number."""
-        # cast to np.array in case genome is some wrapper
-        g = np.asarray(genome, dtype=float)
-        return float(np.sum(np.abs(g - baseline_cn)))
+    c = _initial_anticentral_v3_centrality(D)
 
     while len(node_list) > 1:
-        n = len(D)
-        score = np.full((n, n), np.inf)
-
-        # --- compute v3 scores as before ---
-        for i in range(n):
-            for j in range(i + 1, n):
-                c_diff = abs(c[i] - c[j])
-                adaptive = np.exp(-gamma * c_diff / (np.std(c) + 1e-9))
-                anticentral_term = (2 - (c[i] + c[j]))  # penalize high-centrality nodes
-                score[i, j] = (
-                    alpha * D[i, j] * (1 + gamma * adaptive)
-                    - beta * anticentral_term
-                )
-                score[i, j] += rng.random() * 1e-6  # tie-breaking noise
-
-        # best pair by score (unchanged v3 behavior)
-        i_best, j_best = divmod(np.argmin(score), n)
-        if j_best < i_best:
-            i_best, j_best = j_best, i_best
+        score = _anticentral_adaptive_v3_score_matrix(D, c, rng, alpha, beta, gamma)
+        i_best, j_best = _best_pair_from_score(score)
 
         a = node_list[i_best]
         b = node_list[j_best]
@@ -1767,8 +1632,8 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony(
 
         elif can_a_parent_b and can_b_parent_a:
             # both directions allowed → apply parsimony rule
-            dev_a = _total_deviation(a.genome)
-            dev_b = _total_deviation(b.genome)
+            dev_a = _total_deviation_from_baseline(a.genome, baseline_cn)
+            dev_b = _total_deviation_from_baseline(b.genome, baseline_cn)
 
             if dev_a < dev_b:
                 parent_idx, child_idx = i_best, j_best
@@ -1805,40 +1670,17 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony(
         parent_leaf = node_list[parent_idx]
         child_leaf = node_list[child_idx]
 
-        # create internal node (copy of parent)
-        internal_node = type(parent_leaf)(
-            genome=parent_leaf.genome,
-            node_id=next_id,
-            cell_id=parent_leaf.cell_id,
+        internal_node, next_id = _copy_parent_internal_node(
+            tree,
+            new_nodes,
+            parent_leaf,
+            child_leaf,
+            next_id,
+            D[parent_idx, child_idx],
         )
-        next_id += 1
-
-        tree.add_node(
-            internal_node.node_id,
-            genome=internal_node.genome,
-            cell_id=internal_node.cell_id,
-        )
-        tree.add_edge(
-            internal_node.node_id,
-            parent_leaf.node_id,
-            weight=float(D[parent_idx, child_idx]),
-        )
-        tree.add_edge(
-            internal_node.node_id,
-            child_leaf.node_id,
-            weight=float(D[parent_idx, child_idx]),
-        )
-
-        new_nodes[internal_node] = (parent_leaf, child_leaf)
 
         # update D and centrality
-        keep = [k for k in range(n) if k != child_idx]
-        D = D[np.ix_(keep, keep)]
-        node_list[parent_idx] = internal_node
-        node_list.pop(child_idx)
-
-        c[parent_idx] = np.mean([c[parent_idx], c[child_idx]])
-        c = np.delete(c, child_idx)
+        D, c = _merge_parent_child(D, node_list, c, parent_idx, child_idx, internal_node)
 
     root = node_list[0]
     return tree, new_nodes, root.cell_id
@@ -1966,138 +1808,6 @@ def build_evolution_tree(cell_lists, seed=7, dist_matrix_path=None, r=2, only_nj
         node_levels[node] = max(node_levels.values()) + 1
 
     return tree, node_levels, final_root
-
-
-def visualize_tree_plotly(tree, node_levels=None, output_file="reconstructed.html", level_node_ordering=None):
-    pos = {}
-    level_to_nodes = defaultdict(list)
-
-    # Group nodes by level and sort them
-    for node, level in node_levels.items():
-        level_to_nodes[level].append(node)
-
-    for level in level_to_nodes:
-        nodes_in_level = level_to_nodes[level]
-        if level_node_ordering and level in level_node_ordering:
-            # Map from cell_id to node
-            cell_id_to_node = {n.cell_id: n for n in nodes_in_level}
-            specified_ids = level_node_ordering[level]
-            specified_nodes = [cell_id_to_node[cid] for cid in specified_ids if cid in cell_id_to_node]
-
-            # Get remaining nodes not specified
-            remaining_nodes = [n for n in nodes_in_level if n.cell_id not in specified_ids]
-            remaining_nodes.sort(key=lambda n: n.cell_id)  # optional sort of unspecified nodes
-
-            # Combine specified + remaining
-            level_to_nodes[level] = specified_nodes + remaining_nodes
-        else:
-            # Default: sort by cell_id
-            level_to_nodes[level].sort(key=lambda n: n.cell_id)
-
-    # Assign x/y positions
-    offset = 0.25
-    max_level = len(level_to_nodes)
-    z = 1
-    for level, nodes in level_to_nodes.items():
-        for i, node in enumerate(nodes):
-            if node.genome.size == 1 and node.genome.flatten()[0] is None:
-                if z % 2:
-                    pos[node.node_id] = (offset, level)
-                else:
-                    pos[node.node_id] = (max_level - offset, level)
-                offset += 0.5
-                z += 1
-            else:
-                pos[node.node_id] = (i, level)
-
-    edge_x = []
-    edge_y = []
-    edge_label_pos_x, edge_label_pos_y = [], []
-    edge_hover_labels = []
-    edge_labels = []
-    edge_marker_colors = []
-    for (u, v), w in nx.get_edge_attributes(tree, 'weight').items():
-        x0, y0 = pos[u]
-        x1, y1 = pos[v]
-        edge_x.extend([x0, x1, None])  # Add None to break the line
-        edge_y.extend([y0, y1, None])
-        mid_x, mid_y = (x0 + x1) / 2, (y0 + y1) / 2
-        edge_label_pos_x.append(mid_x)
-        edge_label_pos_y.append(mid_y)
-        edge_labels.append("")  # Hide label by default
-        # hover_edge_labels.append(str(event))  # Show label only on hover
-        edge_marker_colors.append("green")
-        edge_hover_labels.append(f"Distance: {w:.2f}")
-
-        # Add markers for edge labels
-    edge_l = go.Scatter(
-            x=edge_label_pos_x, y=edge_label_pos_y, mode='markers+text',
-            marker=dict(size=8, color=edge_marker_colors, opacity=0.5),  # Change color based on label presence
-            text=edge_labels,
-            hovertext=edge_hover_labels,  # Show edge label on hover
-            textposition='middle center',
-            hoverinfo='text'
-        )
-
-    edge_trace = go.Scatter(
-        x=edge_x, y=edge_y,
-        line=dict(width=2, color='#888'),
-        hoverinfo='none',
-        mode='lines')
-
-    node_x = []
-    node_y = []
-    text = []
-
-    for node, data in tree.nodes(data=True):
-        gen_str = data.get("genome", "N/A")
-        if gen_str.size == 1 and gen_str.flatten()[0] is None:
-            gen_str = "N/A"
-        cell_id = data.get("cell_id", "N/A")
-        x, y = pos[node]
-        node_x.append(x)
-        node_y.append(y)
-        label = f"cell_id={cell_id}<br>CN={gen_str}"
-        text.append(label)
-
-    node_trace = go.Scatter(
-        x=node_x, y=node_y,
-        mode='markers+text',
-        textposition="bottom center",
-        hoverinfo='text',
-        marker=dict(
-            showscale=False,
-            color='lightblue',
-            size=35,
-            line_width=4),
-        text=[data.get("cell_id", "N/A") for node, data in tree.nodes(data=True)],
-        hovertext=text,
-        textfont=dict(size=24)
-    )
-
-    pic=[]
-    if level_node_ordering is not None:
-        pic = [edge_trace, node_trace]
-    else:
-        pic = [edge_trace, node_trace, edge_l]
-
-    fig = go.Figure(data=pic,
-                   layout=go.Layout(
-                       title=dict(
-                           text='Reconstructed Tree',
-                           font=dict(size=16)
-                       ),
-                       showlegend=False,
-                       hovermode='closest',
-                       margin=dict(b=20, l=5, r=5, t=40),
-                       xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                       yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                        plot_bgcolor='white',
-                        paper_bgcolor='white')
-                   )
-    fig.write_html(output_file)
-    fig.write_image(output_file + ".svg", width=1200, height=800, scale=2)
-    fig.show()
 
 
 if __name__ == '__main__':
