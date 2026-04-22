@@ -1,30 +1,6 @@
 import numpy as np
 
-
-# ============================================================
-#  BIOLOGICAL PLAUSIBILITY USED BY PAIR SELECTION
-# ============================================================
-def _is_biologically_plausible_ancestor(ancestor, descendant):
-    """
-    Returns True if 'ancestor' could biologically be the parent of 'descendant'.
-
-    Constraint:
-    - ancestor cannot generate descendant if ancestor has CN=0 at a locus
-      where descendant has CN>0 (i.e. a gain from 0 -> positive is disallowed).
-    """
-    return not np.any((ancestor.genome == 0) & (descendant.genome > 0))
-
-
-def _is_biologically_plausible_pair(x, y):
-    """
-    A pair (x, y) is biologically plausible if at least one direction
-    (x->y or y->x) is biologically possible.
-
-    This means:
-    - keep this pair if x can be parent of y OR y can be parent of x.
-    """
-    return (_is_biologically_plausible_ancestor(x, y) or
-            _is_biologically_plausible_ancestor(y, x))
+from reconstructor_ancestor_selection import _is_biologically_plausible_pair
 
 
 # ============================================================
