@@ -16,10 +16,88 @@ from reconstructor_pair_selection import (
     _select_pair_hybrid,
     _select_pair_hybrid_inv_centrality,
 )
+from reconstructor_engine import (
+    Orientation,
+    PairChoice,
+    run_agglomerative_reconstruction,
+)
 from simulator import Genotype
 
 
 NJ_REC_TR_ROOT_ID = -1
+
+
+def _select_min_distance_pair(state):
+    n = len(state.D)
+    min_val = None
+    best_pair = (0, 1)
+
+    tri_i, tri_j = np.triu_indices(n, k=1)
+    for i, j in zip(tri_i, tri_j):
+        d = state.D[i, j]
+        if min_val is None or d < min_val:
+            min_val = d
+            best_pair = (i, j)
+
+    return PairChoice(*best_pair, score=min_val)
+
+
+def _select_sum_distance_parent(state, pair):
+    n = len(state.D)
+    i, j = pair.i, pair.j
+    others = [k for k in range(n) if k != i and k != j]
+    sum_i = state.D[i, others].sum() if others else 0
+    sum_j = state.D[j, others].sum() if others else 0
+
+    if sum_i < sum_j:
+        parent_idx, child_idx = i, j
+    elif sum_j < sum_i:
+        parent_idx, child_idx = j, i
+    else:
+        parent_idx, child_idx = (i, j) if state.rng.random() < 0.5 else (j, i)
+
+    return Orientation(parent_idx, child_idx)
+
+
+def _legacy_pair_selector(select_pair_func):
+    def select_pair(state):
+        i, j = select_pair_func(state.D, state.node_list, state.rng, minimize=True)
+        return PairChoice(i, j)
+
+    return select_pair
+
+
+def _legacy_parent_selector(select_ancestor_func, full_information):
+    def select_parent(state, pair):
+        if len(state.node_list) == 2:
+            x = state.node_list[0]
+            y = state.node_list[1]
+            parent_leaf, child_leaf = _final_parent_choice_full_matrix(
+                x,
+                y,
+                state.D_full,
+                state.origin_index,
+                state.rng,
+                select_ancestor_func,
+            )
+            parent_idx = 0 if state.node_list[0] is parent_leaf else 1
+            child_idx = 1 - parent_idx
+        else:
+            parent_idx, child_idx = _choose_parent_with_plausibility_fallback(
+                state.D,
+                state.D_full,
+                state.origin_index,
+                state.node_list,
+                pair.i,
+                pair.j,
+                state.rng,
+                select_ancestor_func,
+                full_information=full_information,
+            )
+
+        return Orientation(parent_idx, child_idx)
+
+    return select_parent
 
 
 def neighbor_joining_standard(dist_matrix, cells, max_id, seed=7, existing_tree=None):
@@ -92,64 +170,15 @@ def neighbor_joining_baseline(dist_matrix, cells, max_id, seed=7, existing_tree=
     - No CPS/Hybrid scoring
     - No global heuristics
     """
-    rng = random.Random(seed)
-    D = dist_matrix.copy().astype(float)
-    tree = existing_tree or nx.DiGraph()
-    new_nodes = {}
-    node_list = [cells[i] for i in range(len(cells))]
-
-    for node in node_list:
-        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
-
-    next_id = max_id + 1
-
-    while len(node_list) > 1:
-        n = len(D)
-        min_val = None
-        best_pair = (0, 1)
-
-        tri_i, tri_j = np.triu_indices(n, k=1)
-        for i, j in zip(tri_i, tri_j):
-            d = D[i, j]
-            if min_val is None or d < min_val:
-                min_val = d
-                best_pair = (i, j)
-
-        i, j = best_pair
-
-        others = [k for k in range(n) if k != i and k != j]
-        sum_i = D[i, others].sum() if others else 0
-        sum_j = D[j, others].sum() if others else 0
-
-        if sum_i < sum_j:
-            parent_idx, child_idx = i, j
-        elif sum_j < sum_i:
-            parent_idx, child_idx = j, i
-        else:
-            parent_idx, child_idx = (i, j) if rng.random() < 0.5 else (j, i)
-
-        parent_leaf = node_list[parent_idx]
-        child_leaf = node_list[child_idx]
-
-        internal = type(parent_leaf)(
-            genome=parent_leaf.genome,
-            node_id=next_id,
-            cell_id=parent_leaf.cell_id,
-        )
-        next_id += 1
-
-        tree.add_node(internal.node_id, genome=internal.genome, cell_id=internal.cell_id)
-        tree.add_edge(internal.node_id, parent_leaf.node_id, weight=0.0)
-        tree.add_edge(internal.node_id, child_leaf.node_id, weight=float(D[parent_idx, child_idx]))
-        new_nodes[internal] = (parent_leaf, child_leaf)
-
-        keep = [k for k in range(n) if k != child_idx]
-        D = D[np.ix_(keep, keep)]
-        node_list[parent_idx] = internal
-        node_list.pop(child_idx)
-
-    root = node_list[0]
-    return tree, new_nodes, root.cell_id
+    return run_agglomerative_reconstruction(
+        dist_matrix,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        pair_selector=_select_min_distance_pair,
+        ancestor_selector=_select_sum_distance_parent,
+    )
 
 
 def neighbour_joining_core(
@@ -162,66 +191,15 @@ def neighbour_joining_core(
     select_ancestor_func=_choose_parent_full_nj,
     full_information=False,
 ):
-    rng = random.Random(seed)
-    D_full = dist_matrix.copy().astype(float)
-    D = dist_matrix.copy().astype(float)
-    tree = existing_tree or nx.DiGraph()
-    new_nodes = {}
-    node_list = [cells[i] for i in range(len(cells))]
-    origin_index = {node: idx for idx, node in enumerate(node_list)}
-
-    for node in node_list:
-        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
-
-    next_id = max_id + 1
-
-    while len(node_list) > 1:
-        n = len(D)
-        i, j = select_pair_func(D, node_list, rng, minimize=True)
-
-        if len(node_list) == 2:
-            x = node_list[0]
-            y = node_list[1]
-            parent_leaf, child_leaf = _final_parent_choice_full_matrix(
-                x, y, D_full, origin_index, rng, select_ancestor_func
-            )
-            parent_idx = 0 if node_list[0] is parent_leaf else 1
-            child_idx = 1 - parent_idx
-        else:
-            parent_idx, child_idx = _choose_parent_with_plausibility_fallback(
-                D,
-                D_full,
-                origin_index,
-                node_list,
-                i,
-                j,
-                rng,
-                select_ancestor_func,
-                full_information=full_information,
-            )
-
-        parent_leaf = node_list[parent_idx]
-        child_leaf = node_list[child_idx]
-
-        internal_node = type(parent_leaf)(
-            genome=parent_leaf.genome,
-            node_id=next_id,
-            cell_id=parent_leaf.cell_id,
-        )
-        next_id += 1
-        origin_index[internal_node] = origin_index[parent_leaf]
-        tree.add_node(internal_node.node_id, genome=internal_node.genome, cell_id=internal_node.cell_id)
-        tree.add_edge(internal_node.node_id, parent_leaf.node_id, weight=0.0)
-        tree.add_edge(internal_node.node_id, child_leaf.node_id, weight=float(D[parent_idx, child_idx]))
-        new_nodes[internal_node] = (parent_leaf, child_leaf)
-
-        keep_indices = [k for k in range(n) if k != child_idx]
-        D = D[np.ix_(keep_indices, keep_indices)]
-        node_list[parent_idx] = internal_node
-        node_list.pop(child_idx)
-
-    root = node_list[0]
-    return tree, new_nodes, root.cell_id
+    return run_agglomerative_reconstruction(
+        dist_matrix,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        pair_selector=_legacy_pair_selector(select_pair_func),
+        ancestor_selector=_legacy_parent_selector(select_ancestor_func, full_information),
+    )
 
 
 def make_nj_full_variant(full_information):
