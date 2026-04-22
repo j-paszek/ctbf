@@ -251,6 +251,55 @@ That test:
 
 This is useful when changing evaluator code: if reconstruction has not changed, evaluator regressions show up immediately against frozen tree pairs.
 
+## Testing Reconstruction Determinism From JSON
+
+To test reconstruction determinism without rerunning simulation or `cnp2cnp`, load:
+
+```text
+test/data/algorithm_cases/<variant>/<seed>/input.json
+test/data/algorithm_cases/<variant>/<seed>/<mode>/<algorithm>.json
+```
+
+Use:
+
+- `input.json["biopsies"]` as the frozen biopsy cells,
+- `input.json["distance_matrices"]["cnp2cnp"]` as the frozen reconstruction matrix,
+- `<mode>/<algorithm>.json["reconstructed_tree"]` and `["newick"]` as the expected output.
+
+For the representative fixture only:
+
+```bash
+pytest -q test/test_algorithm_case_json_workflows.py::test_json_reconstruction_is_deterministic_against_stored_tree
+```
+
+From inside the `test/` directory:
+
+```bash
+pytest -q test_algorithm_case_json_workflows.py::test_json_reconstruction_is_deterministic_against_stored_tree
+```
+
+To run reconstruction determinism for every frozen variant, seed, mode, and stored algorithm:
+
+```bash
+pytest -q test/test_algorithm_case_json_workflows.py::test_all_json_reconstruction_is_deterministic_against_stored_tree
+```
+
+From inside the `test/` directory:
+
+```bash
+pytest -q test_algorithm_case_json_workflows.py::test_all_json_reconstruction_is_deterministic_against_stored_tree
+```
+
+That test:
+
+1. loads frozen biopsy cells from `input.json.biopsies`,
+2. loads the frozen `cnp2cnp` matrix from `input.json.distance_matrices.cnp2cnp`,
+3. reruns the selected reconstruction algorithm in `full_cnp` or `biopsy_guided_top` mode,
+4. compares the regenerated root and Newick tree to the stored algorithm result JSON,
+5. checks that the stored reconstructed tree serializes to the same Newick string.
+
+This is useful when changing reconstruction code: any behavioral change in a stored algorithm shows up as a deterministic tree mismatch.
+
 ## Adding New Algorithm Variants
 
 The committed benchmark CSV files use legacy algorithm indexes from `algorithm_evaluation/tester.py`. Do not reorder or insert into `get_legacy_algorithms_to_test()`, because that changes the meaning of files such as `20rec.csv` and `20nj.csv`.

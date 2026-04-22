@@ -70,6 +70,10 @@ def _stored_tree_metric_cases():
     return cases
 
 
+def _stored_reconstruction_cases():
+    return _stored_tree_metric_cases()
+
+
 @pytest.mark.parametrize("mode", ["full_cnp", "biopsy_guided_top"])
 @pytest.mark.parametrize("algorithm", ALGORITHMS)
 def test_json_reconstructed_tree_metrics_match_stored_values(mode, algorithm):
@@ -125,6 +129,26 @@ def test_json_reconstruction_is_deterministic_against_stored_tree(mode, algorith
 
     regenerated = freeze_algorithm_variant_cases.reconstruction_result(input_case, algorithm_callable, mode)
     stored = _result(mode, algorithm)
+    stored_tree = _tree_from_node_link(stored["reconstructed_tree"])
+
+    assert regenerated["root"] == stored["root"]
+    assert regenerated["newick"] == stored["newick"]
+    assert regenerated["newick"] == to_newick(stored_tree)
+
+
+@pytest.mark.json_full
+@pytest.mark.parametrize(
+    "case",
+    _stored_reconstruction_cases(),
+    ids=lambda case: f"{case[0]}-{case[1]}-{case[2]}-{case[3]}",
+)
+def test_all_json_reconstruction_is_deterministic_against_stored_tree(case):
+    _, _, mode, algorithm, input_file, result_file = case
+    input_case = load_json(input_file)
+    algorithm_callable = freeze_algorithm_variant_cases.algorithm_by_name()[algorithm]
+
+    regenerated = freeze_algorithm_variant_cases.reconstruction_result(input_case, algorithm_callable, mode)
+    stored = load_json(result_file)
     stored_tree = _tree_from_node_link(stored["reconstructed_tree"])
 
     assert regenerated["root"] == stored["root"]
