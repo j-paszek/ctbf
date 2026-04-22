@@ -19,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from algorithm_evaluation.tester import (  # noqa: E402
     CONFIG_BY_PROFILE,
     DEFAULT_BIOPSY_GENERATIONS,
+    LEGACY_ALGORITHM_NAMES,
     build_variant_name,
     get_algorithms_to_test,
     load_seeds,
@@ -33,11 +34,8 @@ from simulator import CancerCellEvolutionSimulator, Genotype  # noqa: E402
 
 
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "test" / "data" / "algorithm_cases"
-REFERENCE_ALGORITHM_NAMES = [
-    "neighbor_joining_baseline",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
-]
+PUBLICATION_HEATMAP_ALGORITHM_NAMES = list(LEGACY_ALGORITHM_NAMES)
+REFERENCE_ALGORITHM_NAMES = PUBLICATION_HEATMAP_ALGORITHM_NAMES
 VARIANT_PRESETS = {
     "r2bss025": {"r_dist": 2, "biopsy_size_scalable": 0.25, "profile": "base"},
     "r2bss05": {"r_dist": 2, "biopsy_size_scalable": 0.5, "profile": "base"},
@@ -77,6 +75,22 @@ def write_json(path, data, overwrite):
     with open(path, "w") as f:
         json.dump(json_ready(data), f, indent=2)
         f.write("\n")
+
+
+def load_json(path):
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def existing_seeds_for_variant(output_root, variant_name):
+    variant_dir = Path(output_root) / variant_name
+    if not variant_dir.exists():
+        return []
+    seeds = []
+    for seed_dir in variant_dir.iterdir():
+        if seed_dir.is_dir() and seed_dir.name.isdigit() and (seed_dir / "input.json").exists():
+            seeds.append(int(seed_dir.name))
+    return sorted(seeds)
 
 
 def resolve_variants(selected_variants):
@@ -352,11 +366,26 @@ def reconstruction_result(input_case, algorithm, mode):
     }
 
 
-def write_seed_case(output_root, variant_name, variant, seed, algorithms, overwrite, input_only, bedfile=None):
+def write_seed_case(
+    output_root,
+    variant_name,
+    variant,
+    seed,
+    algorithms,
+    overwrite,
+    input_only,
+    bedfile=None,
+    results_only=False,
+    skip_existing=False,
+):
     config_path = CONFIG_BY_PROFILE[variant["profile"]]
     current_input_path = input_path(output_root, variant_name, seed)
-    input_case = input_case_from_simulation(variant_name, variant, seed, config_path, bedfile)
-    write_json(current_input_path, input_case, overwrite)
+    if results_only:
+        input_case = load_json(current_input_path)
+    else:
+        input_case = input_case_from_simulation(variant_name, variant, seed, config_path, bedfile)
+        if not (skip_existing and current_input_path.exists()):
+            write_json(current_input_path, input_case, overwrite)
 
     if input_only:
         return
@@ -365,12 +394,14 @@ def write_seed_case(output_root, variant_name, variant, seed, algorithms, overwr
         algorithm_name = getattr(algorithm, "__name__", str(algorithm))
         for mode in ["full_cnp", "biopsy_guided_top"]:
             output_path = result_path(output_root, variant_name, seed, mode, algorithm_name)
+            if skip_existing and output_path.exists():
+                continue
             write_json(output_path, reconstruction_result(input_case, algorithm, mode), overwrite)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Freeze nested algorithm fixtures for benchmark variants and reference algorithms."
+        description="Freeze nested algorithm fixtures for benchmark variants and publication heatmap algorithms."
     )
     parser.add_argument("--variant", action="append", choices=sorted(VARIANT_PRESETS),
                         help="Benchmark variant to freeze. Can be passed multiple times. Defaults to all variants.")
@@ -379,9 +410,15 @@ def parse_args():
     parser.add_argument("--seeds-file", type=Path, default=PROJECT_ROOT / "test" / "data" / "seeds.json")
     parser.add_argument("--algorithm-index", type=int, action="append", default=None)
     parser.add_argument("--algorithm-name", action="append", default=None,
-                        help="Algorithm name to freeze. Defaults to the three reference algorithms.")
+                        help="Algorithm name to freeze. Defaults to all publication heatmap algorithms.")
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--input-only", action="store_true")
+    parser.add_argument("--results-only", action="store_true",
+                        help="Reuse existing input.json files and write only algorithm result JSON files.")
+    parser.add_argument("--existing-seeds", action="store_true",
+                        help="Use seeds that already have input.json under each selected variant.")
+    parser.add_argument("--skip-existing", action="store_true",
+                        help="Do not rewrite files that already exist.")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--limit", type=int, default=None,
@@ -393,14 +430,29 @@ def parse_args():
 def main():
     args = parse_args()
     variants = resolve_variants(args.variant)
-    seeds = args.seed if args.seed is not None else load_seeds(args.seeds_file)
+    if args.seed is not None:
+        fixed_seeds = args.seed
+        seeds_by_variant = {name: fixed_seeds for name, _ in variants}
+    elif args.existing_seeds:
+        seeds_by_variant = {
+            name: existing_seeds_for_variant(args.output_root, name)
+            for name, _ in variants
+        }
+    else:
+        fixed_seeds = load_seeds(args.seeds_file)
+        seeds_by_variant = {name: fixed_seeds for name, _ in variants}
     if args.limit is not None:
-        seeds = seeds[:args.limit]
+        seeds_by_variant = {
+            name: seeds[:args.limit]
+            for name, seeds in seeds_by_variant.items()
+        }
     algorithm_indices = resolve_reference_algorithm_indices(args.algorithm_index, args.algorithm_name)
     algorithms = [get_algorithms_to_test()[index] for index in algorithm_indices]
 
     print("Variants:", ", ".join(name for name, _ in variants))
-    print("Seeds:", len(seeds), ", ".join(str(seed) for seed in seeds))
+    for variant_name, _ in variants:
+        seeds = seeds_by_variant[variant_name]
+        print(f"Seeds for {variant_name}:", len(seeds), ", ".join(str(seed) for seed in seeds))
     print("Algorithms:", ", ".join(getattr(algorithm, "__name__", str(algorithm)) for algorithm in algorithms))
     print("Output root:", args.output_root)
     if args.dry_run:
@@ -408,7 +460,7 @@ def main():
 
     failures = []
     for variant_name, variant in variants:
-        for seed in seeds:
+        for seed in seeds_by_variant[variant_name]:
             try:
                 write_seed_case(
                     args.output_root,
@@ -418,6 +470,8 @@ def main():
                     algorithms,
                     args.overwrite,
                     args.input_only,
+                    results_only=args.results_only,
+                    skip_existing=args.skip_existing,
                 )
                 print(f"Wrote {variant_name}/{seed}")
             except Exception as exc:

@@ -554,10 +554,16 @@ def neighbour_joining_core(dist_matrix, cells, max_id, seed=7, existing_tree=Non
                     parent_idx, child_idx = select_ancestor_func(D, i, j, rng, larger_is_more_central=False)
 
             else:
-                # Neither direction possible → should never happen
-                raise ValueError(
-                    f"No biologically plausible direction between {x.node_id} and {y.node_id}"
-                )
+                # Neither direction is biologically plausible. Keep the
+                # selected pair and fall back to the algorithm's original
+                # ancestor rule, matching the soft-fallback behavior of the
+                # later plausible NJ variants.
+                if full_information:
+                    parent_idx, child_idx = _choose_parent_with_full_matrix(
+                        D_full, origin_index, node_list, i, j, rng, select_ancestor_func
+                    )
+                else:
+                    parent_idx, child_idx = select_ancestor_func(D, i, j, rng, larger_is_more_central=False)
 
         # reconstructing tree
         parent_leaf = node_list[parent_idx]

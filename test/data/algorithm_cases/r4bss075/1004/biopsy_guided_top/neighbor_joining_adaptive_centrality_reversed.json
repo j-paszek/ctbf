@@ -1,0 +1,238 @@
+{
+  "case_id": "r4bss075_seed1004",
+  "variant": "r4bss075",
+  "seed": 1004,
+  "algorithm": "neighbor_joining_adaptive_centrality_reversed",
+  "mode": "biopsy_guided_top",
+  "root": 6,
+  "newick": "(((12:0.0000)12:0.0000)6:0.0000,((25:3.0000,21:3.0000,19:2.0000)7:0.0000)7:0.0000)6;",
+  "reconstructed_tree": {
+    "directed": true,
+    "multigraph": false,
+    "graph": {},
+    "nodes": [
+      {
+        "genome": [
+          0,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 12,
+        "id": 12
+      },
+      {
+        "genome": [
+          1,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1,
+          3
+        ],
+        "cell_id": 25,
+        "id": 25
+      },
+      {
+        "genome": [
+          4,
+          2,
+          2,
+          1,
+          5,
+          2,
+          2,
+          3,
+          2,
+          1
+        ],
+        "cell_id": 21,
+        "id": 21
+      },
+      {
+        "genome": [
+          1,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          3
+        ],
+        "cell_id": 19,
+        "id": 19
+      },
+      {
+        "genome": [
+          0,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 12,
+        "id": 26
+      },
+      {
+        "genome": [
+          4,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 7,
+        "id": 7
+      },
+      {
+        "genome": [
+          0,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 6,
+        "id": 6
+      },
+      {
+        "genome": [
+          4,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 7,
+        "id": 27
+      },
+      {
+        "genome": [
+          0,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 6,
+        "id": 29
+      }
+    ],
+    "links": [
+      {
+        "weight": 0.0,
+        "source": 26,
+        "target": 12
+      },
+      {
+        "weight": 3.0,
+        "source": 7,
+        "target": 25
+      },
+      {
+        "weight": 3.0,
+        "source": 7,
+        "target": 21
+      },
+      {
+        "weight": 2.0,
+        "source": 7,
+        "target": 19
+      },
+      {
+        "weight": 0.0,
+        "source": 6,
+        "target": 26
+      },
+      {
+        "weight": 0.0,
+        "source": 27,
+        "target": 7
+      },
+      {
+        "weight": 0.0,
+        "source": 29,
+        "target": 6
+      },
+      {
+        "weight": 0.0,
+        "source": 29,
+        "target": 27
+      }
+    ]
+  },
+  "metrics": {
+    "ancestors_unique_restricted": {
+      "TP": 5,
+      "FP": 6,
+      "FN": 2,
+      "precision": 0.45454545454545453,
+      "recall": 0.7142857142857143,
+      "F1": 0.5555555555555556,
+      "IoU": 0.38461538461538464,
+      "num_unique_pairs_true": 7,
+      "num_unique_pairs_rec": 11
+    },
+    "ancestors_multiset": {
+      "TP": 9,
+      "FP": 9,
+      "FN": 130,
+      "precision": 0.5,
+      "recall": 0.06474820143884892,
+      "F1": 0.11464968152866241,
+      "IoU": 0.060810810810810814,
+      "num_pairs_true": 139,
+      "num_pairs_rec": 18
+    },
+    "ancestors_unique": {
+      "TP": 5,
+      "FP": 6,
+      "FN": 33,
+      "precision": 0.45454545454545453,
+      "recall": 0.13157894736842105,
+      "F1": 0.2040816326530612,
+      "IoU": 0.11363636363636363,
+      "num_unique_pairs_true": 38,
+      "num_unique_pairs_rec": 11
+    },
+    "grf": 0.266175957508034
+  }
+}

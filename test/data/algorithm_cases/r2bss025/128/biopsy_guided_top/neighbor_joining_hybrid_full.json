@@ -1,0 +1,91 @@
+{
+  "case_id": "r2bss025_seed128",
+  "variant": "r2bss025",
+  "seed": 128,
+  "algorithm": "neighbor_joining_hybrid_full",
+  "mode": "biopsy_guided_top",
+  "root": 12,
+  "newick": "(24:1.0000)12;",
+  "reconstructed_tree": {
+    "directed": true,
+    "multigraph": false,
+    "graph": {},
+    "nodes": [
+      {
+        "genome": [
+          6,
+          2,
+          3,
+          2,
+          3,
+          2,
+          2,
+          2,
+          2,
+          3
+        ],
+        "cell_id": 24,
+        "id": 24
+      },
+      {
+        "genome": [
+          6,
+          2,
+          2,
+          2,
+          3,
+          2,
+          2,
+          2,
+          2,
+          3
+        ],
+        "cell_id": 12,
+        "id": 12
+      }
+    ],
+    "links": [
+      {
+        "weight": 1.0,
+        "source": 12,
+        "target": 24
+      }
+    ]
+  },
+  "metrics": {
+    "ancestors_unique_restricted": {
+      "TP": 1,
+      "FP": 0,
+      "FN": 1,
+      "precision": 1.0,
+      "recall": 0.5,
+      "F1": 0.6666666666666666,
+      "IoU": 0.5,
+      "num_unique_pairs_true": 2,
+      "num_unique_pairs_rec": 1
+    },
+    "ancestors_multiset": {
+      "TP": 1,
+      "FP": 0,
+      "FN": 123,
+      "precision": 1.0,
+      "recall": 0.008064516129032258,
+      "F1": 0.016,
+      "IoU": 0.008064516129032258,
+      "num_pairs_true": 124,
+      "num_pairs_rec": 1
+    },
+    "ancestors_unique": {
+      "TP": 1,
+      "FP": 0,
+      "FN": 16,
+      "precision": 1.0,
+      "recall": 0.058823529411764705,
+      "F1": 0.1111111111111111,
+      "IoU": 0.058823529411764705,
+      "num_unique_pairs_true": 17,
+      "num_unique_pairs_rec": 1
+    },
+    "grf": 0.14052121212121205
+  }
+}

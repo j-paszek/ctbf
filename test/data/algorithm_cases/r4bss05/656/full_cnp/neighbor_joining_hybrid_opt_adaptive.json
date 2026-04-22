@@ -1,0 +1,238 @@
+{
+  "case_id": "r4bss05_seed656",
+  "variant": "r4bss05",
+  "seed": 656,
+  "algorithm": "neighbor_joining_hybrid_opt_adaptive",
+  "mode": "full_cnp",
+  "root": 11,
+  "newick": "((11:0.0000,21:0.0000)11:0.0000,((16:0.0000,9:2.0000)16:0.0000,4:0.0000)16:0.0000)11;",
+  "reconstructed_tree": {
+    "directed": true,
+    "multigraph": false,
+    "graph": {},
+    "nodes": [
+      {
+        "genome": [
+          5,
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          4,
+          2,
+          1
+        ],
+        "cell_id": 4,
+        "id": 4
+      },
+      {
+        "genome": [
+          5,
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          4,
+          2,
+          0
+        ],
+        "cell_id": 11,
+        "id": 11
+      },
+      {
+        "genome": [
+          5,
+          2,
+          3,
+          2,
+          2,
+          1,
+          2,
+          4,
+          2,
+          4
+        ],
+        "cell_id": 9,
+        "id": 9
+      },
+      {
+        "genome": [
+          5,
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          4,
+          2,
+          0
+        ],
+        "cell_id": 21,
+        "id": 21
+      },
+      {
+        "genome": [
+          5,
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          4,
+          2,
+          1
+        ],
+        "cell_id": 16,
+        "id": 16
+      },
+      {
+        "genome": [
+          5,
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          4,
+          2,
+          1
+        ],
+        "cell_id": 16,
+        "id": 23
+      },
+      {
+        "genome": [
+          5,
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          4,
+          2,
+          1
+        ],
+        "cell_id": 16,
+        "id": 24
+      },
+      {
+        "genome": [
+          5,
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          4,
+          2,
+          0
+        ],
+        "cell_id": 11,
+        "id": 25
+      },
+      {
+        "genome": [
+          5,
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          4,
+          2,
+          0
+        ],
+        "cell_id": 11,
+        "id": 26
+      }
+    ],
+    "links": [
+      {
+        "weight": 0.0,
+        "source": 23,
+        "target": 16
+      },
+      {
+        "weight": 2.0,
+        "source": 23,
+        "target": 9
+      },
+      {
+        "weight": 0.0,
+        "source": 24,
+        "target": 23
+      },
+      {
+        "weight": 0.0,
+        "source": 24,
+        "target": 4
+      },
+      {
+        "weight": 0.0,
+        "source": 25,
+        "target": 11
+      },
+      {
+        "weight": 0.0,
+        "source": 25,
+        "target": 21
+      },
+      {
+        "weight": 0.0,
+        "source": 26,
+        "target": 25
+      },
+      {
+        "weight": 0.0,
+        "source": 26,
+        "target": 24
+      }
+    ]
+  },
+  "metrics": {
+    "ancestors_unique_restricted": {
+      "TP": 3,
+      "FP": 5,
+      "FN": 5,
+      "precision": 0.375,
+      "recall": 0.375,
+      "F1": 0.375,
+      "IoU": 0.23076923076923078,
+      "num_unique_pairs_true": 8,
+      "num_unique_pairs_rec": 8
+    },
+    "ancestors_multiset": {
+      "TP": 4,
+      "FP": 12,
+      "FN": 133,
+      "precision": 0.25,
+      "recall": 0.029197080291970802,
+      "F1": 0.0522875816993464,
+      "IoU": 0.026845637583892617,
+      "num_pairs_true": 137,
+      "num_pairs_rec": 16
+    },
+    "ancestors_unique": {
+      "TP": 3,
+      "FP": 5,
+      "FN": 47,
+      "precision": 0.375,
+      "recall": 0.06,
+      "F1": 0.10344827586206896,
+      "IoU": 0.05454545454545454,
+      "num_unique_pairs_true": 50,
+      "num_unique_pairs_rec": 8
+    },
+    "grf": 0.18049380593940023
+  }
+}

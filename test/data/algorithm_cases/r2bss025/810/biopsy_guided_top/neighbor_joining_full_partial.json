@@ -1,0 +1,112 @@
+{
+  "case_id": "r2bss025_seed810",
+  "variant": "r2bss025",
+  "seed": 810,
+  "algorithm": "neighbor_joining_full_partial",
+  "mode": "biopsy_guided_top",
+  "root": 6,
+  "newick": "(16:1.0000,26:1.0000)6;",
+  "reconstructed_tree": {
+    "directed": true,
+    "multigraph": false,
+    "graph": {},
+    "nodes": [
+      {
+        "genome": [
+          1,
+          2,
+          6,
+          1,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "cell_id": 16,
+        "id": 16
+      },
+      {
+        "genome": [
+          4,
+          2,
+          6,
+          1,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "cell_id": 26,
+        "id": 26
+      },
+      {
+        "genome": [
+          2,
+          2,
+          6,
+          1,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "cell_id": 6,
+        "id": 6
+      }
+    ],
+    "links": [
+      {
+        "weight": 1.0,
+        "source": 6,
+        "target": 16
+      },
+      {
+        "weight": 1.0,
+        "source": 6,
+        "target": 26
+      }
+    ]
+  },
+  "metrics": {
+    "ancestors_unique_restricted": {
+      "TP": 2,
+      "FP": 0,
+      "FN": 3,
+      "precision": 1.0,
+      "recall": 0.4,
+      "F1": 0.5714285714285715,
+      "IoU": 0.4,
+      "num_unique_pairs_true": 5,
+      "num_unique_pairs_rec": 2
+    },
+    "ancestors_multiset": {
+      "TP": 2,
+      "FP": 0,
+      "FN": 176,
+      "precision": 1.0,
+      "recall": 0.011235955056179775,
+      "F1": 0.02222222222222222,
+      "IoU": 0.011235955056179775,
+      "num_pairs_true": 178,
+      "num_pairs_rec": 2
+    },
+    "ancestors_unique": {
+      "TP": 2,
+      "FP": 0,
+      "FN": 38,
+      "precision": 1.0,
+      "recall": 0.05,
+      "F1": 0.09523809523809523,
+      "IoU": 0.05,
+      "num_unique_pairs_true": 40,
+      "num_unique_pairs_rec": 2
+    },
+    "grf": 0.10973069940780333
+  }
+}

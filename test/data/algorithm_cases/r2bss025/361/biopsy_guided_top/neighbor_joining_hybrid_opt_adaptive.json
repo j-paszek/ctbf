@@ -1,0 +1,133 @@
+{
+  "case_id": "r2bss025_seed361",
+  "variant": "r2bss025",
+  "seed": 361,
+  "algorithm": "neighbor_joining_hybrid_opt_adaptive",
+  "mode": "biopsy_guided_top",
+  "root": 6,
+  "newick": "(6:0.0000,(9:0.0000)9:3.0000)6;",
+  "reconstructed_tree": {
+    "directed": true,
+    "multigraph": false,
+    "graph": {},
+    "nodes": [
+      {
+        "genome": [
+          6,
+          4,
+          5,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          1
+        ],
+        "cell_id": 9,
+        "id": 9
+      },
+      {
+        "genome": [
+          2,
+          2,
+          3,
+          2,
+          2,
+          5,
+          2,
+          2,
+          2,
+          3
+        ],
+        "cell_id": 6,
+        "id": 6
+      },
+      {
+        "genome": [
+          6,
+          4,
+          5,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          1
+        ],
+        "cell_id": 9,
+        "id": 10
+      },
+      {
+        "genome": [
+          2,
+          2,
+          3,
+          2,
+          2,
+          5,
+          2,
+          2,
+          2,
+          3
+        ],
+        "cell_id": 6,
+        "id": 12
+      }
+    ],
+    "links": [
+      {
+        "weight": 0,
+        "source": 10,
+        "target": 9
+      },
+      {
+        "weight": 0.0,
+        "source": 12,
+        "target": 6
+      },
+      {
+        "weight": 3.0,
+        "source": 12,
+        "target": 10
+      }
+    ]
+  },
+  "metrics": {
+    "ancestors_unique_restricted": {
+      "TP": 2,
+      "FP": 1,
+      "FN": 0,
+      "precision": 0.6666666666666666,
+      "recall": 1.0,
+      "F1": 0.8,
+      "IoU": 0.6666666666666666,
+      "num_unique_pairs_true": 2,
+      "num_unique_pairs_rec": 3
+    },
+    "ancestors_multiset": {
+      "TP": 2,
+      "FP": 2,
+      "FN": 115,
+      "precision": 0.5,
+      "recall": 0.017094017094017096,
+      "F1": 0.03305785123966942,
+      "IoU": 0.01680672268907563,
+      "num_pairs_true": 117,
+      "num_pairs_rec": 4
+    },
+    "ancestors_unique": {
+      "TP": 2,
+      "FP": 1,
+      "FN": 13,
+      "precision": 0.6666666666666666,
+      "recall": 0.13333333333333333,
+      "F1": 0.2222222222222222,
+      "IoU": 0.125,
+      "num_unique_pairs_true": 15,
+      "num_unique_pairs_rec": 3
+    },
+    "grf": 0.21852313626141573
+  }
+}

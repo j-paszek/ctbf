@@ -1,0 +1,364 @@
+{
+  "case_id": "r2bss025_seed200",
+  "variant": "r2bss025",
+  "seed": 200,
+  "algorithm": "neighbor_joining_hybrid_inverse_centrality_full",
+  "mode": "full_cnp",
+  "root": 4,
+  "newick": "((((4:0.0000,61:2.0000)4:0.0000,(34:0.0000,46:2.0000)34:2.0000)4:0.0000,((20:0.0000,39:2.0000)20:0.0000,36:3.0000)20:3.0000)4:0.0000,50:4.0000)4;",
+  "reconstructed_tree": {
+    "directed": true,
+    "multigraph": false,
+    "graph": {},
+    "nodes": [
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          2,
+          2,
+          1,
+          2
+        ],
+        "cell_id": 4,
+        "id": 4
+      },
+      {
+        "genome": [
+          2,
+          1,
+          2,
+          2,
+          1,
+          2,
+          2,
+          2,
+          1,
+          3
+        ],
+        "cell_id": 34,
+        "id": 34
+      },
+      {
+        "genome": [
+          1,
+          2,
+          2,
+          1,
+          1,
+          2,
+          2,
+          2,
+          1,
+          1
+        ],
+        "cell_id": 20,
+        "id": 20
+      },
+      {
+        "genome": [
+          6,
+          2,
+          1,
+          1,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 50,
+        "id": 50
+      },
+      {
+        "genome": [
+          3,
+          2,
+          2,
+          1,
+          2,
+          3,
+          2,
+          2,
+          1,
+          2
+        ],
+        "cell_id": 36,
+        "id": 36
+      },
+      {
+        "genome": [
+          1,
+          1,
+          2,
+          2,
+          1,
+          2,
+          2,
+          2,
+          0,
+          3
+        ],
+        "cell_id": 46,
+        "id": 46
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          1,
+          1,
+          2,
+          2,
+          2,
+          1,
+          0
+        ],
+        "cell_id": 39,
+        "id": 39
+      },
+      {
+        "genome": [
+          5,
+          2,
+          2,
+          2,
+          1,
+          2,
+          1,
+          2,
+          1,
+          2
+        ],
+        "cell_id": 61,
+        "id": 61
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          2,
+          2,
+          1,
+          2
+        ],
+        "cell_id": 4,
+        "id": 63
+      },
+      {
+        "genome": [
+          1,
+          2,
+          2,
+          1,
+          1,
+          2,
+          2,
+          2,
+          1,
+          1
+        ],
+        "cell_id": 20,
+        "id": 64
+      },
+      {
+        "genome": [
+          2,
+          1,
+          2,
+          2,
+          1,
+          2,
+          2,
+          2,
+          1,
+          3
+        ],
+        "cell_id": 34,
+        "id": 65
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          2,
+          2,
+          1,
+          2
+        ],
+        "cell_id": 4,
+        "id": 66
+      },
+      {
+        "genome": [
+          1,
+          2,
+          2,
+          1,
+          1,
+          2,
+          2,
+          2,
+          1,
+          1
+        ],
+        "cell_id": 20,
+        "id": 67
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          2,
+          2,
+          1,
+          2
+        ],
+        "cell_id": 4,
+        "id": 68
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          2,
+          2,
+          1,
+          2
+        ],
+        "cell_id": 4,
+        "id": 69
+      }
+    ],
+    "links": [
+      {
+        "weight": 0.0,
+        "source": 63,
+        "target": 4
+      },
+      {
+        "weight": 2.0,
+        "source": 63,
+        "target": 61
+      },
+      {
+        "weight": 0.0,
+        "source": 64,
+        "target": 20
+      },
+      {
+        "weight": 2.0,
+        "source": 64,
+        "target": 39
+      },
+      {
+        "weight": 0.0,
+        "source": 65,
+        "target": 34
+      },
+      {
+        "weight": 2.0,
+        "source": 65,
+        "target": 46
+      },
+      {
+        "weight": 0.0,
+        "source": 66,
+        "target": 63
+      },
+      {
+        "weight": 2.0,
+        "source": 66,
+        "target": 65
+      },
+      {
+        "weight": 0.0,
+        "source": 67,
+        "target": 64
+      },
+      {
+        "weight": 3.0,
+        "source": 67,
+        "target": 36
+      },
+      {
+        "weight": 0.0,
+        "source": 68,
+        "target": 66
+      },
+      {
+        "weight": 3.0,
+        "source": 68,
+        "target": 67
+      },
+      {
+        "weight": 0.0,
+        "source": 69,
+        "target": 68
+      },
+      {
+        "weight": 4.0,
+        "source": 69,
+        "target": 50
+      }
+    ]
+  },
+  "metrics": {
+    "ancestors_unique_restricted": {
+      "TP": 8,
+      "FP": 5,
+      "FN": 3,
+      "precision": 0.6153846153846154,
+      "recall": 0.7272727272727273,
+      "F1": 0.6666666666666667,
+      "IoU": 0.5,
+      "num_unique_pairs_true": 11,
+      "num_unique_pairs_rec": 13
+    },
+    "ancestors_multiset": {
+      "TP": 23,
+      "FP": 19,
+      "FN": 390,
+      "precision": 0.5476190476190477,
+      "recall": 0.05569007263922518,
+      "F1": 0.1010989010989011,
+      "IoU": 0.05324074074074074,
+      "num_pairs_true": 413,
+      "num_pairs_rec": 42
+    },
+    "ancestors_unique": {
+      "TP": 8,
+      "FP": 5,
+      "FN": 102,
+      "precision": 0.6153846153846154,
+      "recall": 0.07272727272727272,
+      "F1": 0.13008130081300812,
+      "IoU": 0.06956521739130435,
+      "num_unique_pairs_true": 110,
+      "num_unique_pairs_rec": 13
+    },
+    "grf": 0.09830041935262201
+  }
+}

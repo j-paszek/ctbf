@@ -28,11 +28,7 @@ spec.loader.exec_module(freeze_algorithm_variant_cases)
 
 VARIANT = "r4bss05"
 SEED = 295
-ALGORITHMS = [
-    "neighbor_joining_baseline",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
-]
+ALGORITHMS = freeze_algorithm_variant_cases.PUBLICATION_HEATMAP_ALGORITHM_NAMES
 
 
 def _case_dir():
@@ -211,7 +207,7 @@ def test_json_pairwise_ranking_uses_frozen_outputs_without_simulation():
 
     assert ranking.index.tolist() == ALGORITHMS
     assert set(ranking.columns) == {"wins", "losses", "ties", "score"}
-    assert int(ranking["wins"].sum() + ranking["ties"].sum() / 2) == 3
+    assert int(ranking["wins"].sum() + ranking["ties"].sum() / 2) == len(ALGORITHMS) * (len(ALGORITHMS) - 1) // 2
 
 
 @pytest.mark.json_full

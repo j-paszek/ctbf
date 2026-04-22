@@ -1,0 +1,112 @@
+{
+  "case_id": "r2bss025_seed128",
+  "variant": "r2bss025",
+  "seed": 128,
+  "algorithm": "neighbor_joining_full_full",
+  "mode": "full_cnp",
+  "root": 12,
+  "newick": "(12:0.0000,24:1.0000)12;",
+  "reconstructed_tree": {
+    "directed": true,
+    "multigraph": false,
+    "graph": {},
+    "nodes": [
+      {
+        "genome": [
+          6,
+          2,
+          2,
+          2,
+          3,
+          2,
+          2,
+          2,
+          2,
+          3
+        ],
+        "cell_id": 12,
+        "id": 12
+      },
+      {
+        "genome": [
+          6,
+          2,
+          3,
+          2,
+          3,
+          2,
+          2,
+          2,
+          2,
+          3
+        ],
+        "cell_id": 24,
+        "id": 24
+      },
+      {
+        "genome": [
+          6,
+          2,
+          2,
+          2,
+          3,
+          2,
+          2,
+          2,
+          2,
+          3
+        ],
+        "cell_id": 12,
+        "id": 26
+      }
+    ],
+    "links": [
+      {
+        "weight": 0.0,
+        "source": 26,
+        "target": 12
+      },
+      {
+        "weight": 1.0,
+        "source": 26,
+        "target": 24
+      }
+    ]
+  },
+  "metrics": {
+    "ancestors_unique_restricted": {
+      "TP": 2,
+      "FP": 0,
+      "FN": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "F1": 1.0,
+      "IoU": 1.0,
+      "num_unique_pairs_true": 2,
+      "num_unique_pairs_rec": 2
+    },
+    "ancestors_multiset": {
+      "TP": 2,
+      "FP": 0,
+      "FN": 122,
+      "precision": 1.0,
+      "recall": 0.016129032258064516,
+      "F1": 0.031746031746031744,
+      "IoU": 0.016129032258064516,
+      "num_pairs_true": 124,
+      "num_pairs_rec": 2
+    },
+    "ancestors_unique": {
+      "TP": 2,
+      "FP": 0,
+      "FN": 15,
+      "precision": 1.0,
+      "recall": 0.11764705882352941,
+      "F1": 0.21052631578947367,
+      "IoU": 0.11764705882352941,
+      "num_unique_pairs_true": 17,
+      "num_unique_pairs_rec": 2
+    },
+    "grf": 0.14390354830354823
+  }
+}

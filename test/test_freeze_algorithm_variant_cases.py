@@ -47,12 +47,11 @@ def test_resolve_variants_rejects_unknown_variant():
 def test_default_reference_algorithm_indices_match_accepted_reference_algorithms():
     indices = resolve_reference_algorithm_indices()
 
-    assert indices == [0, 17, 20]
-    assert REFERENCE_ALGORITHM_NAMES == [
-        "neighbor_joining_baseline",
-        "neighbor_joining_hybrid_anticentral_adaptive_v3",
-        "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
-    ]
+    assert indices == list(range(21))
+    assert len(REFERENCE_ALGORITHM_NAMES) == 21
+    assert REFERENCE_ALGORITHM_NAMES[0] == "neighbor_joining_baseline"
+    assert REFERENCE_ALGORITHM_NAMES[17] == "neighbor_joining_hybrid_anticentral_adaptive_v3"
+    assert REFERENCE_ALGORITHM_NAMES[20] == "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony"
 
 
 def test_nested_case_paths_are_stable():

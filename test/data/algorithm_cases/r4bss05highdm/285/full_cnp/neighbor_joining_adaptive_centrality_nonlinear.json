@@ -1,0 +1,69 @@
+{
+  "case_id": "r4bss05highdm_seed285",
+  "variant": "r4bss05highdm",
+  "seed": 285,
+  "algorithm": "neighbor_joining_adaptive_centrality_nonlinear",
+  "mode": "full_cnp",
+  "root": 9,
+  "newick": "9;",
+  "reconstructed_tree": {
+    "directed": true,
+    "multigraph": false,
+    "graph": {},
+    "nodes": [
+      {
+        "genome": [
+          0,
+          2,
+          8,
+          8,
+          8,
+          2,
+          2,
+          2,
+          2,
+          4
+        ],
+        "cell_id": 9,
+        "id": 9
+      }
+    ],
+    "links": []
+  },
+  "metrics": {
+    "ancestors_unique_restricted": {
+      "TP": 0,
+      "FP": 0,
+      "FN": 0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "F1": 0.0,
+      "IoU": 0.0,
+      "num_unique_pairs_true": 0,
+      "num_unique_pairs_rec": 0
+    },
+    "ancestors_multiset": {
+      "TP": 0,
+      "FP": 0,
+      "FN": 51,
+      "precision": 0.0,
+      "recall": 0.0,
+      "F1": 0.0,
+      "IoU": 0.0,
+      "num_pairs_true": 51,
+      "num_pairs_rec": 0
+    },
+    "ancestors_unique": {
+      "TP": 0,
+      "FP": 0,
+      "FN": 21,
+      "precision": 0.0,
+      "recall": 0.0,
+      "F1": 0.0,
+      "IoU": 0.0,
+      "num_unique_pairs_true": 21,
+      "num_unique_pairs_rec": 0
+    },
+    "grf": 0.22150400104945556
+  }
+}

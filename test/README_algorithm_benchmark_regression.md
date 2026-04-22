@@ -82,11 +82,20 @@ By default, distance matrices are computed serially to avoid multiprocessing res
 
 ## Freezing Nested Variant Fixtures
 
-Use `test/tools/freeze_algorithm_variant_cases.py` for the richer fixture layout used for fast algorithm iteration. By default it freezes all seven benchmark variants and the three reference algorithms:
+Use `test/tools/freeze_algorithm_variant_cases.py` for the richer fixture layout used for fast algorithm iteration. By default it freezes all seven benchmark variants and all 21 publication heatmap legacy algorithms. The legacy set includes:
 
 - `neighbor_joining_baseline`
 - `neighbor_joining_hybrid_anticentral_adaptive_v3`
 - `neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony`
+
+To add missing algorithm outputs for already frozen inputs without rerunning the simulator or `cnp2cnp`, run:
+
+```bash
+python test/tools/freeze_algorithm_variant_cases.py \
+  --existing-seeds \
+  --results-only \
+  --skip-existing
+```
 
 The output layout is:
 

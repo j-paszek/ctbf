@@ -1,0 +1,238 @@
+{
+  "case_id": "r2bss05_seed439",
+  "variant": "r2bss05",
+  "seed": 439,
+  "algorithm": "neighbor_joining_adaptive_centrality_nonlinear",
+  "mode": "full_cnp",
+  "root": 7,
+  "newick": "(7:2.0000,(0:1.0000,((21:1.0000,11:1.0000)21:1.0000,16:1.0000)21:1.0000)0:2.0000)7;",
+  "reconstructed_tree": {
+    "directed": true,
+    "multigraph": false,
+    "graph": {},
+    "nodes": [
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          4,
+          2,
+          2,
+          2,
+          2,
+          2,
+          3
+        ],
+        "cell_id": 7,
+        "id": 7
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          1
+        ],
+        "cell_id": 11,
+        "id": 11
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          3,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 16,
+        "id": 16
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "cell_id": 0,
+        "id": 0
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 21,
+        "id": 21
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 21,
+        "id": 23
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "cell_id": 21,
+        "id": 24
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "cell_id": 0,
+        "id": 25
+      },
+      {
+        "genome": [
+          2,
+          2,
+          2,
+          4,
+          2,
+          2,
+          2,
+          2,
+          2,
+          3
+        ],
+        "cell_id": 7,
+        "id": 26
+      }
+    ],
+    "links": [
+      {
+        "weight": 1.0,
+        "source": 23,
+        "target": 21
+      },
+      {
+        "weight": 1.0,
+        "source": 23,
+        "target": 11
+      },
+      {
+        "weight": 1.0,
+        "source": 24,
+        "target": 23
+      },
+      {
+        "weight": 1.0,
+        "source": 24,
+        "target": 16
+      },
+      {
+        "weight": 1.0,
+        "source": 25,
+        "target": 0
+      },
+      {
+        "weight": 1.0,
+        "source": 25,
+        "target": 24
+      },
+      {
+        "weight": 2.0,
+        "source": 26,
+        "target": 7
+      },
+      {
+        "weight": 2.0,
+        "source": 26,
+        "target": 25
+      }
+    ]
+  },
+  "metrics": {
+    "ancestors_unique_restricted": {
+      "TP": 6,
+      "FP": 6,
+      "FN": 3,
+      "precision": 0.5,
+      "recall": 0.6666666666666666,
+      "F1": 0.5714285714285715,
+      "IoU": 0.4,
+      "num_unique_pairs_true": 9,
+      "num_unique_pairs_rec": 12
+    },
+    "ancestors_multiset": {
+      "TP": 10,
+      "FP": 10,
+      "FN": 214,
+      "precision": 0.5,
+      "recall": 0.044642857142857144,
+      "F1": 0.0819672131147541,
+      "IoU": 0.042735042735042736,
+      "num_pairs_true": 224,
+      "num_pairs_rec": 20
+    },
+    "ancestors_unique": {
+      "TP": 6,
+      "FP": 6,
+      "FN": 34,
+      "precision": 0.5,
+      "recall": 0.15,
+      "F1": 0.23076923076923075,
+      "IoU": 0.13043478260869565,
+      "num_unique_pairs_true": 40,
+      "num_unique_pairs_rec": 12
+    },
+    "grf": 0.14106640090127942
+  }
+}
