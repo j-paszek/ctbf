@@ -1,5 +1,5 @@
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 import networkx as nx
@@ -11,6 +11,7 @@ class PairChoice:
     i: int
     j: int
     score: object = None
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class ReconstructionState:
     new_nodes: dict
     next_id: int
     rng: random.Random
+    context: dict = field(default_factory=dict)
 
 
 PairSelector = Callable[[ReconstructionState], PairChoice]
@@ -36,6 +38,7 @@ AncestorSelector = Callable[[ReconstructionState, PairChoice], Orientation]
 MergeStrategy = Callable[[ReconstructionState, Orientation], object]
 DistanceUpdate = Callable[[ReconstructionState, Orientation, object], None]
 RootStrategy = Callable[[ReconstructionState], tuple]
+StateConfigurator = Callable[[ReconstructionState], None]
 
 
 def initialize_reconstruction_state(dist_matrix, cells, max_id, seed=7, existing_tree=None):
@@ -111,6 +114,7 @@ def run_agglomerative_reconstruction(
     merge_strategy: MergeStrategy = copy_parent_internal_node,
     distance_update: DistanceUpdate = drop_child_keep_parent_update,
     root_strategy: RootStrategy = remaining_lineage_root,
+    configure_state: StateConfigurator | None = None,
 ):
     state = initialize_reconstruction_state(
         dist_matrix,
@@ -119,6 +123,8 @@ def run_agglomerative_reconstruction(
         seed=seed,
         existing_tree=existing_tree,
     )
+    if configure_state is not None:
+        configure_state(state)
 
     while len(state.node_list) > 1:
         pair = pair_selector(state)

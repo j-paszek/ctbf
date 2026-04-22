@@ -1,18 +1,20 @@
-import random
-import networkx as nx
-import numpy as np
 from simulator import Genotype
-from reconstructor_ancestor_selection import _is_biologically_plausible_ancestor
 from reconstructor_anticentral import (
-    _initial_anticentral_v3_centrality,
-    _anticentral_adaptive_v3_score_matrix,
-    _best_pair_from_score,
-    _ordered_pairs_by_score,
-    _copy_parent_internal_node,
-    _merge_parent_child,
-    _total_deviation_from_baseline,
+    anticentral_v3_distance_update,
+    anticentral_weighted_copy_parent_node,
+    configure_anticentral_v3_state,
+    keep_pair_order_parent_selector,
+    less_mixed_centrality_parent_selector,
+    make_anticentral_adaptive_v2_pair_selector,
+    make_anticentral_adaptive_v3_pair_selector,
+    make_anticentral_adaptive_v3_skip_unplausible_pair_selector,
+    make_anticentral_hybrid_opt_pair_selector,
+    make_plausible_pair_order_parent_selector,
+    make_plausible_parsimony_parent_selector,
+    pair_choice_orientation_selector,
 )
 from reconstructor_biopsy_guided import build_evolution_tree_impl
+from reconstructor_engine import run_agglomerative_reconstruction
 from reconstructor_nj import (
     make_nj_full_cps_variant,
     make_nj_full_variant,
@@ -55,95 +57,15 @@ def neighbor_joining_hybrid_anticentral_opt(
     (note the + instead of - in hybrid_opt)
     """
 
-    rng = random.Random(seed)
-    D = dist_matrix.copy().astype(float)
-    tree = existing_tree or nx.DiGraph()
-    new_nodes = {}
-
-    node_list = [cells[i] for i in range(len(cells))]
-
-    # add all leaf nodes
-    for node in node_list:
-        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
-
-    next_id = max_id + 1
-
-    while len(node_list) > 1:
-        n = len(D)
-
-        # --- compute centralities ---
-        c_dir = D.sum(axis=1)
-        inv_D = 1.0 / (D + epsilon)
-        np.fill_diagonal(inv_D, 0.0)
-        c_inv = inv_D.sum(axis=1)
-        c_mix = c_inv / np.power(c_dir + epsilon, lam)
-
-        # --- anti-central hybrid score matrix ---
-        score = np.full((n, n), -np.inf)
-        for i in range(n):
-            for j in range(i + 1, n):
-                d_ij = D[i, j]
-                if not np.isfinite(d_ij):  # skip invalid pairs
-                    continue
-                asym = abs(c_mix[i] - c_mix[j])
-                score[i, j] = alpha * d_ij + beta * asym
-
-        # --- choose the *highest* score pair (anti-central) ---
-        i, j = divmod(np.argmax(score), n)
-        if j < i:
-            i, j = j, i
-
-        # guard: break if score invalid
-        if not np.isfinite(score[i, j]) or i == j:
-            break
-
-        # --- parent = less central node (lower c_mix) ---
-        if c_mix[i] <= c_mix[j]:
-            parent_idx, child_idx = i, j
-        else:
-            parent_idx, child_idx = j, i
-
-        parent_leaf = node_list[parent_idx]
-        child_leaf = node_list[child_idx]
-
-        internal_node = type(parent_leaf)(
-            genome=parent_leaf.genome,
-            node_id=next_id,
-            cell_id=parent_leaf.cell_id,
-        )
-        next_id += 1
-
-        tree.add_node(
-            internal_node.node_id,
-            genome=internal_node.genome,
-            cell_id=internal_node.cell_id,
-        )
-        tree.add_edge(internal_node.node_id, parent_leaf.node_id, weight=0.0)
-        tree.add_edge(
-            internal_node.node_id, child_leaf.node_id, weight=float(D[parent_idx, child_idx])
-        )
-
-        new_nodes[internal_node] = (parent_leaf, child_leaf)
-
-        # --- update matrix ---
-        keep = [k for k in range(n) if k != child_idx]
-        D = D[np.ix_(keep, keep)]
-        node_list[parent_idx] = internal_node
-        node_list.pop(child_idx)
-
-    # --- unify if multiple roots remain ---
-    roots = [n for n in tree.nodes if tree.in_degree(n) == 0]
-    if len(roots) > 1:
-        super_root = next_id
-        tree.add_node(super_root)
-        for r in roots:
-            tree.add_edge(super_root, r, weight=0.0)
-        root_node_id = super_root
-    else:
-        root_node_id = roots[0]
-
-    root_cell_id = tree.nodes[root_node_id].get("cell_id", None)
-    return tree, new_nodes, root_cell_id
+    return run_agglomerative_reconstruction(
+        dist_matrix,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        pair_selector=make_anticentral_hybrid_opt_pair_selector(alpha, beta, lam, epsilon),
+        ancestor_selector=less_mixed_centrality_parent_selector,
+    )
 
 
 def neighbor_joining_hybrid_anticentral_adaptive_v2(
@@ -167,98 +89,15 @@ def neighbor_joining_hybrid_anticentral_adaptive_v2(
     Adaptive scaling adjusts α,β,γ with iteration depth.
     """
 
-    rng = random.Random(seed)
-    D = dist_matrix.copy().astype(float)
-    tree = existing_tree or nx.DiGraph()
-    new_nodes = {}
-
-    node_list = [cells[i] for i in range(len(cells))]
-
-    # add all leaves
-    for node in node_list:
-        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
-
-    next_id = max_id + 1
-    iteration = 0
-
-    while len(node_list) > 1:
-        iteration += 1
-        n = len(D)
-        meanD = np.nanmean(D[np.isfinite(D)])
-        # adaptive scaling (start exploratory, end focused)
-        a = alpha * (1 + 0.2 * np.tanh(3 * (1 - len(node_list) / len(cells))))
-        b = beta * (1 + 0.3 * np.tanh(2 * (len(node_list) / len(cells))))
-        g = gamma * (0.5 + 0.5 * np.tanh(3 * len(node_list) / len(cells)))
-
-        # --- compute centralities ---
-        c_dir = D.sum(axis=1)
-        inv_D = 1.0 / (D + epsilon)
-        np.fill_diagonal(inv_D, 0.0)
-        c_inv = inv_D.sum(axis=1)
-        c_mix = c_inv / np.power(c_dir + epsilon, lam)
-
-        # --- hybrid adaptive score ---
-        score = np.full((n, n), -np.inf)
-        for i in range(n):
-            for j in range(i + 1, n):
-                d_ij = D[i, j]
-                if not np.isfinite(d_ij):
-                    continue
-                asym = abs(c_mix[i] - c_mix[j])
-                score[i, j] = a * d_ij + b * asym - g / (d_ij + epsilon)
-
-        # choose highest score (anticentral-like)
-        i, j = divmod(np.argmax(score), n)
-        if j < i:
-            i, j = j, i
-        if not np.isfinite(score[i, j]) or i == j:
-            break
-
-        # choose parent: less central node (lower c_mix)
-        if c_mix[i] <= c_mix[j]:
-            parent_idx, child_idx = i, j
-        else:
-            parent_idx, child_idx = j, i
-
-        parent_leaf = node_list[parent_idx]
-        child_leaf = node_list[child_idx]
-
-        internal_node = type(parent_leaf)(
-            genome=parent_leaf.genome,
-            node_id=next_id,
-            cell_id=parent_leaf.cell_id,
-        )
-        next_id += 1
-
-        tree.add_node(
-            internal_node.node_id,
-            genome=internal_node.genome,
-            cell_id=internal_node.cell_id,
-        )
-        tree.add_edge(internal_node.node_id, parent_leaf.node_id, weight=0.0)
-        tree.add_edge(internal_node.node_id, child_leaf.node_id, weight=float(D[parent_idx, child_idx]))
-
-        new_nodes[internal_node] = (parent_leaf, child_leaf)
-
-        # update matrix
-        keep = [k for k in range(n) if k != child_idx]
-        D = D[np.ix_(keep, keep)]
-        node_list[parent_idx] = internal_node
-        node_list.pop(child_idx)
-
-    # unify multiple roots
-    roots = [n for n in tree.nodes if tree.in_degree(n) == 0]
-    if len(roots) > 1:
-        super_root = next_id
-        tree.add_node(super_root)
-        for r in roots:
-            tree.add_edge(super_root, r, weight=0.0)
-        root_id = super_root
-    else:
-        root_id = roots[0]
-
-    root_cell_id = tree.nodes[root_id].get("cell_id", None)
-    return tree, new_nodes, root_cell_id
+    return run_agglomerative_reconstruction(
+        dist_matrix,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        pair_selector=make_anticentral_adaptive_v2_pair_selector(alpha, beta, gamma, lam, epsilon),
+        ancestor_selector=less_mixed_centrality_parent_selector,
+    )
 
 
 def neighbor_joining_hybrid_anticentral_adaptive_v3(dist_matrix, cells, max_id,
@@ -291,41 +130,18 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3(dist_matrix, cells, max_id,
     root_cell_id : any
     """
 
-    rng = random.Random(seed)
-    D = dist_matrix.copy().astype(float)
-    tree = existing_tree or nx.DiGraph()
-    new_nodes = {}
-
-    # Initialize leaves
-    node_list = [cells[i] for i in range(len(cells))]
-    for node in node_list:
-        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
-
-    next_id = max_id + 1
-
-    c = _initial_anticentral_v3_centrality(D)
-
-    while len(node_list) > 1:
-        score = _anticentral_adaptive_v3_score_matrix(D, c, rng, alpha, beta, gamma)
-        i_best, j_best = _best_pair_from_score(score)
-
-        a = node_list[i_best]
-        b = node_list[j_best]
-
-        internal_node, next_id = _copy_parent_internal_node(
-            tree,
-            new_nodes,
-            a,
-            b,
-            next_id,
-            D[i_best, j_best],
-        )
-
-        # Update distance and centrality
-        D, c = _merge_parent_child(D, node_list, c, i_best, j_best, internal_node)
-
-    root = node_list[0]
-    return tree, new_nodes, root.cell_id
+    return run_agglomerative_reconstruction(
+        dist_matrix,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        pair_selector=make_anticentral_adaptive_v3_pair_selector(alpha, beta, gamma),
+        ancestor_selector=keep_pair_order_parent_selector,
+        merge_strategy=anticentral_weighted_copy_parent_node,
+        distance_update=anticentral_v3_distance_update,
+        configure_state=configure_anticentral_v3_state,
+    )
 
 
 def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible(
@@ -361,64 +177,18 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible(
     the anticentral adaptive scoring or pair ordering.
     """
 
-    rng = random.Random(seed)
-    D = dist_matrix.copy().astype(float)
-    tree = existing_tree or nx.DiGraph()
-    new_nodes = {}
-
-    # Initialize leaves
-    node_list = [cells[i] for i in range(len(cells))]
-    for node in node_list:
-        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
-
-    next_id = max_id + 1
-
-    c = _initial_anticentral_v3_centrality(D)
-
-    while len(node_list) > 1:
-        score = _anticentral_adaptive_v3_score_matrix(D, c, rng, alpha, beta, gamma)
-        i_best, j_best = _best_pair_from_score(score)
-
-        a = node_list[i_best]
-        b = node_list[j_best]
-
-        # --------------------------------------------------
-        #  BIOLOGICAL PLAUSIBILITY: choose ancestor template
-        # --------------------------------------------------
-        if enforce_plausibility:
-            can_a_parent_b = _is_biologically_plausible_ancestor(a, b)
-            can_b_parent_a = _is_biologically_plausible_ancestor(b, a)
-
-            if can_b_parent_a and not can_a_parent_b:
-                # biologically only b can be ancestor → swap roles
-                a, b = b, a
-                i_best, j_best = j_best, i_best
-                # we do NOT change which pair is merged, only which one
-                # is treated as ancestor template
-
-            # if both directions plausible: keep anticentral choice (no swap)
-            # if neither plausible: keep original (no swap, soft failure)
-
-        # Now 'a' is the chosen ancestor template for this pair
-        parent_leaf = a
-        child_leaf = b
-        parent_idx = i_best
-        child_idx = j_best
-
-        internal_node, next_id = _copy_parent_internal_node(
-            tree,
-            new_nodes,
-            parent_leaf,
-            child_leaf,
-            next_id,
-            D[parent_idx, child_idx],
-        )
-
-        # Update distance matrix and centrality
-        D, c = _merge_parent_child(D, node_list, c, parent_idx, child_idx, internal_node)
-
-    root = node_list[0]
-    return tree, new_nodes, root.cell_id
+    return run_agglomerative_reconstruction(
+        dist_matrix,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        pair_selector=make_anticentral_adaptive_v3_pair_selector(alpha, beta, gamma),
+        ancestor_selector=make_plausible_pair_order_parent_selector(enforce_plausibility),
+        merge_strategy=anticentral_weighted_copy_parent_node,
+        distance_update=anticentral_v3_distance_update,
+        configure_state=configure_anticentral_v3_state,
+    )
 
 
 def neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible(
@@ -446,76 +216,18 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible(
     This enforces biological realism without destroying the NJ-like ordering.
     """
 
-    rng = random.Random(seed)
-    D = dist_matrix.copy().astype(float)
-    tree = existing_tree or nx.DiGraph()
-    new_nodes = {}
-
-    # Init leaves
-    node_list = list(cells)
-    for node in node_list:
-        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
-
-    next_id = max_id + 1
-
-    c = _initial_anticentral_v3_centrality(D)
-
-    while len(node_list) > 1:
-        score = _anticentral_adaptive_v3_score_matrix(D, c, rng, alpha, beta, gamma)
-
-        # --- sorted list of pairs by score ---
-        pair_order = _ordered_pairs_by_score(score)
-
-        picked_pair = None
-        picked_parent_is_i = True  # orientation
-
-        # --- try pairs in order until one is plausible ---
-        for (i, j) in pair_order:
-            a = node_list[i]
-            b = node_list[j]
-            can_ai_bj = _is_biologically_plausible_ancestor(a, b)
-            can_bj_ai = _is_biologically_plausible_ancestor(b, a)
-
-            if can_ai_bj or can_bj_ai:        # we accept this pair
-                picked_pair = (i, j)
-                if can_ai_bj and not can_bj_ai:
-                    picked_parent_is_i = True
-                elif can_bj_ai and not can_ai_bj:
-                    picked_parent_is_i = False
-                else:
-                    # both plausible → keep anticentral's default “more anticentral parent”
-                    picked_parent_is_i = (c[i] > c[j])
-                break
-
-        # If no plausible pair found → fallback to best pair
-        if picked_pair is None:
-            i_best, j_best = pair_order[0]
-            picked_parent_is_i = (c[i_best] > c[j_best])
-            picked_pair = (i_best, j_best)
-
-        i_best, j_best = picked_pair
-
-        # assign actual leaves
-        parent_idx = i_best if picked_parent_is_i else j_best
-        child_idx  = j_best if picked_parent_is_i else i_best
-
-        parent_leaf = node_list[parent_idx]
-        child_leaf  = node_list[child_idx]
-
-        internal_node, next_id = _copy_parent_internal_node(
-            tree,
-            new_nodes,
-            parent_leaf,
-            child_leaf,
-            next_id,
-            D[parent_idx, child_idx],
-        )
-
-        # ---- Update D and centrality ----
-        D, c = _merge_parent_child(D, node_list, c, parent_idx, child_idx, internal_node)
-
-    root = node_list[0]
-    return tree, new_nodes, root.cell_id
+    return run_agglomerative_reconstruction(
+        dist_matrix,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        pair_selector=make_anticentral_adaptive_v3_skip_unplausible_pair_selector(alpha, beta, gamma),
+        ancestor_selector=pair_choice_orientation_selector,
+        merge_strategy=anticentral_weighted_copy_parent_node,
+        distance_update=anticentral_v3_distance_update,
+        configure_state=configure_anticentral_v3_state,
+    )
 
 
 def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony(
@@ -548,93 +260,18 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony(
     biologically realistic way (ancestor is less aberrant).
     """
 
-    rng = random.Random(seed)
-    D = dist_matrix.copy().astype(float)
-    tree = existing_tree or nx.DiGraph()
-    new_nodes = {}
-
-    # Initialize leaves
-    node_list = [cells[i] for i in range(len(cells))]
-    for node in node_list:
-        tree.add_node(node.node_id, genome=node.genome, cell_id=node.cell_id)
-
-    next_id = max_id + 1
-
-    c = _initial_anticentral_v3_centrality(D)
-
-    while len(node_list) > 1:
-        score = _anticentral_adaptive_v3_score_matrix(D, c, rng, alpha, beta, gamma)
-        i_best, j_best = _best_pair_from_score(score)
-
-        a = node_list[i_best]
-        b = node_list[j_best]
-
-        # --- biological plausibility of directions ---
-        can_a_parent_b = _is_biologically_plausible_ancestor(a, b)
-        can_b_parent_a = _is_biologically_plausible_ancestor(b, a)
-
-        if can_a_parent_b and not can_b_parent_a:
-            # only a -> b allowed
-            parent_idx, child_idx = i_best, j_best
-
-        elif can_b_parent_a and not can_a_parent_b:
-            # only b -> a allowed
-            parent_idx, child_idx = j_best, i_best
-
-        elif can_a_parent_b and can_b_parent_a:
-            # both directions allowed → apply parsimony rule
-            dev_a = _total_deviation_from_baseline(a.genome, baseline_cn)
-            dev_b = _total_deviation_from_baseline(b.genome, baseline_cn)
-
-            if dev_a < dev_b:
-                parent_idx, child_idx = i_best, j_best
-            elif dev_b < dev_a:
-                parent_idx, child_idx = j_best, i_best
-            else:
-                # same deviation → fall back to anticentral preference
-                if c[i_best] > c[j_best]:
-                    parent_idx, child_idx = i_best, j_best
-                elif c[j_best] > c[i_best]:
-                    parent_idx, child_idx = j_best, i_best
-                else:
-                    # total tie → random but seeded
-                    parent_idx, child_idx = (
-                        (i_best, j_best)
-                        if rng.random() < 0.5
-                        else (j_best, i_best)
-                    )
-
-        else:
-            # Neither direction is plausible (very rare).
-            # To avoid breaking good v3 behavior, just keep anticentral rule.
-            if c[i_best] > c[j_best]:
-                parent_idx, child_idx = i_best, j_best
-            elif c[j_best] > c[i_best]:
-                parent_idx, child_idx = j_best, i_best
-            else:
-                parent_idx, child_idx = (
-                    (i_best, j_best)
-                    if rng.random() < 0.5
-                    else (j_best, i_best)
-                )
-
-        parent_leaf = node_list[parent_idx]
-        child_leaf = node_list[child_idx]
-
-        internal_node, next_id = _copy_parent_internal_node(
-            tree,
-            new_nodes,
-            parent_leaf,
-            child_leaf,
-            next_id,
-            D[parent_idx, child_idx],
-        )
-
-        # update D and centrality
-        D, c = _merge_parent_child(D, node_list, c, parent_idx, child_idx, internal_node)
-
-    root = node_list[0]
-    return tree, new_nodes, root.cell_id
+    return run_agglomerative_reconstruction(
+        dist_matrix,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        pair_selector=make_anticentral_adaptive_v3_pair_selector(alpha, beta, gamma),
+        ancestor_selector=make_plausible_parsimony_parent_selector(baseline_cn),
+        merge_strategy=anticentral_weighted_copy_parent_node,
+        distance_update=anticentral_v3_distance_update,
+        configure_state=configure_anticentral_v3_state,
+    )
 
 
 def build_evolution_tree(cell_lists, seed=7, dist_matrix_path=None, r=2, only_nj=False, inids=None, indm=None,
