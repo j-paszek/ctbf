@@ -8,11 +8,10 @@ from collections import defaultdict
 from simulator import Genotype
 from reconstructor_ancestor_selection import (
     _is_biologically_plausible_ancestor,
-    _is_biologically_plausible_pair,
     _final_parent_choice_full_matrix,
     _choose_parent_full_nj,
     _choose_parent_hybrid_inv_centrality,
-    _choose_parent_with_full_matrix,
+    _choose_parent_with_plausibility_fallback,
 )
 from reconstructor_pair_selection import (
     _resolve_pair_ties,
@@ -237,45 +236,17 @@ def neighbour_joining_core(dist_matrix, cells, max_id, seed=7, existing_tree=Non
             parent_idx = 0 if node_list[0] is parent_leaf else 1
             child_idx = 1 - parent_idx
         else:
-            # ---- 2. Biological plausibility of direction
-            x = node_list[i]
-            y = node_list[j]
-
-            can_x_parent = _is_biologically_plausible_ancestor(x, y)
-            can_y_parent = _is_biologically_plausible_ancestor(y, x)
-
-            if can_x_parent and not can_y_parent:
-                # Only x can be parent → forced direction
-                parent_idx, child_idx = i, j
-
-            elif can_y_parent and not can_x_parent:
-                # Only y can be parent → forced direction
-                parent_idx, child_idx = j, i
-
-            elif can_x_parent and can_y_parent:
-                # Both directions biologically allowed → use NJ rule
-                # *************** core *******************
-                # Both directions biologically allowed
-                if full_information:
-                    # Use FULL matrix to decide parent
-                    parent_idx, child_idx = _choose_parent_with_full_matrix(
-                        D_full, origin_index, node_list, i, j, rng, select_ancestor_func
-                    )
-                else:
-                    # Use current (shrinking) matrix as before
-                    parent_idx, child_idx = select_ancestor_func(D, i, j, rng, larger_is_more_central=False)
-
-            else:
-                # Neither direction is biologically plausible. Keep the
-                # selected pair and fall back to the algorithm's original
-                # ancestor rule, matching the soft-fallback behavior of the
-                # later plausible NJ variants.
-                if full_information:
-                    parent_idx, child_idx = _choose_parent_with_full_matrix(
-                        D_full, origin_index, node_list, i, j, rng, select_ancestor_func
-                    )
-                else:
-                    parent_idx, child_idx = select_ancestor_func(D, i, j, rng, larger_is_more_central=False)
+            parent_idx, child_idx = _choose_parent_with_plausibility_fallback(
+                D,
+                D_full,
+                origin_index,
+                node_list,
+                i,
+                j,
+                rng,
+                select_ancestor_func,
+                full_information=full_information,
+            )
 
         # reconstructing tree
         parent_leaf = node_list[parent_idx]

@@ -114,3 +114,42 @@ def _choose_parent_with_full_matrix(
         return i, j
     else:
         return j, i
+
+
+def _choose_parent_with_plausibility_fallback(
+    D,
+    D_full,
+    origin_index,
+    node_list,
+    i,
+    j,
+    rng,
+    select_ancestor_func,
+    full_information=False,
+):
+    """
+    Orient a selected pair using biological plausibility when it decides.
+
+    If exactly one direction is biologically plausible, force that direction.
+    If both or neither direction is plausible, fall back to the algorithm's
+    configured ancestor-selection rule. This preserves the soft-fallback
+    behavior used by the plausible NJ variants.
+    """
+    x = node_list[i]
+    y = node_list[j]
+
+    can_x_parent = _is_biologically_plausible_ancestor(x, y)
+    can_y_parent = _is_biologically_plausible_ancestor(y, x)
+
+    if can_x_parent and not can_y_parent:
+        return i, j
+
+    if can_y_parent and not can_x_parent:
+        return j, i
+
+    if full_information:
+        return _choose_parent_with_full_matrix(
+            D_full, origin_index, node_list, i, j, rng, select_ancestor_func
+        )
+
+    return select_ancestor_func(D, i, j, rng, larger_is_more_central=False)
