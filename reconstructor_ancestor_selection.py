@@ -1,5 +1,8 @@
 import numpy as np
 
+from reconstructor_distance_update import ANTICENTRAL_V3_CONTEXT_KEY
+from reconstructor_engine import Orientation
+
 
 # ============================================================
 #  BIOLOGICAL PLAUSIBILITY
@@ -69,6 +72,119 @@ def _choose_parent_full_nj(D, i, j, rng, larger_is_more_central):
 
     # Centrality tie:
     return (i, j) if rng.random() < 0.5 else (j, i)
+
+
+def _choose_parent_by_larger_metric(metric, i, j, rng, tie="random"):
+    if metric[i] > metric[j]:
+        return i, j
+    if metric[j] > metric[i]:
+        return j, i
+    if tie == "left":
+        return i, j
+    return (i, j) if rng.random() < 0.5 else (j, i)
+
+
+def _choose_parent_by_smaller_metric(metric, i, j, rng, tie="random"):
+    if metric[i] < metric[j]:
+        return i, j
+    if metric[j] < metric[i]:
+        return j, i
+    if tie == "left":
+        return i, j
+    return (i, j) if rng.random() < 0.5 else (j, i)
+
+
+def more_central_parent_selector(state, pair):
+    centrality = pair.metadata["centrality"]
+    parent_idx, child_idx = _choose_parent_by_larger_metric(centrality, pair.i, pair.j, state.rng)
+    return Orientation(parent_idx, child_idx)
+
+
+def more_central_parent_selector_left_tie(state, pair):
+    centrality = pair.metadata["centrality"]
+    parent_idx, child_idx = _choose_parent_by_larger_metric(centrality, pair.i, pair.j, state.rng, tie="left")
+    return Orientation(parent_idx, child_idx)
+
+
+def lower_sum_distance_parent_selector(state, pair):
+    centrality = pair.metadata["centrality"]
+    parent_idx, child_idx = _choose_parent_by_smaller_metric(centrality, pair.i, pair.j, state.rng, tie="left")
+    return Orientation(parent_idx, child_idx)
+
+
+def keep_pair_order_parent_selector(state, pair):
+    return Orientation(pair.i, pair.j)
+
+
+def pair_choice_orientation_selector(state, pair):
+    return pair.metadata["orientation"]
+
+
+def less_mixed_centrality_parent_selector(state, pair):
+    c_mix = pair.metadata["c_mix"]
+    parent_idx, child_idx = _choose_parent_by_smaller_metric(c_mix, pair.i, pair.j, state.rng, tie="left")
+    return Orientation(parent_idx, child_idx)
+
+
+def _total_deviation_from_baseline(genome, baseline_cn):
+    g = np.asarray(genome, dtype=float)
+    return float(np.sum(np.abs(g - baseline_cn)))
+
+
+def _anticentral_centrality_orientation(state, i, j):
+    c = state.context[ANTICENTRAL_V3_CONTEXT_KEY]
+    parent_idx, child_idx = _choose_parent_by_larger_metric(c, i, j, state.rng)
+    return Orientation(parent_idx, child_idx)
+
+
+def make_plausible_pair_order_parent_selector(enforce_plausibility=True):
+    def select_parent(state, pair):
+        parent_idx = pair.i
+        child_idx = pair.j
+
+        if enforce_plausibility:
+            parent = state.node_list[parent_idx]
+            child = state.node_list[child_idx]
+            can_parent_child = _is_biologically_plausible_ancestor(parent, child)
+            can_child_parent = _is_biologically_plausible_ancestor(child, parent)
+
+            if can_child_parent and not can_parent_child:
+                parent_idx, child_idx = child_idx, parent_idx
+
+        return Orientation(parent_idx, child_idx)
+
+    return select_parent
+
+
+def make_plausible_parsimony_parent_selector(baseline_cn=2):
+    def select_parent(state, pair):
+        i = pair.i
+        j = pair.j
+        a = state.node_list[i]
+        b = state.node_list[j]
+
+        can_a_parent_b = _is_biologically_plausible_ancestor(a, b)
+        can_b_parent_a = _is_biologically_plausible_ancestor(b, a)
+
+        if can_a_parent_b and not can_b_parent_a:
+            return Orientation(i, j)
+
+        if can_b_parent_a and not can_a_parent_b:
+            return Orientation(j, i)
+
+        if can_a_parent_b and can_b_parent_a:
+            dev_a = _total_deviation_from_baseline(a.genome, baseline_cn)
+            dev_b = _total_deviation_from_baseline(b.genome, baseline_cn)
+
+            if dev_a < dev_b:
+                return Orientation(i, j)
+
+            if dev_b < dev_a:
+                return Orientation(j, i)
+
+        return _anticentral_centrality_orientation(state, i, j)
+
+    return select_parent
 
 
 def _choose_parent_hybrid_inv_centrality(D, i, j, rng, larger_is_more_central=False, epsilon=1e-6):

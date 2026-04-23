@@ -5,6 +5,9 @@ from typing import Callable
 import networkx as nx
 import numpy as np
 
+from reconstructor_distance_update import drop_child_keep_parent_update
+from reconstructor_merge import copy_parent_internal_node
+
 
 @dataclass(frozen=True)
 class PairChoice:
@@ -60,41 +63,6 @@ def initialize_reconstruction_state(dist_matrix, cells, max_id, seed=7, existing
         next_id=max_id + 1,
         rng=random.Random(seed),
     )
-
-
-def copy_parent_internal_node(state, orientation):
-    parent_leaf = state.node_list[orientation.parent_idx]
-    child_leaf = state.node_list[orientation.child_idx]
-
-    internal_node = type(parent_leaf)(
-        genome=parent_leaf.genome,
-        node_id=state.next_id,
-        cell_id=parent_leaf.cell_id,
-    )
-    state.next_id += 1
-    state.origin_index[internal_node] = state.origin_index[parent_leaf]
-
-    state.tree.add_node(
-        internal_node.node_id,
-        genome=internal_node.genome,
-        cell_id=internal_node.cell_id,
-    )
-    state.tree.add_edge(internal_node.node_id, parent_leaf.node_id, weight=0.0)
-    state.tree.add_edge(
-        internal_node.node_id,
-        child_leaf.node_id,
-        weight=float(state.D[orientation.parent_idx, orientation.child_idx]),
-    )
-    state.new_nodes[internal_node] = (parent_leaf, child_leaf)
-    return internal_node
-
-
-def drop_child_keep_parent_update(state, orientation, internal_node):
-    n = len(state.D)
-    keep_indices = [k for k in range(n) if k != orientation.child_idx]
-    state.D = state.D[np.ix_(keep_indices, keep_indices)]
-    state.node_list[orientation.parent_idx] = internal_node
-    state.node_list.pop(orientation.child_idx)
 
 
 def remaining_lineage_root(state):
