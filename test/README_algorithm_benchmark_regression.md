@@ -136,13 +136,52 @@ python test/tools/freeze_algorithm_variant_cases.py \
 
 The tool skips no failures silently: it reports failures and exits non-zero at the end. Use `--fail-fast` to stop at the first failing case. Existing files are not overwritten unless `--overwrite` is passed.
 
+## Fast Biopsy Preset Benchmark
+
+Use `test/tools/fast_biopsy_preset_benchmark.py` to compare biopsy-guided presets without rerunning simulations, biopsies, `cnp2cnp`, or existing algorithms. The tool reads the frozen nested fixture inputs and writes only additional `biopsy_guided_top` result JSON files for preset rows:
+
+- `biopsy_preset_default`
+- `biopsy_preset_anticentral_tie`
+- `biopsy_preset_binarized`
+- `biopsy_preset_anticentral_binarized`
+
+Run all frozen variants and all preset rows:
+
+```bash
+python test/tools/fast_biopsy_preset_benchmark.py --overwrite
+```
+
+Run one smoke case:
+
+```bash
+python test/tools/fast_biopsy_preset_benchmark.py \
+  --variant r4bss05 \
+  --seed 1001 \
+  --preset biopsy_preset_anticentral_binarized \
+  --overwrite
+```
+
+Then regenerate rankings and the heatmap that includes the new biopsy-preset rows:
+
+```bash
+MPLCONFIGDIR=/tmp/ctbf-mplconfig \
+XDG_CACHE_HOME=/tmp/ctbf-xdg-cache \
+python test/tools/heatmaps_from_json.py \
+  --output-file test/heatmaps_side_by_side_biopsy_presets.png \
+  --rankings-dir test/data/results_from_json
+```
+
+The heatmap tool uses mode-specific algorithm lists: the `full_cnp` panels remain limited to legacy NJ-like algorithms, while `biopsy_guided_top` panels include those algorithms plus the biopsy-preset rows.
+
 ## JSON Fixture Workflows
 
 The nested JSON fixtures support fast checks that do not rerun the simulator except where explicitly noted.
 
 ## Universal Legacy JSON Checker
 
-After adding a new algorithm result JSON, run the legacy checker from the repo root:
+`run_algorithm_case_json_checks.py` is now the canonical checker. It validates only the publication benchmark set committed in `PUBLICATION_HEATMAP_ALGORITHM_NAMES`, even if extra stored rows such as `new_alg` or `biopsy_preset_*` are present under `test/data/algorithm_cases/`.
+
+Run the canonical checker from the repo root:
 
 ```bash
 python test/tools/run_algorithm_case_json_checks.py
@@ -154,13 +193,72 @@ From inside the `test/` directory:
 python tools/run_algorithm_case_json_checks.py
 ```
 
-The default checker runs:
+The default canonical checker runs:
 
 - evaluator replay for every stored reconstructed tree,
 - reconstruction determinism for every stored algorithm result,
 - JSON heatmap and ranking CSV regeneration.
 
-This is the recommended default after adding a new algorithm because it verifies that stored trees still score correctly, reconstruction remains deterministic from frozen inputs, and the heatmap workflow can consume the new files.
+This is the recommended default after refactors because it verifies that the committed canonical benchmark set still scores correctly, reconstruction remains deterministic from frozen inputs, and the heatmap workflow can consume the canonical files.
+
+## Experimental JSON Checker
+
+Use `run_experimental_json_checks.py` for non-canonical stored rows such as:
+
+- `new_alg`
+- `biopsy_preset_default`
+- `biopsy_preset_binarized`
+
+From the repo root:
+
+```bash
+python test/tools/run_experimental_json_checks.py \
+  --algorithm-name new_alg
+```
+
+From inside the `test/` directory:
+
+```bash
+python tools/run_experimental_json_checks.py \
+  --algorithm-name new_alg
+```
+
+That runs metrics replay and determinism replay only for the selected stored row names.
+
+Validate several extra rows at once:
+
+```bash
+python test/tools/run_experimental_json_checks.py \
+  --algorithm-name new_alg \
+  --algorithm-name biopsy_preset_default \
+  --algorithm-name biopsy_preset_binarized
+```
+
+Also regenerate a filtered heatmap for the selected rows:
+
+```bash
+python test/tools/run_experimental_json_checks.py \
+  --algorithm-name new_alg \
+  --algorithm-name neighbor_joining_baseline \
+  --algorithm-name neighbor_joining_hybrid_opt \
+  --algorithm-name neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony \
+  --check heatmap \
+  --heatmap-output-file test/heatmaps_side_by_side_new_alg.png
+```
+
+Or run all three checks together:
+
+```bash
+python test/tools/run_experimental_json_checks.py \
+  --algorithm-name new_alg \
+  --algorithm-name neighbor_joining_baseline \
+  --algorithm-name neighbor_joining_hybrid_opt \
+  --algorithm-name neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony \
+  --check metrics \
+  --check determinism \
+  --check heatmap \
+  --heatmap-output-file test/heatmaps_side_by_side_new_alg.png
+```
 
 For the full infrastructure replay, run:
 
@@ -250,6 +348,214 @@ To regenerate only selected variants:
 python test/tools/heatmaps_from_json.py \
   --variant r4bss05 \
   --variant r4bss05highdm
+```
+
+## Selecting Algorithms For The Heatmap
+
+`test/tools/heatmaps_from_json.py` reads already stored result JSON files from:
+
+```text
+test/data/algorithm_cases/<variant>/<seed>/<mode>/<algorithm>.json
+```
+
+The y-axis rows are algorithm/result names. By default, the script uses every result row available for each mode:
+
+- `full_cnp` currently has the legacy NJ-like algorithms plus any experimental algorithm generated for that mode.
+- `biopsy_guided_top` has the same algorithm rows when generated for that mode, and may also have biopsy-preset rows.
+
+To list available rows for one variant and mode:
+
+```bash
+PYTHONPATH=test python - <<'PY'
+from json_case_results import algorithms_for_variant
+
+for mode in ["full_cnp", "biopsy_guided_top"]:
+    print(mode)
+    for index, name in enumerate(algorithms_for_variant("test/data/algorithm_cases", "r4bss05", mode)):
+        print(f"  {index}: {name}")
+PY
+```
+
+To generate a heatmap with a specific subset, pass `--algorithm-name` once per row:
+
+```bash
+MPLCONFIGDIR=/tmp/ctbf_mpl_config \
+XDG_CACHE_HOME=/tmp/ctbf_xdg_cache \
+python test/tools/heatmaps_from_json.py \
+  --algorithm-name neighbor_joining_baseline \
+  --algorithm-name neighbor_joining_hybrid_opt \
+  --algorithm-name neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony \
+  --algorithm-name new_alg \
+  --output-file test/heatmaps_side_by_side_new_alg.png
+```
+
+The script keeps only selected names that exist in each mode. For example, if a row exists in `biopsy_guided_top` but not in `full_cnp`, it is omitted from the `full_cnp` panels.
+
+Common named subsets live in `reconstructor_algorithm_config.py` as `COMPARISON_GROUPS`. Current useful groups are:
+
+```text
+publication
+recommended_core
+biopsy_preset_comparison
+new_alg_comparison
+```
+
+Use a group instead of spelling every algorithm:
+
+```bash
+MPLCONFIGDIR=/tmp/ctbf_mpl_config \
+XDG_CACHE_HOME=/tmp/ctbf_xdg_cache \
+python test/tools/heatmaps_from_json.py \
+  --algorithm-group new_alg_comparison \
+  --output-file test/heatmaps_side_by_side_new_alg.png
+```
+
+`new_alg_comparison` currently expands to:
+
+```text
+neighbor_joining_baseline
+neighbor_joining_hybrid_opt
+neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony
+new_alg
+```
+
+You can combine groups and explicit names:
+
+```bash
+python test/tools/heatmaps_from_json.py \
+  --algorithm-group recommended_core \
+  --algorithm-name new_alg \
+  --output-file /tmp/recommended_plus_new_alg.png
+```
+
+The heatmap highlights rows listed in `HIGHLIGHTED_HEATMAP_ALGORITHMS` in `reconstructor_algorithm_config.py`. At the moment this is:
+
+```text
+new_alg
+```
+
+## Creating A New Algorithm From Blocks
+
+The intended pattern is:
+
+1. Choose a pair selector from `reconstructor_pair_selection.py`.
+2. Choose or add an ancestor selector in `reconstructor_ancestor_selection.py`.
+3. Choose a merge strategy from `reconstructor_merge.py`.
+4. Choose a distance update from `reconstructor_distance_update.py`.
+5. Wire those blocks together in `reconstructor_algorithms.py`.
+6. Register the algorithm in `reconstructor_algorithm_specs.py`.
+7. Add display/explanation metadata and comparison groups in `reconstructor_algorithm_config.py`.
+8. Generate JSON results from frozen cases.
+9. Generate a heatmap using `--algorithm-name` or `--algorithm-group`.
+
+`new_alg` is the example of this pattern.
+
+Its ancestor selector is in `reconstructor_ancestor_selection.py`:
+
+```python
+def plausible_then_centrality_parent_selector(state, pair):
+    i = pair.i
+    j = pair.j
+    a = state.node_list[i]
+    b = state.node_list[j]
+
+    can_a_parent_b = is_biologically_plausible_ancestor(a, b)
+    can_b_parent_a = is_biologically_plausible_ancestor(b, a)
+
+    if can_a_parent_b and not can_b_parent_a:
+        return Orientation(i, j)
+
+    if can_b_parent_a and not can_a_parent_b:
+        return Orientation(j, i)
+
+    centrality = _pair_centrality_metric(state, pair)
+    parent_idx, child_idx = _choose_parent_by_larger_metric(centrality, i, j, state.rng)
+    return Orientation(parent_idx, child_idx)
+```
+
+This means:
+
+- if only `a -> b` is biologically plausible, use `a` as parent;
+- if only `b -> a` is biologically plausible, use `b` as parent;
+- if plausibility does not decide, use centrality.
+
+The algorithm itself is in `reconstructor_algorithms.py`:
+
+```python
+def new_alg(
+    dist_matrix,
+    cells,
+    max_id,
+    seed=None,
+    existing_tree=None,
+    alpha: float = 1.0,
+    beta: float = 1.0,
+    gamma: float = 0.5,
+):
+    return _run_anticentral_v3_algorithm(
+        dist_matrix,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        pair_selector=make_anticentral_adaptive_v3_pair_selector(alpha, beta, gamma),
+        ancestor_selector=plausible_then_centrality_parent_selector,
+    )
+```
+
+`_run_anticentral_v3_algorithm(...)` supplies the remaining shared blocks:
+
+```text
+merge_strategy = anticentral_weighted_copy_parent_node
+distance_update = anticentral_v3_distance_update
+configure_state = configure_anticentral_v3_state
+```
+
+Register it in `reconstructor_algorithm_specs.py`:
+
+```python
+EXPERIMENTAL_ALGORITHM_SPECS = [
+    ReconstructionAlgorithmSpec("new_alg", _constant_algorithm(new_alg), legacy=False),
+]
+```
+
+Add metadata in `reconstructor_algorithm_config.py`:
+
+```python
+AlgorithmDisplayConfig(
+    name="new_alg",
+    label="new_alg",
+    summary="Experimental anticentral reconstruction: anticentral adaptive v3 pair selection, then plausible ancestor orientation, then centrality fallback.",
+    procedure=AlgorithmProcedureConfig(
+        pair_selection="anticentral adaptive v3 pair selection",
+        ancestor_selection="plausible ancestor selector, then larger-centrality fallback",
+        distance_update="anticentral_v3_distance_update",
+        merge_strategy="anticentral weighted-copy parent node",
+        plausibility="ancestor plausibility first; centrality if plausibility does not decide",
+    ),
+    groups=("experimental", "new_alg_comparison"),
+    highlight_in_heatmap=True,
+)
+```
+
+Then generate frozen JSON results for the new algorithm without rerunning simulations or `cnp2cnp`:
+
+```bash
+python test/tools/freeze_algorithm_variant_cases.py \
+  --existing-seeds \
+  --results-only \
+  --algorithm-name new_alg \
+  --overwrite
+```
+
+Finally generate the focused comparison heatmap:
+
+```bash
+MPLCONFIGDIR=/tmp/ctbf_mpl_config \
+XDG_CACHE_HOME=/tmp/ctbf_xdg_cache \
+python test/tools/heatmaps_from_json.py \
+  --algorithm-group new_alg_comparison \
+  --output-file test/heatmaps_side_by_side_new_alg.png
 ```
 
 The test suite also validates these JSON workflows on a representative fixture:

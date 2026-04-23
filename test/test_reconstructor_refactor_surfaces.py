@@ -11,6 +11,12 @@ from reconstructor import (
     resolve_biopsy_guided_config,
 )
 from reconstructor_algorithm_specs import LEGACY_ALGORITHM_SPECS, ReconstructionAlgorithmSpec
+from reconstructor_algorithm_config import (
+    ALGORITHM_CONFIG_BY_NAME,
+    COMPARISON_GROUPS,
+    HIGHLIGHTED_HEATMAP_ALGORITHMS,
+    AlgorithmDisplayConfig,
+)
 from reconstructor_plausibility import (
     is_biologically_plausible_ancestor,
     is_biologically_plausible_pair,
@@ -33,6 +39,27 @@ def test_algorithm_specs_are_registry_source_of_truth():
     assert [spec.name for spec in LEGACY_ALGORITHM_SPECS] == LEGACY_ALGORITHM_NAMES
     assert [algorithm.__name__ for algorithm in get_legacy_algorithms()] == LEGACY_ALGORITHM_NAMES
     assert all(isinstance(spec, ReconstructionAlgorithmSpec) for spec in LEGACY_ALGORITHM_SPECS)
+
+
+def test_algorithm_display_config_explains_legacy_and_fast_benchmark_rows():
+    expected_names = set(LEGACY_ALGORITHM_NAMES) | {
+        "new_alg",
+        "biopsy_preset_default",
+        "biopsy_preset_anticentral_tie",
+        "biopsy_preset_binarized",
+        "biopsy_preset_anticentral_binarized",
+    }
+
+    assert expected_names.issubset(ALGORITHM_CONFIG_BY_NAME)
+    assert all(isinstance(ALGORITHM_CONFIG_BY_NAME[name], AlgorithmDisplayConfig) for name in expected_names)
+    assert ALGORITHM_CONFIG_BY_NAME["neighbor_joining_baseline"].procedure.pair_selection
+    assert ALGORITHM_CONFIG_BY_NAME["neighbor_joining_baseline"].summary
+    assert COMPARISON_GROUPS["recommended_core"] == (
+        "neighbor_joining_baseline",
+        "neighbor_joining_hybrid_opt",
+        "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
+    )
+    assert set(HIGHLIGHTED_HEATMAP_ALGORITHMS) == {"new_alg"}
 
 
 def test_biopsy_guided_presets_are_resolvable():

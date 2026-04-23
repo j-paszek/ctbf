@@ -2,6 +2,9 @@ import argparse
 from pathlib import Path
 import sys
 
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -17,8 +20,14 @@ if str(TEST_DIR) not in sys.path:
 from json_case_results import (  # noqa: E402
     DEFAULT_CASES_ROOT,
     TEST_VARIANTS,
+    algorithms_for_variant,
     wins_minus_losses_matrix_from_json,
     write_ranking_tables_from_json,
+)
+from reconstructor_algorithm_config import (  # noqa: E402
+    HIGHLIGHTED_HEATMAP_ALGORITHMS,
+    algorithm_label,
+    resolve_comparison_algorithm_names,
 )
 
 
@@ -30,10 +39,31 @@ HEATMAP_SPECS = [
 ]
 
 
-def plot_side_by_side_heatmaps_from_json(cases_root, variants, output_file, alpha=0.05):
-    algorithms = None
+def _algorithms_for_mode(cases_root, variants, mode, selected_algorithms=None):
+    available = algorithms_for_variant(cases_root, variants[0], mode)
+    if selected_algorithms is None:
+        return available
+    return [algorithm for algorithm in selected_algorithms if algorithm in available]
+
+
+def _style_algorithm_tick_labels(ax, algorithms):
+    highlighted = set(HIGHLIGHTED_HEATMAP_ALGORITHMS)
+    for tick_label, algorithm in zip(ax.get_yticklabels(), algorithms):
+        if algorithm in highlighted:
+            tick_label.set_fontweight("bold")
+
+
+def plot_side_by_side_heatmaps_from_json(
+    cases_root,
+    variants,
+    output_file,
+    alpha=0.05,
+    selected_algorithms=None,
+):
     matrices = {}
+    algorithms_by_key = {}
     for metric, mode, _, key in HEATMAP_SPECS:
+        algorithms = _algorithms_for_mode(cases_root, variants, mode, selected_algorithms)
         matrix, algorithms = wins_minus_losses_matrix_from_json(
             cases_root,
             variants,
@@ -43,8 +73,9 @@ def plot_side_by_side_heatmaps_from_json(cases_root, variants, output_file, alph
             alpha=alpha,
         )
         matrices[key] = matrix
+        algorithms_by_key[key] = algorithms
 
-    fig = plt.figure(figsize=(24, 14))
+    fig = plt.figure(figsize=(28, 16))
     gs = gridspec.GridSpec(
         nrows=2,
         ncols=3,
@@ -54,14 +85,14 @@ def plot_side_by_side_heatmaps_from_json(cases_root, variants, output_file, alph
         figure=fig,
     )
     cbar_ax = fig.add_subplot(gs[:, 2])
-    short_algs = [algorithm.replace("neighbor_joining_", "") for algorithm in algorithms]
 
     for idx, (_, _, title, key) in enumerate(HEATMAP_SPECS):
         row = idx // 2
         col = idx % 2
         ax = fig.add_subplot(gs[row, col])
+        algorithms = algorithms_by_key[key]
+        short_algs = [algorithm_label(algorithm) for algorithm in algorithms]
         matrix = matrices[key].loc[variants, algorithms].T.astype(float)
-        show_y = col == 0
         sns.heatmap(
             matrix,
             annot=True,
@@ -69,14 +100,15 @@ def plot_side_by_side_heatmaps_from_json(cases_root, variants, output_file, alph
             cmap="coolwarm",
             center=0,
             xticklabels=variants,
-            yticklabels=short_algs if show_y else [],
+            yticklabels=short_algs,
             ax=ax,
             cbar=(idx == len(HEATMAP_SPECS) - 1),
             cbar_ax=cbar_ax if idx == len(HEATMAP_SPECS) - 1 else None,
         )
         ax.set_title(title, fontsize=14)
         ax.set_xlabel("Test variants")
-        ax.set_ylabel("Algorithms" if show_y else "")
+        ax.set_ylabel("Algorithms")
+        _style_algorithm_tick_labels(ax, algorithms)
 
     output_file = Path(output_file)
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -92,6 +124,10 @@ def parse_args():
     parser.add_argument("--output-file", type=Path, default=PROJECT_ROOT / "test" / "heatmaps_side_by_side_from_json.png")
     parser.add_argument("--variant", action="append", choices=TEST_VARIANTS,
                         help="Variant to include. Can be passed multiple times. Defaults to all variants.")
+    parser.add_argument("--algorithm-group", action="append",
+                        help="Comparison group from reconstructor_algorithm_config.py. Can be passed multiple times.")
+    parser.add_argument("--algorithm-name", action="append",
+                        help="Explicit algorithm/result row to include. Can be passed multiple times.")
     parser.add_argument("--alpha", type=float, default=0.05)
     parser.add_argument("--skip-ranking-csv", action="store_true")
     return parser.parse_args()
@@ -100,6 +136,7 @@ def parse_args():
 def main():
     args = parse_args()
     variants = args.variant or TEST_VARIANTS
+    selected_algorithms = resolve_comparison_algorithm_names(args.algorithm_group, args.algorithm_name)
     if not args.skip_ranking_csv:
         written = write_ranking_tables_from_json(
             args.cases_root,
@@ -113,6 +150,7 @@ def main():
         variants,
         args.output_file,
         alpha=args.alpha,
+        selected_algorithms=selected_algorithms,
     )
     print(f"Saved: {output_file}")
 

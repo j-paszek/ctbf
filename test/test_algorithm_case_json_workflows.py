@@ -1,4 +1,5 @@
 import importlib.util
+import os
 from pathlib import Path
 import sys
 
@@ -12,10 +13,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from json_case_results import (  # noqa: E402
     DEFAULT_CASES_ROOT,
+    algorithms_for_variant,
     load_json,
     pairwise_ranking_from_json,
     variant_seed_dirs,
 )
+from reconstructor_algorithm_config import resolve_comparison_algorithm_names  # noqa: E402
 from ctbs_utils import to_newick  # noqa: E402
 from evaluator import grf_tree  # noqa: E402
 from evaluator_full import evaluate_4  # noqa: E402
@@ -25,10 +28,16 @@ spec = importlib.util.spec_from_file_location("freeze_algorithm_variant_cases", 
 freeze_algorithm_variant_cases = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(freeze_algorithm_variant_cases)
 
+FAST_BENCHMARK_TOOL_PATH = PROJECT_ROOT / "test" / "tools" / "fast_biopsy_preset_benchmark.py"
+fast_spec = importlib.util.spec_from_file_location("fast_biopsy_preset_benchmark", FAST_BENCHMARK_TOOL_PATH)
+fast_biopsy_preset_benchmark = importlib.util.module_from_spec(fast_spec)
+fast_spec.loader.exec_module(fast_biopsy_preset_benchmark)
+
 
 VARIANT = "r4bss05"
 SEED = 295
 ALGORITHMS = freeze_algorithm_variant_cases.PUBLICATION_HEATMAP_ALGORITHM_NAMES
+CANONICAL_ALGORITHM_SET = set(ALGORITHMS)
 
 
 def _case_dir():
@@ -62,6 +71,8 @@ def _stored_tree_metric_cases():
             if not mode_dir.exists():
                 continue
             for result_file in sorted(mode_dir.glob("*.json")):
+                if result_file.stem not in CANONICAL_ALGORITHM_SET:
+                    continue
                 cases.append((variant, seed, mode, result_file.stem, input_file, result_file))
     return cases
 
@@ -70,11 +81,65 @@ def _stored_reconstruction_cases():
     return _stored_tree_metric_cases()
 
 
+def _selected_extra_algorithm_names():
+    raw = os.environ.get("CTBF_JSON_EXTRA_ALGORITHM_NAMES")
+    if not raw:
+        return []
+    return [name.strip() for name in raw.split(",") if name.strip()]
+
+
+def _stored_extra_tree_metric_cases():
+    selected = set(_selected_extra_algorithm_names())
+    if not selected:
+        return []
+
+    cases = []
+    for variant, seed, seed_dir in variant_seed_dirs(DEFAULT_CASES_ROOT):
+        input_file = seed_dir / "input.json"
+        for mode in ["full_cnp", "biopsy_guided_top"]:
+            mode_dir = seed_dir / mode
+            if not mode_dir.exists():
+                continue
+            for result_file in sorted(mode_dir.glob("*.json")):
+                if result_file.stem in CANONICAL_ALGORITHM_SET:
+                    continue
+                if result_file.stem not in selected:
+                    continue
+                cases.append((variant, seed, mode, result_file.stem, input_file, result_file))
+    return cases
+
+
 def _stored_input_cases():
     return [
         (variant, seed, seed_dir / "input.json")
         for variant, seed, seed_dir in variant_seed_dirs(DEFAULT_CASES_ROOT)
     ]
+
+
+def _case_id(case):
+    if not isinstance(case, tuple) or len(case) < 4:
+        return "no-cases"
+    return f"{case[0]}-{case[1]}-{case[2]}-{case[3]}"
+
+
+def _reconstruct_from_stored_result(input_case, stored_result, mode):
+    algorithms = freeze_algorithm_variant_cases.algorithm_by_name()
+    algorithm_name = stored_result["algorithm"]
+    if algorithm_name in algorithms:
+        return freeze_algorithm_variant_cases.reconstruction_result(
+            input_case,
+            algorithms[algorithm_name],
+            mode,
+        )
+
+    if stored_result.get("biopsy_guided_preset") is not None:
+        return fast_biopsy_preset_benchmark.biopsy_preset_result(
+            input_case,
+            algorithm_name,
+            stored_result["biopsy_guided_preset"],
+        )
+
+    raise KeyError(algorithm_name)
 
 
 @pytest.mark.parametrize("mode", ["full_cnp", "biopsy_guided_top"])
@@ -180,15 +245,78 @@ def test_json_reconstruction_is_deterministic_against_stored_tree(mode, algorith
 @pytest.mark.parametrize(
     "case",
     _stored_reconstruction_cases(),
-    ids=lambda case: f"{case[0]}-{case[1]}-{case[2]}-{case[3]}",
+    ids=_case_id,
 )
 def test_all_json_reconstruction_is_deterministic_against_stored_tree(case):
     _, _, mode, algorithm, input_file, result_file = case
     input_case = load_json(input_file)
-    algorithm_callable = freeze_algorithm_variant_cases.algorithm_by_name()[algorithm]
-
-    regenerated = freeze_algorithm_variant_cases.reconstruction_result(input_case, algorithm_callable, mode)
     stored = load_json(result_file)
+    regenerated = _reconstruct_from_stored_result(input_case, stored, mode)
+    stored_tree = _tree_from_node_link(stored["reconstructed_tree"])
+
+    assert regenerated["root"] == stored["root"]
+    assert regenerated["newick"] == stored["newick"]
+    assert regenerated["newick"] == to_newick(stored_tree)
+
+
+def test_json_biopsy_preset_reconstruction_is_deterministic_against_stored_tree():
+    input_case = load_json(
+        DEFAULT_CASES_ROOT / "r4bss05" / "1001" / "input.json"
+    )
+    stored = load_json(
+        DEFAULT_CASES_ROOT
+        / "r4bss05"
+        / "1001"
+        / "biopsy_guided_top"
+        / "biopsy_preset_binarized.json"
+    )
+
+    regenerated = _reconstruct_from_stored_result(input_case, stored, "biopsy_guided_top")
+    stored_tree = _tree_from_node_link(stored["reconstructed_tree"])
+
+    assert regenerated["root"] == stored["root"]
+    assert regenerated["newick"] == stored["newick"]
+    assert regenerated["newick"] == to_newick(stored_tree)
+
+
+@pytest.mark.parametrize(
+    "case",
+    _stored_extra_tree_metric_cases(),
+    ids=_case_id,
+)
+def test_selected_extra_json_reconstructed_tree_metrics_match_stored_values(case):
+    _, _, _, _, input_file, result_file = case
+    input_case = load_json(input_file)
+    result = load_json(result_file)
+    true_tree = _tree_from_node_link(input_case["true_tree"])
+    reconstructed_tree = _tree_from_node_link(result["reconstructed_tree"])
+    labels = {
+        str(data.get("cell_id"))
+        for _, data in reconstructed_tree.nodes(data=True)
+        if data.get("cell_id") is not None
+    }
+
+    metrics = evaluate_4(true_tree, reconstructed_tree, restrict_labels=labels)
+    grf = grf_tree(true_tree, _root_id(true_tree), reconstructed_tree, _root_id(reconstructed_tree))
+
+    stored = result["metrics"]["ancestors_unique_restricted"]
+    actual = metrics["ancestors_unique_restricted"]
+    assert actual["precision"] == pytest.approx(stored["precision"])
+    assert actual["recall"] == pytest.approx(stored["recall"])
+    assert actual["F1"] == pytest.approx(stored["F1"])
+    assert grf == pytest.approx(result["metrics"]["grf"])
+
+
+@pytest.mark.parametrize(
+    "case",
+    _stored_extra_tree_metric_cases(),
+    ids=_case_id,
+)
+def test_selected_extra_json_reconstruction_is_deterministic_against_stored_tree(case):
+    _, _, mode, _, input_file, result_file = case
+    input_case = load_json(input_file)
+    stored = load_json(result_file)
+    regenerated = _reconstruct_from_stored_result(input_case, stored, mode)
     stored_tree = _tree_from_node_link(stored["reconstructed_tree"])
 
     assert regenerated["root"] == stored["root"]
@@ -210,11 +338,39 @@ def test_json_pairwise_ranking_uses_frozen_outputs_without_simulation():
     assert int(ranking["wins"].sum() + ranking["ties"].sum() / 2) == len(ALGORITHMS) * (len(ALGORITHMS) - 1) // 2
 
 
+def test_json_algorithm_listing_keeps_biopsy_preset_rows_mode_specific():
+    full_cnp_algorithms = algorithms_for_variant(DEFAULT_CASES_ROOT, VARIANT, "full_cnp")
+    biopsy_guided_algorithms = algorithms_for_variant(DEFAULT_CASES_ROOT, VARIANT, "biopsy_guided_top")
+
+    preset_rows = {
+        "biopsy_preset_default",
+        "biopsy_preset_anticentral_tie",
+        "biopsy_preset_binarized",
+        "biopsy_preset_anticentral_binarized",
+    }
+    assert preset_rows.isdisjoint(full_cnp_algorithms)
+    assert preset_rows.issubset(biopsy_guided_algorithms)
+
+
+def test_comparison_group_resolves_core_algorithm_names_for_heatmap_filtering():
+    assert resolve_comparison_algorithm_names(["recommended_core"]) == [
+        "neighbor_joining_baseline",
+        "neighbor_joining_hybrid_opt",
+        "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
+    ]
+    assert resolve_comparison_algorithm_names(["new_alg_comparison"]) == [
+        "neighbor_joining_baseline",
+        "neighbor_joining_hybrid_opt",
+        "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
+        "new_alg",
+    ]
+
+
 @pytest.mark.json_full
 @pytest.mark.parametrize(
     "case",
     _stored_tree_metric_cases(),
-    ids=lambda case: f"{case[0]}-{case[1]}-{case[2]}-{case[3]}",
+    ids=_case_id,
 )
 def test_all_json_reconstructed_tree_metrics_match_stored_values(case):
     _, _, _, _, input_file, result_file = case

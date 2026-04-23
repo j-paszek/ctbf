@@ -18,64 +18,49 @@ CHECKS = {
         "-m",
         "pytest",
         "-q",
-        f"{TEST_FILE}::test_all_json_reconstructed_tree_metrics_match_stored_values",
+        f"{TEST_FILE}::test_selected_extra_json_reconstructed_tree_metrics_match_stored_values",
     ],
     "determinism": [
         sys.executable,
         "-m",
         "pytest",
         "-q",
-        f"{TEST_FILE}::test_all_json_reconstruction_is_deterministic_against_stored_tree",
-    ],
-    "true-tree-matrix": [
-        sys.executable,
-        "-m",
-        "pytest",
-        "-q",
-        f"{TEST_FILE}::test_all_json_true_tree_recomputes_true_tree_distance_matrix",
-    ],
-    "cnp2cnp-matrix": [
-        sys.executable,
-        "-m",
-        "pytest",
-        "-q",
-        f"{TEST_FILE}::test_all_json_biopsies_recompute_cnp2cnp_matrix",
-    ],
-    "heatmap": [
-        sys.executable,
-        str(HEATMAP_SCRIPT),
+        f"{TEST_FILE}::test_selected_extra_json_reconstruction_is_deterministic_against_stored_tree",
     ],
 }
 
-DEFAULT_CHECKS = ["metrics", "determinism", "heatmap"]
-ALL_CHECKS = ["metrics", "determinism", "true-tree-matrix", "cnp2cnp-matrix", "heatmap"]
+DEFAULT_CHECKS = ["metrics", "determinism"]
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Run the frozen JSON canonical benchmark checks for the publication "
-            "algorithm set."
+            "Run frozen JSON checks for non-canonical stored rows such as "
+            "experimental algorithms or biopsy-preset benchmark rows."
         )
     )
     parser.add_argument(
-        "--all",
-        action="store_true",
-        help="Also run true-tree and cnp2cnp distance-matrix replay checks.",
+        "--algorithm-name",
+        action="append",
+        required=True,
+        help="Stored result row to validate. Can be passed multiple times.",
     )
     parser.add_argument(
         "--check",
         action="append",
-        choices=ALL_CHECKS,
-        help=(
-            "Run only the named check. Can be passed multiple times. "
-            "Defaults to metrics, determinism, and heatmap."
-        ),
+        choices=DEFAULT_CHECKS + ["heatmap"],
+        help="Run only the named check. Defaults to metrics and determinism.",
+    )
+    parser.add_argument(
+        "--heatmap-output-file",
+        type=Path,
+        default=PROJECT_ROOT / "test" / "heatmaps_side_by_side_experimental.png",
+        help="Output file used when heatmap check is enabled.",
     )
     parser.add_argument(
         "--skip-heatmap",
         action="store_true",
-        help="Do not regenerate heatmap/ranking outputs.",
+        help="Do not regenerate a heatmap for the selected rows.",
     )
     parser.add_argument(
         "--dry-run",
@@ -86,7 +71,7 @@ def parse_args():
 
 
 def selected_checks(args):
-    checks = args.check or (ALL_CHECKS if args.all else DEFAULT_CHECKS)
+    checks = args.check or list(DEFAULT_CHECKS)
     if args.skip_heatmap:
         checks = [check for check in checks if check != "heatmap"]
     return checks
@@ -96,10 +81,11 @@ def command_text(command):
     return " ".join(str(part) for part in command)
 
 
-def run_check(name, command):
+def run_check(name, command, extra_algorithm_names):
     print(f"\n== {name} ==", flush=True)
     print(command_text(command), flush=True)
     env = os.environ.copy()
+    env["CTBF_JSON_EXTRA_ALGORITHM_NAMES"] = ",".join(extra_algorithm_names)
     env.setdefault("MPLBACKEND", "Agg")
     env.setdefault("MPLCONFIGDIR", str(Path("/tmp") / "ctbf_mpl_config"))
     env.setdefault("XDG_CACHE_HOME", str(Path("/tmp") / "ctbf_xdg_cache"))
@@ -112,14 +98,25 @@ def main():
     args = parse_args()
     checks = selected_checks(args)
 
+    commands = {name: list(CHECKS[name]) for name in checks if name in CHECKS}
+    if "heatmap" in checks:
+        command = [
+            sys.executable,
+            str(HEATMAP_SCRIPT),
+        ]
+        for name in args.algorithm_name:
+            command.extend(["--algorithm-name", name])
+        command.extend(["--output-file", str(args.heatmap_output_file)])
+        commands["heatmap"] = command
+
     if args.dry_run:
         for name in checks:
-            print(command_text(CHECKS[name]))
+            print(command_text(commands[name]))
         return 0
 
     failures = []
     for name in checks:
-        returncode = run_check(name, CHECKS[name])
+        returncode = run_check(name, commands[name], args.algorithm_name)
         if returncode:
             failures.append((name, returncode))
             break
@@ -129,7 +126,7 @@ def main():
         print(f"\nFailed: {name} exited with {returncode}")
         return returncode
 
-    print("\nAll selected JSON legacy checks passed.")
+    print("\nAll selected experimental JSON checks passed.")
     return 0
 
 

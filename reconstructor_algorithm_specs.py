@@ -9,6 +9,7 @@ from reconstructor_algorithms import (
     neighbor_joining_adaptive_centrality,
     neighbor_joining_adaptive_centrality_nonlinear,
     neighbor_joining_adaptive_centrality_reversed,
+    new_alg,
     neighbor_joining_baseline,
     neighbor_joining_hybrid_anticentral_adaptive_v3,
     neighbor_joining_hybrid_anticentral_adaptive_v3_plausible,
@@ -100,7 +101,9 @@ LEGACY_ALGORITHM_SPECS = [
 ]
 
 
-EXPERIMENTAL_ALGORITHM_SPECS = []
+EXPERIMENTAL_ALGORITHM_SPECS = [
+    ReconstructionAlgorithmSpec("new_alg", _constant_algorithm(new_alg), legacy=False),
+]
 
 
 def build_algorithms(specs):

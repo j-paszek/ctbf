@@ -1,5 +1,6 @@
 from pathlib import Path
 import importlib.util
+import shutil
 import sys
 
 import numpy as np
@@ -13,6 +14,11 @@ TOOL_PATH = PROJECT_ROOT / "test" / "tools" / "freeze_algorithm_variant_cases.py
 spec = importlib.util.spec_from_file_location("freeze_algorithm_variant_cases", TOOL_PATH)
 freeze_algorithm_variant_cases = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(freeze_algorithm_variant_cases)
+
+FAST_BENCHMARK_TOOL_PATH = PROJECT_ROOT / "test" / "tools" / "fast_biopsy_preset_benchmark.py"
+fast_spec = importlib.util.spec_from_file_location("fast_biopsy_preset_benchmark", FAST_BENCHMARK_TOOL_PATH)
+fast_biopsy_preset_benchmark = importlib.util.module_from_spec(fast_spec)
+fast_spec.loader.exec_module(fast_biopsy_preset_benchmark)
 
 REFERENCE_ALGORITHM_NAMES = freeze_algorithm_variant_cases.REFERENCE_ALGORITHM_NAMES
 case_dir = freeze_algorithm_variant_cases.case_dir
@@ -90,3 +96,30 @@ def test_genotype_to_json_stores_reconstructable_cell_data():
     assert data["cell_id"] == 7
     assert data["generation"] == 8
     assert np.array_equal(data["genome"], np.array([2, 0, 2]))
+
+
+def test_fast_biopsy_preset_benchmark_writes_preset_result_from_frozen_input(tmp_path):
+    cases_root = tmp_path / "algorithm_cases"
+    case_root = cases_root / "r4bss05" / "1001"
+    case_root.mkdir(parents=True)
+    shutil.copyfile(PROJECT_ROOT / "test" / "data" / "algorithm_cases" / "r4bss05" / "1001" / "input.json",
+                    case_root / "input.json")
+
+    written, skipped = fast_biopsy_preset_benchmark.write_case_presets(
+        cases_root,
+        "r4bss05",
+        1001,
+        [("biopsy_preset_default", "default")],
+        overwrite=False,
+        skip_existing=False,
+    )
+
+    assert skipped == []
+    assert written == [case_root / "biopsy_guided_top" / "biopsy_preset_default.json"]
+    result = freeze_algorithm_variant_cases.load_json(written[0])
+    assert result["algorithm"] == "biopsy_preset_default"
+    assert result["mode"] == "biopsy_guided_top"
+    assert result["biopsy_guided_preset"] == "default"
+    assert result["neighbor_joining"] == "neighbor_joining_standard"
+    assert "reconstructed_tree" in result
+    assert "ancestors_unique_restricted" in result["metrics"]

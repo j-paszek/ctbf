@@ -7,6 +7,7 @@ from reconstructor_ancestor_selection import (
     more_central_parent_selector,
     more_central_parent_selector_left_tie,
     pair_choice_orientation_selector,
+    plausible_then_centrality_parent_selector,
 )
 from reconstructor_anticentral import (
     configure_anticentral_v3_state,
@@ -485,12 +486,34 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony(
     )
 
 
+def new_alg(
+    dist_matrix,
+    cells,
+    max_id,
+    seed=None,
+    existing_tree=None,
+    alpha: float = 1.0,
+    beta: float = 1.0,
+    gamma: float = 0.5,
+):
+    return _run_anticentral_v3_algorithm(
+        dist_matrix,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        pair_selector=make_anticentral_adaptive_v3_pair_selector(alpha, beta, gamma),
+        ancestor_selector=plausible_then_centrality_parent_selector,
+    )
+
+
 __all__ = [
     "make_nj_full_cps_variant",
     "make_nj_full_variant",
     "make_nj_hybrid_inv_cent_variant",
     "make_nj_hybrid_variant",
     "neighbour_joining_core",
+    "new_alg",
     "neighbor_joining_adaptive_centrality",
     "neighbor_joining_adaptive_centrality_nonlinear",
     "neighbor_joining_adaptive_centrality_reversed",

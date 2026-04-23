@@ -103,6 +103,34 @@ def less_mixed_centrality_parent_selector(state, pair):
     return Orientation(parent_idx, child_idx)
 
 
+def _pair_centrality_metric(state, pair):
+    if "centrality" in pair.metadata:
+        return pair.metadata["centrality"]
+    if ANTICENTRAL_V3_CONTEXT_KEY in state.context:
+        return state.context[ANTICENTRAL_V3_CONTEXT_KEY]
+    return inverse_distance_centrality(state.D, epsilon=1e-6)
+
+
+def plausible_then_centrality_parent_selector(state, pair):
+    i = pair.i
+    j = pair.j
+    a = state.node_list[i]
+    b = state.node_list[j]
+
+    can_a_parent_b = is_biologically_plausible_ancestor(a, b)
+    can_b_parent_a = is_biologically_plausible_ancestor(b, a)
+
+    if can_a_parent_b and not can_b_parent_a:
+        return Orientation(i, j)
+
+    if can_b_parent_a and not can_a_parent_b:
+        return Orientation(j, i)
+
+    centrality = _pair_centrality_metric(state, pair)
+    parent_idx, child_idx = _choose_parent_by_larger_metric(centrality, i, j, state.rng)
+    return Orientation(parent_idx, child_idx)
+
+
 def _total_deviation_from_baseline(genome, baseline_cn):
     import numpy as np
 
@@ -256,4 +284,5 @@ __all__ = [
     "more_central_parent_selector",
     "more_central_parent_selector_left_tie",
     "pair_choice_orientation_selector",
+    "plausible_then_centrality_parent_selector",
 ]
