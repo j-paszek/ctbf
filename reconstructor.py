@@ -2,8 +2,18 @@ from reconstructor_algorithms import *  # noqa: F403
 from reconstructor_algorithms import __all__ as _ALGORITHM_EXPORTS
 from reconstructor_biopsy_blocks import (
     BiopsyGuidedConfig,
+    BiopsySubtreeConfig,
     default_biopsy_guided_config,
+    make_binarized_group_attachment_strategy,
     select_anticentral_candidate,
+)
+from reconstructor_biopsy_presets import (
+    BIOPSY_GUIDED_PRESETS,
+    make_anticentral_binarized_biopsy_guided_config,
+    make_anticentral_tie_biopsy_guided_config,
+    make_binarized_biopsy_guided_config,
+    make_default_biopsy_guided_config,
+    resolve_biopsy_guided_config,
 )
 from reconstructor_biopsy_guided import build_evolution_tree_impl
 from reconstructor_utils import visualize_tree_plotly
@@ -27,8 +37,16 @@ def build_evolution_tree(cell_lists, seed=7, dist_matrix_path=None, r=2, only_nj
 
 __all__ = list(_ALGORITHM_EXPORTS) + [
     "BiopsyGuidedConfig",
+    "BiopsySubtreeConfig",
+    "BIOPSY_GUIDED_PRESETS",
     "build_evolution_tree",
     "default_biopsy_guided_config",
+    "make_anticentral_binarized_biopsy_guided_config",
+    "make_anticentral_tie_biopsy_guided_config",
+    "make_binarized_group_attachment_strategy",
+    "make_binarized_biopsy_guided_config",
+    "make_default_biopsy_guided_config",
+    "resolve_biopsy_guided_config",
     "select_anticentral_candidate",
     "visualize_tree_plotly",
 ]

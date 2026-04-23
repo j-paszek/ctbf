@@ -1,33 +1,12 @@
-import numpy as np
-
 from reconstructor_distance_update import ANTICENTRAL_V3_CONTEXT_KEY
 from reconstructor_engine import Orientation
-
-
-# ============================================================
-#  BIOLOGICAL PLAUSIBILITY
-# ============================================================
-def _is_biologically_plausible_ancestor(ancestor, descendant):
-    """
-    Returns True if 'ancestor' could biologically be the parent of 'descendant'.
-
-    Constraint:
-    - ancestor cannot generate descendant if ancestor has CN=0 at a locus
-      where descendant has CN>0 (i.e. a gain from 0 -> positive is disallowed).
-    """
-    return not np.any((ancestor.genome == 0) & (descendant.genome > 0))
-
-
-def _is_biologically_plausible_pair(x, y):
-    """
-    A pair (x, y) is biologically plausible if at least one direction
-    (x->y or y->x) is biologically possible.
-
-    This means:
-    - keep this pair if x can be parent of y OR y can be parent of x.
-    """
-    return (_is_biologically_plausible_ancestor(x, y) or
-            _is_biologically_plausible_ancestor(y, x))
+from reconstructor_metrics import inverse_distance_centrality, sum_distance_centrality
+from reconstructor_plausibility import (
+    _is_biologically_plausible_ancestor,
+    _is_biologically_plausible_pair,
+    is_biologically_plausible_ancestor,
+    is_biologically_plausible_pair,
+)
 
 
 # ============================================================
@@ -62,7 +41,7 @@ def _choose_parent_full_nj(D, i, j, rng, larger_is_more_central):
     """
     NJ-parent rule: more central -> parent
     """
-    centrality = D.sum(axis=1)
+    centrality = sum_distance_centrality(D)
     c_i, c_j = centrality[i], centrality[j]
 
     if c_i < c_j:
@@ -127,6 +106,8 @@ def less_mixed_centrality_parent_selector(state, pair):
 
 
 def _total_deviation_from_baseline(genome, baseline_cn):
+    import numpy as np
+
     g = np.asarray(genome, dtype=float)
     return float(np.sum(np.abs(g - baseline_cn)))
 
@@ -191,10 +172,7 @@ def _choose_parent_hybrid_inv_centrality(D, i, j, rng, larger_is_more_central=Fa
     """
     Parent = node with larger inverse-distance centrality.
     """
-    with np.errstate(divide='ignore', invalid='ignore'):
-        invD = 1.0 / (D + epsilon)
-        np.fill_diagonal(invD, 0.0)
-        centrality = invD.sum(axis=1)
+    centrality = inverse_distance_centrality(D, epsilon)
 
     c_i, c_j = centrality[i], centrality[j]
 
@@ -281,6 +259,8 @@ __all__ = [
     "_final_parent_choice_full_matrix",
     "_is_biologically_plausible_ancestor",
     "_is_biologically_plausible_pair",
+    "is_biologically_plausible_ancestor",
+    "is_biologically_plausible_pair",
     "keep_pair_order_parent_selector",
     "less_mixed_centrality_parent_selector",
     "lower_sum_distance_parent_selector",

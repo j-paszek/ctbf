@@ -1,6 +1,5 @@
-import numpy as np
-
 from reconstructor_distance_update import ANTICENTRAL_V3_CONTEXT_KEY
+from reconstructor_metrics import normalized_inverse_mean_centrality
 from reconstructor_pair_selection import (
     make_anticentral_adaptive_v2_pair_selector,
     make_anticentral_adaptive_v3_pair_selector,
@@ -9,9 +8,7 @@ from reconstructor_pair_selection import (
 )
 
 def _initial_anticentral_v3_centrality(D):
-    with np.errstate(divide='ignore', invalid='ignore'):
-        c = 1.0 / (np.mean(D, axis=1) + 1e-9)
-    return (c - np.min(c)) / (np.ptp(c) + 1e-12)
+    return normalized_inverse_mean_centrality(D)
 
 
 def configure_anticentral_v3_state(state):

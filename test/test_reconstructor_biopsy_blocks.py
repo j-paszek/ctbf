@@ -6,6 +6,7 @@ import numpy as np
 
 from reconstructor_biopsy_blocks import (
     BiopsyGuidedConfig,
+    BiopsySubtreeConfig,
     build_final_distance_matrix,
     copy_missing_parent_to_upper,
     default_biopsy_guided_config,
@@ -13,14 +14,25 @@ from reconstructor_biopsy_blocks import (
     extend_biopsy_levels,
     filter_plausible_ancestor_candidates,
     find_radius_candidates,
+    make_binarized_group_attachment_strategy,
     make_id_to_index,
     normalize_biopsy_guided_config,
+    normalize_biopsy_subtree_config,
     reconstruct_biopsy_layers,
     select_anticentral_candidate,
     select_biopsy_parent,
     select_closest_candidate,
     select_first_candidate,
     select_same_id_candidate,
+)
+from reconstructor_ancestor_selection import (
+    keep_pair_order_parent_selector,
+    more_central_parent_selector_left_tie,
+)
+from reconstructor_anticentral import configure_anticentral_v3_state
+from reconstructor_pair_selection import (
+    make_anticentral_adaptive_v3_pair_selector,
+    make_hybrid_opt_v2_pair_selector,
 )
 from simulator import Genotype
 
@@ -209,8 +221,24 @@ def test_biopsy_guided_config_fills_unspecified_strategies_with_defaults():
     assert config.candidate_tie_breaker is defaults.candidate_tie_breaker
     assert config.level_extender is defaults.level_extender
     assert config.attachment_strategy is defaults.attachment_strategy
+    assert config.group_attachment_strategy is not None
     assert config.missing_parent_strategy is defaults.missing_parent_strategy
     assert config.only_nj_final_cell_selector is defaults.only_nj_final_cell_selector
+
+
+def test_biopsy_subtree_config_fills_missing_engine_blocks_with_defaults():
+    pair_selector = make_hybrid_opt_v2_pair_selector()
+    config = normalize_biopsy_subtree_config(
+        BiopsySubtreeConfig(pair_selector=pair_selector),
+        seed=19,
+    )
+
+    assert config.pair_selector is pair_selector
+    assert config.ancestor_selector is not None
+    assert config.merge_strategy is None
+    assert config.distance_update is None
+    assert config.configure_state is None
+    assert config.seed == 19
 
 
 def test_reconstruct_biopsy_layers_uses_configured_candidate_selector():
@@ -288,3 +316,161 @@ def test_biopsy_guided_config_can_use_anticentral_candidate_tie_breaker():
 
     assert tree.has_edge(anticentral.node_id, child.node_id)
     assert not tree.has_edge(central.node_id, child.node_id)
+
+
+def test_binarized_group_attachment_builds_binary_subtree_under_parent():
+    parent = Genotype([2, 2], 1)
+    parent.node_id = 1
+    child_a = Genotype([2, 2], 2)
+    child_a.node_id = 2
+    child_b = Genotype([2, 2], 3)
+    child_b.node_id = 3
+    child_c = Genotype([2, 2], 4)
+    child_c.node_id = 4
+    cell_lists = [[parent], [child_a, child_b, child_c]]
+    ids = [1, 2, 3, 4]
+    id_to_index = make_id_to_index(ids)
+    distances = np.array(
+        [
+            [0.0, 1.0, 1.0, 1.0],
+            [1.0, 0.0, 2.0, 3.0],
+            [1.0, 2.0, 0.0, 4.0],
+            [1.0, 3.0, 4.0, 0.0],
+        ]
+    )
+    tree = nx.DiGraph()
+    for cell in [parent, child_a, child_b, child_c]:
+        tree.add_node(cell.node_id, genome=cell.genome, cell_id=cell.cell_id)
+    node_levels = defaultdict(lambda: None)
+
+    reconstruct_biopsy_layers(
+        cell_lists,
+        tree,
+        node_levels,
+        distances,
+        id_to_index,
+        radius=1,
+        unique_node_counter=itertools.count(start=10),
+        config=BiopsyGuidedConfig(
+            group_attachment_strategy=make_binarized_group_attachment_strategy(),
+        ),
+    )
+
+    children = {child_a.node_id, child_b.node_id, child_c.node_id}
+    assert tree.out_degree(parent.node_id) == 1
+    parent_child = next(tree.successors(parent.node_id))
+    assert parent_child not in children
+    assert children <= nx.descendants(tree, parent.node_id)
+    assert len([node for node in tree.nodes if node not in {1, 2, 3, 4}]) == 2
+    assert nx.is_directed_acyclic_graph(tree)
+
+
+def test_binarized_group_attachment_keeps_single_child_direct():
+    parent = Genotype([2, 2], 1)
+    parent.node_id = 1
+    child = Genotype([2, 2], 2)
+    child.node_id = 2
+    tree = nx.DiGraph()
+    for cell in [parent, child]:
+        tree.add_node(cell.node_id, genome=cell.genome, cell_id=cell.cell_id)
+    distances = np.array([[0.0, 5.0], [5.0, 0.0]])
+
+    make_binarized_group_attachment_strategy()(
+        tree,
+        parent,
+        [child],
+        distances,
+        make_id_to_index([1, 2]),
+        itertools.count(start=10),
+        defaultdict(lambda: None),
+        child_level=0,
+    )
+
+    assert list(tree.successors(parent.node_id)) == [child.node_id]
+    assert tree.edges[parent.node_id, child.node_id]["weight"] == 5.0
+
+
+def test_binarized_group_attachment_accepts_existing_pair_and_ancestor_blocks():
+    parent = Genotype([2, 2], 1)
+    parent.node_id = 1
+    child_a = Genotype([2, 2], 2)
+    child_a.node_id = 2
+    child_b = Genotype([2, 2], 3)
+    child_b.node_id = 3
+    child_c = Genotype([2, 2], 4)
+    child_c.node_id = 4
+    distances = np.array(
+        [
+            [0.0, 1.0, 1.0, 1.0],
+            [1.0, 0.0, 2.0, 5.0],
+            [1.0, 2.0, 0.0, 3.0],
+            [1.0, 5.0, 3.0, 0.0],
+        ]
+    )
+    tree = nx.DiGraph()
+    for cell in [parent, child_a, child_b, child_c]:
+        tree.add_node(cell.node_id, genome=cell.genome, cell_id=cell.cell_id)
+
+    make_binarized_group_attachment_strategy(
+        BiopsySubtreeConfig(
+            pair_selector=make_hybrid_opt_v2_pair_selector(),
+            ancestor_selector=more_central_parent_selector_left_tie,
+            seed=13,
+        )
+    )(
+        tree,
+        parent,
+        [child_a, child_b, child_c],
+        distances,
+        make_id_to_index([1, 2, 3, 4]),
+        itertools.count(start=10),
+        defaultdict(lambda: None),
+        child_level=0,
+    )
+
+    assert tree.out_degree(parent.node_id) == 1
+    assert {child_a.node_id, child_b.node_id, child_c.node_id} <= nx.descendants(tree, parent.node_id)
+    assert nx.is_directed_acyclic_graph(tree)
+
+
+def test_binarized_group_attachment_accepts_configured_anticentral_v3_blocks():
+    parent = Genotype([2, 2], 1)
+    parent.node_id = 1
+    children = [
+        Genotype([2, 2], 2),
+        Genotype([2, 2], 3),
+        Genotype([2, 2], 4),
+    ]
+    for child in children:
+        child.node_id = child.cell_id
+
+    distances = np.array(
+        [
+            [0.0, 1.0, 1.0, 1.0],
+            [1.0, 0.0, 2.0, 5.0],
+            [1.0, 2.0, 0.0, 3.0],
+            [1.0, 5.0, 3.0, 0.0],
+        ]
+    )
+    tree = nx.DiGraph()
+    for cell in [parent, *children]:
+        tree.add_node(cell.node_id, genome=cell.genome, cell_id=cell.cell_id)
+
+    make_binarized_group_attachment_strategy(
+        pair_selector=make_anticentral_adaptive_v3_pair_selector(),
+        ancestor_selector=keep_pair_order_parent_selector,
+        configure_state=configure_anticentral_v3_state,
+    )(
+        tree,
+        parent,
+        children,
+        distances,
+        make_id_to_index([1, 2, 3, 4]),
+        itertools.count(start=10),
+        defaultdict(lambda: None),
+        child_level=0,
+    )
+
+    assert tree.out_degree(parent.node_id) == 1
+    assert {child.node_id for child in children} <= nx.descendants(tree, parent.node_id)
+    assert nx.is_directed_acyclic_graph(tree)

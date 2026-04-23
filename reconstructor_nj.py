@@ -21,6 +21,7 @@ from reconstructor_engine import (
     PairChoice,
     run_agglomerative_reconstruction,
 )
+from reconstructor_metrics import sum_distance_centrality
 from simulator import Genotype
 
 
@@ -112,7 +113,7 @@ def neighbor_joining_standard(dist_matrix, cells, max_id, seed=7, existing_tree=
 
     while len(D) > 2:
         n = len(D)
-        total_dist = D.sum(axis=1)
+        total_dist = sum_distance_centrality(D)
         Q = np.zeros((n, n))
         for i in range(n):
             for j in range(n):

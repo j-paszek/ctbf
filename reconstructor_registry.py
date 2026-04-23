@@ -1,85 +1,19 @@
-from reconstructor_algorithms import (
-    make_nj_full_cps_variant,
-    make_nj_full_variant,
-    make_nj_hybrid_inv_cent_variant,
-    make_nj_hybrid_variant,
-    neighbor_joining_adaptive_centrality,
-    neighbor_joining_adaptive_centrality_nonlinear,
-    neighbor_joining_adaptive_centrality_reversed,
-    neighbor_joining_baseline,
-    neighbor_joining_hybrid_anticentral_adaptive_v3,
-    neighbor_joining_hybrid_anticentral_adaptive_v3_plausible,
-    neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony,
-    neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible,
-    neighbor_joining_hybrid_anticentral_opt,
-    neighbor_joining_hybrid_opt,
-    neighbor_joining_hybrid_opt_adaptive,
-    neighbor_joining_hybrid_opt_refined,
-    neighbor_joining_hybrid_opt_v2,
+from reconstructor_algorithm_specs import (
+    EXPERIMENTAL_ALGORITHM_SPECS,
+    LEGACY_ALGORITHM_SPECS,
+    build_algorithms,
 )
 
 
-LEGACY_ALGORITHM_NAMES = [
-    "neighbor_joining_baseline",
-    "neighbor_joining_full_full",
-    "neighbor_joining_full_partial",
-    "neighbor_joining_full_cps_full",
-    "neighbor_joining_full_cps_partial",
-    "neighbor_joining_hybrid_full",
-    "neighbor_joining_hybrid_partial",
-    "neighbor_joining_hybrid_inverse_centrality_full",
-    "neighbor_joining_hybrid_inverse_centrality_partial",
-    "neighbor_joining_adaptive_centrality",
-    "neighbor_joining_adaptive_centrality_nonlinear",
-    "neighbor_joining_adaptive_centrality_reversed",
-    "neighbor_joining_hybrid_opt",
-    "neighbor_joining_hybrid_opt_adaptive",
-    "neighbor_joining_hybrid_opt_v2",
-    "neighbor_joining_hybrid_opt_refined",
-    "neighbor_joining_hybrid_anticentral_opt",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
-]
+LEGACY_ALGORITHM_NAMES = [spec.name for spec in LEGACY_ALGORITHM_SPECS]
 
 
 def get_legacy_algorithms():
-    neighbor_joining_full_full = make_nj_full_variant(True)
-    neighbor_joining_full_partial = make_nj_full_variant(False)
-    neighbor_joining_full_cps_full = make_nj_full_cps_variant(True)
-    neighbor_joining_full_cps_partial = make_nj_full_cps_variant(False)
-    neighbor_joining_hybrid_full = make_nj_hybrid_variant(True)
-    neighbor_joining_hybrid_partial = make_nj_hybrid_variant(False)
-    neighbor_joining_hybrid_inverse_centrality_full = make_nj_hybrid_inv_cent_variant(True)
-    neighbor_joining_hybrid_inverse_centrality_partial = make_nj_hybrid_inv_cent_variant(False)
-    return [
-        neighbor_joining_baseline,
-        neighbor_joining_full_full,
-        neighbor_joining_full_partial,
-        neighbor_joining_full_cps_full,
-        neighbor_joining_full_cps_partial,
-        neighbor_joining_hybrid_full,
-        neighbor_joining_hybrid_partial,
-        neighbor_joining_hybrid_inverse_centrality_full,
-        neighbor_joining_hybrid_inverse_centrality_partial,
-        neighbor_joining_adaptive_centrality,
-        neighbor_joining_adaptive_centrality_nonlinear,
-        neighbor_joining_adaptive_centrality_reversed,
-        neighbor_joining_hybrid_opt,
-        neighbor_joining_hybrid_opt_adaptive,
-        neighbor_joining_hybrid_opt_v2,
-        neighbor_joining_hybrid_opt_refined,
-        neighbor_joining_hybrid_anticentral_opt,
-        neighbor_joining_hybrid_anticentral_adaptive_v3,
-        neighbor_joining_hybrid_anticentral_adaptive_v3_plausible,
-        neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible,
-        neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony,
-    ]
+    return build_algorithms(LEGACY_ALGORITHM_SPECS)
 
 
 def get_experimental_algorithms():
-    return []
+    return build_algorithms(EXPERIMENTAL_ALGORITHM_SPECS)
 
 
 def get_algorithms():
@@ -116,6 +50,8 @@ get_algorithms_to_test = get_algorithms
 
 __all__ = [
     "LEGACY_ALGORITHM_NAMES",
+    "EXPERIMENTAL_ALGORITHM_SPECS",
+    "LEGACY_ALGORITHM_SPECS",
     "get_algorithm_map",
     "get_algorithms",
     "get_algorithms_to_test",

@@ -1,15 +1,27 @@
 import numpy as np
 
-from reconstructor_ancestor_selection import (
+from reconstructor_plausibility import (
     _is_biologically_plausible_ancestor,
     _is_biologically_plausible_pair,
 )
 from reconstructor_distance_update import ANTICENTRAL_V3_CONTEXT_KEY
 from reconstructor_engine import Orientation, PairChoice
+from reconstructor_metrics import (
+    hybrid_opt_centrality,
+    inverse_distance_centrality,
+    linear_blended_centrality,
+    mixed_direct_inverse_centrality,
+    nj_q_matrix,
+    reversed_adaptive_centrality,
+    score_distance_minus_asymmetry,
+    sigmoid_blended_centrality,
+    sum_distance_centrality,
+    upper_triangle_pairs,
+)
 
 
 def _upper_triangle_pairs(n):
-    return zip(*np.triu_indices(n, k=1))
+    return upper_triangle_pairs(n)
 
 
 def _best_pair_from_score_matrix(score, minimize=True):
@@ -44,80 +56,35 @@ def _ordered_pairs_by_score_matrix(score, minimize=True):
 
 
 def _inverse_distance_centrality(D, epsilon, include_diagonal=False):
-    with np.errstate(divide='ignore', invalid='ignore'):
-        inv_D = 1.0 / (D + epsilon)
-    if not include_diagonal:
-        np.fill_diagonal(inv_D, 0.0)
-    return inv_D.sum(axis=1)
+    return inverse_distance_centrality(D, epsilon, include_diagonal)
 
 
 def _mixed_direct_inverse_centrality(D, epsilon, lam):
-    c_dir = D.sum(axis=1)
-    c_inv = _inverse_distance_centrality(D, epsilon)
-    return c_inv / np.power(c_dir + epsilon, lam)
+    return mixed_direct_inverse_centrality(D, epsilon, lam)
 
 
 def _nj_q_matrix(D):
-    n = D.shape[0]
-    Q = np.full((n, n), np.inf, dtype=float)
-    if n <= 2:
-        return Q
-
-    total = D.sum(axis=1)
-    factor = n - 2
-    for i in range(n):
-        for j in range(i + 1, n):
-            q_val = factor * D[i, j] - total[i] - total[j]
-            Q[i, j] = q_val
-            Q[j, i] = q_val
-    return Q
+    return nj_q_matrix(D)
 
 
 def _score_distance_minus_asymmetry(D, centrality, alpha, beta):
-    n = len(D)
-    score = np.full((n, n), np.inf)
-    for i, j in _upper_triangle_pairs(n):
-        score[i, j] = alpha * D[i, j] - beta * abs(centrality[i] - centrality[j])
-    return score
+    return score_distance_minus_asymmetry(D, centrality, alpha, beta)
 
 
 def _linear_blended_centrality(state, epsilon):
-    n = len(state.D)
-    original_n = len(state.D_full)
-    weight = (n - 2) / max(original_n - 2, 1)
-    sum_dist = state.D.sum(axis=1)
-    global_c = 1.0 / (sum_dist + epsilon)
-    inv_c = _inverse_distance_centrality(state.D, epsilon)
-    return weight * global_c + (1 - weight) * inv_c
+    return linear_blended_centrality(state, epsilon)
 
 
 def _sigmoid_blended_centrality(state, epsilon, k, tau):
-    frac = len(state.D) / max(len(state.D_full), 1)
-    weight = 1.0 / (1.0 + np.exp(-k * (frac - tau)))
-    sum_dist = state.D.sum(axis=1)
-    global_c = 1.0 / (sum_dist + epsilon)
-    inv_c = _inverse_distance_centrality(state.D, epsilon)
-    return weight * global_c + (1 - weight) * inv_c
+    return sigmoid_blended_centrality(state, epsilon, k, tau)
 
 
 def _reversed_adaptive_centrality(state, epsilon):
-    weight = 1 - (len(state.D) / len(state.D_full))
-    sum_dist = state.D.sum(axis=1)
-    inv_sum = _inverse_distance_centrality(state.D, epsilon, include_diagonal=True)
-    return (1 - weight) * inv_sum + weight * (1.0 / (sum_dist + epsilon))
+    return reversed_adaptive_centrality(state, epsilon)
 
 
 def _hybrid_opt_centrality(state, epsilon, k, tau, reverse_centrality):
-    frac = len(state.D) / max(len(state.D_full), 1)
-    weight = 1.0 / (1.0 + np.exp(-k * (frac - tau))) if k > 0 else frac
-
-    sum_dist = state.D.sum(axis=1)
-    global_c = 1.0 / (sum_dist + epsilon)
-    inv_c = _inverse_distance_centrality(state.D, epsilon)
-
-    if reverse_centrality:
-        return (1 - weight) * global_c + weight * inv_c
-    return weight * global_c + (1 - weight) * inv_c
+    return hybrid_opt_centrality(state, epsilon, k, tau, reverse_centrality)
 
 
 def make_adaptive_centrality_pair_selector(alpha=1.0, beta=0.5, epsilon=1e-6):
@@ -237,7 +204,7 @@ def make_hybrid_opt_refined_pair_selector(alpha=1.0, beta=1.0, gamma=1.0):
     def select_pair(state):
         D = state.D
         n = len(D)
-        centrality = D.sum(axis=1)
+        centrality = sum_distance_centrality(D)
         mean_D = D[np.triu_indices(n, 1)].mean()
         mean_c = np.mean(centrality)
 
@@ -496,7 +463,7 @@ def _select_pair_full(D, node_list, rng, minimize=True):
 
 # --- CPS NJ selector
 def _select_pair_cps(D, node_list, rng, minimize=True):
-    centrality = D.sum(axis=1)
+    centrality = sum_distance_centrality(D)
 
     def cps_score(i, j):
         c_i, c_j = centrality[i], centrality[j]
@@ -514,7 +481,7 @@ def _select_pair_cps(D, node_list, rng, minimize=True):
 
 # --- Hybrid NJ selector
 def _select_pair_hybrid(D, node_list, rng, minimize=True, alpha=1.0, beta=0.5):
-    centrality = D.sum(axis=1)
+    centrality = sum_distance_centrality(D)
 
     def hybrid_score(i, j):
         return alpha * D[i, j] - beta * abs(centrality[i] - centrality[j])
