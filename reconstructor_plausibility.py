@@ -18,13 +18,7 @@ def is_biologically_plausible_pair(x, y):
     )
 
 
-_is_biologically_plausible_ancestor = is_biologically_plausible_ancestor
-_is_biologically_plausible_pair = is_biologically_plausible_pair
-
-
 __all__ = [
-    "_is_biologically_plausible_ancestor",
-    "_is_biologically_plausible_pair",
     "is_biologically_plausible_ancestor",
     "is_biologically_plausible_pair",
 ]

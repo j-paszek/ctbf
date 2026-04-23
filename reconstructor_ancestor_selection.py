@@ -2,8 +2,6 @@ from reconstructor_distance_update import ANTICENTRAL_V3_CONTEXT_KEY
 from reconstructor_engine import Orientation
 from reconstructor_metrics import inverse_distance_centrality, sum_distance_centrality
 from reconstructor_plausibility import (
-    _is_biologically_plausible_ancestor,
-    _is_biologically_plausible_pair,
     is_biologically_plausible_ancestor,
     is_biologically_plausible_pair,
 )
@@ -126,8 +124,8 @@ def make_plausible_pair_order_parent_selector(enforce_plausibility=True):
         if enforce_plausibility:
             parent = state.node_list[parent_idx]
             child = state.node_list[child_idx]
-            can_parent_child = _is_biologically_plausible_ancestor(parent, child)
-            can_child_parent = _is_biologically_plausible_ancestor(child, parent)
+            can_parent_child = is_biologically_plausible_ancestor(parent, child)
+            can_child_parent = is_biologically_plausible_ancestor(child, parent)
 
             if can_child_parent and not can_parent_child:
                 parent_idx, child_idx = child_idx, parent_idx
@@ -144,8 +142,8 @@ def make_plausible_parsimony_parent_selector(baseline_cn=2):
         a = state.node_list[i]
         b = state.node_list[j]
 
-        can_a_parent_b = _is_biologically_plausible_ancestor(a, b)
-        can_b_parent_a = _is_biologically_plausible_ancestor(b, a)
+        can_a_parent_b = is_biologically_plausible_ancestor(a, b)
+        can_b_parent_a = is_biologically_plausible_ancestor(b, a)
 
         if can_a_parent_b and not can_b_parent_a:
             return Orientation(i, j)
@@ -232,8 +230,8 @@ def _choose_parent_with_plausibility_fallback(
     x = node_list[i]
     y = node_list[j]
 
-    can_x_parent = _is_biologically_plausible_ancestor(x, y)
-    can_y_parent = _is_biologically_plausible_ancestor(y, x)
+    can_x_parent = is_biologically_plausible_ancestor(x, y)
+    can_y_parent = is_biologically_plausible_ancestor(y, x)
 
     if can_x_parent and not can_y_parent:
         return i, j
@@ -250,17 +248,6 @@ def _choose_parent_with_plausibility_fallback(
 
 
 __all__ = [
-    "_choose_parent_by_larger_metric",
-    "_choose_parent_by_smaller_metric",
-    "_choose_parent_full_nj",
-    "_choose_parent_hybrid_inv_centrality",
-    "_choose_parent_with_full_matrix",
-    "_choose_parent_with_plausibility_fallback",
-    "_final_parent_choice_full_matrix",
-    "_is_biologically_plausible_ancestor",
-    "_is_biologically_plausible_pair",
-    "is_biologically_plausible_ancestor",
-    "is_biologically_plausible_pair",
     "keep_pair_order_parent_selector",
     "less_mixed_centrality_parent_selector",
     "lower_sum_distance_parent_selector",

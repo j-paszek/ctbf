@@ -8,7 +8,7 @@ import numpy as np
 
 from reconstructor_engine import Orientation, PairChoice, run_agglomerative_reconstruction
 from reconstructor_metrics import row_sum_anticentrality
-from reconstructor_plausibility import _is_biologically_plausible_ancestor
+from reconstructor_plausibility import is_biologically_plausible_ancestor
 from simulator import Genotype
 
 
@@ -170,7 +170,7 @@ def select_same_id_candidate(candidates, y):
 
 
 def filter_plausible_ancestor_candidates(candidates, y):
-    return [x for x in candidates if _is_biologically_plausible_ancestor(x, y)]
+    return [x for x in candidates if is_biologically_plausible_ancestor(x, y)]
 
 
 def select_first_candidate(candidates, y, full_dist_matrix, id_to_index):

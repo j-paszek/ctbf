@@ -11,9 +11,6 @@ from reconstructor_biopsy_blocks import (
 from reconstructor_utils import parse_distance_matrix
 
 
-_extend_biopsies = normalize_biopsy_guided_config().level_extender
-
-
 def build_evolution_tree_impl(
     cell_lists,
     seed=7,

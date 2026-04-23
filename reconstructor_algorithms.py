@@ -382,7 +382,7 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible(
     Differences vs neighbor_joining_hybrid_anticentral_adaptive_v3:
     - The same pair (a, b) is always chosen (same score logic).
     - BUT we decide whether the ancestor template should be 'a' or 'b'
-      using _is_biologically_plausible_ancestor, when possible.
+      using is_biologically_plausible_ancestor, when possible.
 
     Logic within a chosen pair (a, b):
       can_a = ancestor(a -> b) plausible?

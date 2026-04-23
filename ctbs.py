@@ -12,7 +12,7 @@ import random
 from concurrent.futures import ProcessPoolExecutor
 
 from simulator import CancerCellEvolutionSimulator, Genotype
-from reconstructor import build_evolution_tree, visualize_tree_plotly
+from reconstructor import build_evolution_tree, resolve_biopsy_guided_config, visualize_tree_plotly
 from reconstructor_registry import get_algorithm_map, resolve_reconstruction_algorithm
 from evaluator import grf_tree
 from evaluator_full import evaluate_4, named_label
@@ -35,6 +35,7 @@ DEFAULT_CTBS_CONFIG = {
         "write_newick": True,
         "visualize": True,
         "reconstruction_algorithm": "neighbor_joining_hybrid_anticentral_adaptive_v3",
+        "biopsy_guided_strategy": None,
     },
 }
 CTBS_CONFIG_PATH = Path(__file__).with_name("ctbs_config.json")
@@ -250,7 +251,7 @@ def _compute_distance_matrix(all_in_one_sample, parallel, time_collector):
 
 def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, visualize,
                               clear_cnps, parallel, write_newick, reconstruction_algorithm,
-                              inid, indm, time_collector):
+                              biopsy_guided_config, inid, indm, time_collector):
     cl, osl = deepcopy(cell_lists), deepcopy(all_in_one_sample)
     show_cells(cell_lists)
 
@@ -311,7 +312,10 @@ def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, 
 
     # --- build trees ---
     njtree, nj_info, root_nj = build_evolution_tree(osl, only_nj=True, **build_kwargs)
-    tree, rt_info, root_rt = build_evolution_tree(cl, **build_kwargs)
+    rec_build_kwargs = build_kwargs.copy()
+    if biopsy_guided_config is not None:
+        rec_build_kwargs["biopsy_guided_config"] = biopsy_guided_config
+    tree, rt_info, root_rt = build_evolution_tree(cl, **rec_build_kwargs)
 
     if write_newick:
         print("Newick simulated:", to_newick(sim.tree))
@@ -350,7 +354,8 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
                     biopsy_size=2, biopsy_size_scalable=None, biopsy_generations=[5,7,9], r_dist=4,
                     visualize=False, time_collector=None, clear_cnps=False, compare_dm=False,
                     write_newick=False, simulator_with_loaded_tree=None, parallel=False,
-                    reconstruction_algorithm=None):
+                    reconstruction_algorithm=None, biopsy_guided_strategy=None,
+                    biopsy_guided_config=None):
     """
     Runs one test that consists of simulation, biopsy, tree reconstruction and tree evaluation.
 
@@ -376,6 +381,9 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
     and between simulated tree and NJ-reconstructed tree.
 
     """
+    if biopsy_guided_config is None:
+        biopsy_guided_config = resolve_biopsy_guided_config(biopsy_guided_strategy)
+
     # 1. Simulation phase
     sim = _run_simulation(config, bedfile, seed, simulator_with_loaded_tree, time_collector)
 
@@ -402,6 +410,7 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
         parallel,
         write_newick,
         reconstruction_algorithm,
+        biopsy_guided_config,
         inid,
         indm,
         time_collector,
@@ -543,6 +552,9 @@ if __name__ == "__main__":
     run_config = RUN_SINGLE_TEST_CONFIG.copy()
     run_config["reconstruction_algorithm"] = resolve_reconstruction_algorithm(
         run_config.get("reconstruction_algorithm")
+    )
+    run_config["biopsy_guided_config"] = resolve_biopsy_guided_config(
+        run_config.pop("biopsy_guided_strategy", None)
     )
     a, b, c = run_single_test(**run_config)
 
