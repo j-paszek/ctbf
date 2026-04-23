@@ -1,12 +1,17 @@
 from reconstructor_algorithms import *  # noqa: F403
 from reconstructor_algorithms import __all__ as _ALGORITHM_EXPORTS
+from reconstructor_biopsy_blocks import (
+    BiopsyGuidedConfig,
+    default_biopsy_guided_config,
+    select_anticentral_candidate,
+)
 from reconstructor_biopsy_guided import build_evolution_tree_impl
 from reconstructor_utils import visualize_tree_plotly
 from simulator import Genotype
 
 
 def build_evolution_tree(cell_lists, seed=7, dist_matrix_path=None, r=2, only_nj=False, inids=None, indm=None,
-                         neighbor_joining=neighbor_joining_standard):  # noqa: F405
+                         neighbor_joining=neighbor_joining_standard, biopsy_guided_config=None):  # noqa: F405
     return build_evolution_tree_impl(
         cell_lists,
         seed=seed,
@@ -16,11 +21,15 @@ def build_evolution_tree(cell_lists, seed=7, dist_matrix_path=None, r=2, only_nj
         inids=inids,
         indm=indm,
         neighbor_joining=neighbor_joining,
+        biopsy_guided_config=biopsy_guided_config,
     )
 
 
 __all__ = list(_ALGORITHM_EXPORTS) + [
+    "BiopsyGuidedConfig",
     "build_evolution_tree",
+    "default_biopsy_guided_config",
+    "select_anticentral_candidate",
     "visualize_tree_plotly",
 ]
 
