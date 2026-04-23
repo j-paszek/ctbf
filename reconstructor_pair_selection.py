@@ -1,7 +1,11 @@
 import numpy as np
 
-from reconstructor_ancestor_selection import _is_biologically_plausible_pair
-from reconstructor_engine import PairChoice
+from reconstructor_ancestor_selection import (
+    _is_biologically_plausible_ancestor,
+    _is_biologically_plausible_pair,
+)
+from reconstructor_distance_update import ANTICENTRAL_V3_CONTEXT_KEY
+from reconstructor_engine import Orientation, PairChoice
 
 
 def _upper_triangle_pairs(n):
@@ -9,11 +13,25 @@ def _upper_triangle_pairs(n):
 
 
 def _best_pair_from_score_matrix(score, minimize=True):
-    selected_score = np.min(score) if minimize else np.max(score)
-    i, j = divmod(np.argmin(score) if minimize else np.argmax(score), score.shape[0])
-    if j < i:
-        i, j = j, i
-    return i, j, selected_score
+    best_pair = None
+    best_score = None
+
+    for i, j in _upper_triangle_pairs(score.shape[0]):
+        current_score = score[i, j]
+        if best_score is None:
+            best_pair = (i, j)
+            best_score = current_score
+        elif minimize and current_score < best_score:
+            best_pair = (i, j)
+            best_score = current_score
+        elif not minimize and current_score > best_score:
+            best_pair = (i, j)
+            best_score = current_score
+
+    if best_pair is None:
+        raise ValueError("No upper-triangle pairs available in score matrix.")
+
+    return best_pair[0], best_pair[1], best_score
 
 
 def _ordered_pairs_by_score_matrix(score, minimize=True):
@@ -235,6 +253,123 @@ def make_hybrid_opt_refined_pair_selector(alpha=1.0, beta=1.0, gamma=1.0):
     return select_pair
 
 
+def _anticentral_adaptive_v3_score_matrix(D, c, rng, alpha=1.0, beta=1.0, gamma=0.5):
+    n = len(D)
+    score = np.full((n, n), np.inf)
+    for i in range(n):
+        for j in range(i + 1, n):
+            c_diff = abs(c[i] - c[j])
+            adaptive = np.exp(-gamma * c_diff / (np.std(c) + 1e-9))
+            anticentral_term = 2 - (c[i] + c[j])
+            score[i, j] = (
+                alpha * D[i, j] * (1 + gamma * adaptive)
+                - beta * anticentral_term
+            )
+            score[i, j] += rng.random() * 1e-6
+    return score
+
+
+def make_anticentral_adaptive_v3_pair_selector(alpha=1.0, beta=1.0, gamma=0.5):
+    def select_pair(state):
+        c = state.context[ANTICENTRAL_V3_CONTEXT_KEY]
+        score = _anticentral_adaptive_v3_score_matrix(state.D, c, state.rng, alpha, beta, gamma)
+        i_best, j_best, _ = _best_pair_from_score_matrix(score)
+        return PairChoice(i_best, j_best, score=score[i_best, j_best])
+
+    return select_pair
+
+
+def make_anticentral_adaptive_v3_skip_unplausible_pair_selector(alpha=1.0, beta=1.0, gamma=0.5):
+    def select_pair(state):
+        c = state.context[ANTICENTRAL_V3_CONTEXT_KEY]
+        score = _anticentral_adaptive_v3_score_matrix(state.D, c, state.rng, alpha, beta, gamma)
+        pair_order = _ordered_pairs_by_score_matrix(score)
+
+        for i, j in pair_order:
+            a = state.node_list[i]
+            b = state.node_list[j]
+            can_i_parent_j = _is_biologically_plausible_ancestor(a, b)
+            can_j_parent_i = _is_biologically_plausible_ancestor(b, a)
+
+            if can_i_parent_j or can_j_parent_i:
+                if can_i_parent_j and not can_j_parent_i:
+                    parent_idx, child_idx = i, j
+                elif can_j_parent_i and not can_i_parent_j:
+                    parent_idx, child_idx = j, i
+                else:
+                    parent_idx, child_idx = (i, j) if c[i] > c[j] else (j, i)
+                return PairChoice(
+                    i,
+                    j,
+                    score=score[i, j],
+                    metadata={"orientation": Orientation(parent_idx, child_idx)},
+                )
+
+        i, j = pair_order[0]
+        parent_idx, child_idx = (i, j) if c[i] > c[j] else (j, i)
+        return PairChoice(
+            i,
+            j,
+            score=score[i, j],
+            metadata={"orientation": Orientation(parent_idx, child_idx)},
+        )
+
+    return select_pair
+
+
+def make_anticentral_hybrid_opt_pair_selector(alpha=1.0, beta=1.0, lam=1.0, epsilon=1e-6):
+    def select_pair(state):
+        n = len(state.D)
+        c_mix = _mixed_direct_inverse_centrality(state.D, epsilon, lam)
+
+        score = np.full((n, n), -np.inf)
+        for i in range(n):
+            for j in range(i + 1, n):
+                d_ij = state.D[i, j]
+                if not np.isfinite(d_ij):
+                    continue
+                asym = abs(c_mix[i] - c_mix[j])
+                score[i, j] = alpha * d_ij + beta * asym
+
+        i, j, _ = _best_pair_from_score_matrix(score, minimize=False)
+
+        return PairChoice(i, j, score=score[i, j], metadata={"c_mix": c_mix})
+
+    return select_pair
+
+
+def make_anticentral_adaptive_v2_pair_selector(
+    alpha=1.0,
+    beta=1.0,
+    gamma=0.2,
+    lam=1.0,
+    epsilon=1e-6,
+):
+    def select_pair(state):
+        n = len(state.D)
+        original_n = len(state.D_full)
+        a = alpha * (1 + 0.2 * np.tanh(3 * (1 - len(state.node_list) / original_n)))
+        b = beta * (1 + 0.3 * np.tanh(2 * (len(state.node_list) / original_n)))
+        g = gamma * (0.5 + 0.5 * np.tanh(3 * len(state.node_list) / original_n))
+
+        c_mix = _mixed_direct_inverse_centrality(state.D, epsilon, lam)
+
+        score = np.full((n, n), -np.inf)
+        for i in range(n):
+            for j in range(i + 1, n):
+                d_ij = state.D[i, j]
+                if not np.isfinite(d_ij):
+                    continue
+                asym = abs(c_mix[i] - c_mix[j])
+                score[i, j] = a * d_ij + b * asym - g / (d_ij + epsilon)
+
+        i, j, _ = _best_pair_from_score_matrix(score, minimize=False)
+
+        return PairChoice(i, j, score=score[i, j], metadata={"c_mix": c_mix})
+
+    return select_pair
+
+
 # ============================================================
 #  PAIR TIE-BREAKER
 # ============================================================
@@ -416,3 +551,32 @@ def _select_pair_hybrid_inv_centrality(D, node_list, rng,
         minimize=True,
         apply_plausibility=True
     )
+
+
+__all__ = [
+    "_best_pair_from_score_matrix",
+    "_anticentral_adaptive_v3_score_matrix",
+    "_inverse_distance_centrality",
+    "_mixed_direct_inverse_centrality",
+    "_nj_q_matrix",
+    "_ordered_pairs_by_score_matrix",
+    "_resolve_pair_ties",
+    "_score_distance_minus_asymmetry",
+    "_select_pair_core",
+    "_select_pair_cps",
+    "_select_pair_full",
+    "_select_pair_hybrid",
+    "_select_pair_hybrid_inv_centrality",
+    "_upper_triangle_pairs",
+    "make_anticentral_adaptive_v2_pair_selector",
+    "make_anticentral_adaptive_v3_pair_selector",
+    "make_anticentral_adaptive_v3_skip_unplausible_pair_selector",
+    "make_anticentral_hybrid_opt_pair_selector",
+    "make_adaptive_centrality_nonlinear_pair_selector",
+    "make_adaptive_centrality_pair_selector",
+    "make_adaptive_centrality_reversed_pair_selector",
+    "make_hybrid_opt_adaptive_pair_selector",
+    "make_hybrid_opt_pair_selector",
+    "make_hybrid_opt_refined_pair_selector",
+    "make_hybrid_opt_v2_pair_selector",
+]

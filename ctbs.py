@@ -12,8 +12,8 @@ import random
 from concurrent.futures import ProcessPoolExecutor
 
 from simulator import CancerCellEvolutionSimulator, Genotype
-from reconstructor import build_evolution_tree, visualize_tree_plotly, \
-    neighbor_joining_hybrid_anticentral_opt, neighbor_joining_hybrid_anticentral_adaptive_v3
+from reconstructor import build_evolution_tree, visualize_tree_plotly
+from reconstructor_registry import get_algorithm_map, resolve_reconstruction_algorithm
 from evaluator import grf_tree
 from evaluator_full import evaluate_4, named_label
 from ctbs_utils import to_newick, vizualize_nx_tree, get_biopsy_nodes_ids
@@ -39,10 +39,7 @@ DEFAULT_CTBS_CONFIG = {
 }
 CTBS_CONFIG_PATH = Path(__file__).with_name("ctbs_config.json")
 
-RECONSTRUCTION_ALGORITHMS = {
-    "neighbor_joining_hybrid_anticentral_opt": neighbor_joining_hybrid_anticentral_opt,
-    "neighbor_joining_hybrid_anticentral_adaptive_v3": neighbor_joining_hybrid_anticentral_adaptive_v3,
-}
+RECONSTRUCTION_ALGORITHMS = get_algorithm_map()
 
 
 def load_ctbs_config(config_path=CTBS_CONFIG_PATH):
@@ -52,19 +49,6 @@ def load_ctbs_config(config_path=CTBS_CONFIG_PATH):
     config = DEFAULT_CTBS_CONFIG.copy()
     config.update(loaded_config)
     return config
-
-
-def resolve_reconstruction_algorithm(algorithm_name):
-    if algorithm_name is None:
-        return None
-    if isinstance(algorithm_name, str) and algorithm_name.strip().lower() in {"", "none"}:
-        return None
-    if algorithm_name not in RECONSTRUCTION_ALGORITHMS:
-        available = ", ".join(sorted(RECONSTRUCTION_ALGORITHMS))
-        raise ValueError(
-            f"Unknown reconstruction algorithm '{algorithm_name}'. Available options: {available}"
-        )
-    return RECONSTRUCTION_ALGORITHMS[algorithm_name]
 
 
 CTBS_CONFIG = load_ctbs_config()

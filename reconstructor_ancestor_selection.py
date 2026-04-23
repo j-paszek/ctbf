@@ -269,3 +269,24 @@ def _choose_parent_with_plausibility_fallback(
         )
 
     return select_ancestor_func(D, i, j, rng, larger_is_more_central=False)
+
+
+__all__ = [
+    "_choose_parent_by_larger_metric",
+    "_choose_parent_by_smaller_metric",
+    "_choose_parent_full_nj",
+    "_choose_parent_hybrid_inv_centrality",
+    "_choose_parent_with_full_matrix",
+    "_choose_parent_with_plausibility_fallback",
+    "_final_parent_choice_full_matrix",
+    "_is_biologically_plausible_ancestor",
+    "_is_biologically_plausible_pair",
+    "keep_pair_order_parent_selector",
+    "less_mixed_centrality_parent_selector",
+    "lower_sum_distance_parent_selector",
+    "make_plausible_pair_order_parent_selector",
+    "make_plausible_parsimony_parent_selector",
+    "more_central_parent_selector",
+    "more_central_parent_selector_left_tie",
+    "pair_choice_orientation_selector",
+]

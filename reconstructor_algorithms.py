@@ -10,10 +10,6 @@ from reconstructor_ancestor_selection import (
 )
 from reconstructor_anticentral import (
     configure_anticentral_v3_state,
-    make_anticentral_adaptive_v2_pair_selector,
-    make_anticentral_adaptive_v3_pair_selector,
-    make_anticentral_adaptive_v3_skip_unplausible_pair_selector,
-    make_anticentral_hybrid_opt_pair_selector,
 )
 from reconstructor_distance_update import anticentral_v3_distance_update
 from reconstructor_engine import run_agglomerative_reconstruction
@@ -32,6 +28,10 @@ from reconstructor_nj import (
     neighbor_joining_standard,
 )
 from reconstructor_pair_selection import (
+    make_anticentral_adaptive_v2_pair_selector,
+    make_anticentral_adaptive_v3_pair_selector,
+    make_anticentral_adaptive_v3_skip_unplausible_pair_selector,
+    make_anticentral_hybrid_opt_pair_selector,
     make_adaptive_centrality_nonlinear_pair_selector,
     make_adaptive_centrality_pair_selector,
     make_adaptive_centrality_reversed_pair_selector,
@@ -40,6 +40,59 @@ from reconstructor_pair_selection import (
     make_hybrid_opt_refined_pair_selector,
     make_hybrid_opt_v2_pair_selector,
 )
+
+
+def _run_configured_algorithm(
+    dist_matrix,
+    cells,
+    max_id,
+    *,
+    seed,
+    existing_tree,
+    pair_selector,
+    ancestor_selector,
+    merge_strategy=None,
+    distance_update=None,
+    configure_state=None,
+):
+    kwargs = {
+        "seed": seed,
+        "existing_tree": existing_tree,
+        "pair_selector": pair_selector,
+        "ancestor_selector": ancestor_selector,
+    }
+    if merge_strategy is not None:
+        kwargs["merge_strategy"] = merge_strategy
+    if distance_update is not None:
+        kwargs["distance_update"] = distance_update
+    if configure_state is not None:
+        kwargs["configure_state"] = configure_state
+
+    return run_agglomerative_reconstruction(dist_matrix, cells, max_id, **kwargs)
+
+
+def _run_anticentral_v3_algorithm(
+    dist_matrix,
+    cells,
+    max_id,
+    *,
+    seed,
+    existing_tree,
+    pair_selector,
+    ancestor_selector,
+):
+    return _run_configured_algorithm(
+        dist_matrix,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        pair_selector=pair_selector,
+        ancestor_selector=ancestor_selector,
+        merge_strategy=anticentral_weighted_copy_parent_node,
+        distance_update=anticentral_v3_distance_update,
+        configure_state=configure_anticentral_v3_state,
+    )
 
 
 def neighbor_joining_adaptive_centrality(
@@ -52,7 +105,7 @@ def neighbor_joining_adaptive_centrality(
     seed=7,
     existing_tree=None,
 ):
-    return run_agglomerative_reconstruction(
+    return _run_configured_algorithm(
         dist_matrix,
         cells,
         max_id,
@@ -76,7 +129,7 @@ def neighbor_joining_adaptive_centrality_nonlinear(
     seed=7,
     existing_tree=None,
 ):
-    return run_agglomerative_reconstruction(
+    return _run_configured_algorithm(
         dist_matrix,
         cells,
         max_id,
@@ -95,7 +148,7 @@ def neighbor_joining_adaptive_centrality_reversed(
     seed=7,
     existing_tree=None,
 ):
-    return run_agglomerative_reconstruction(
+    return _run_configured_algorithm(
         dist_matrix,
         cells,
         max_id,
@@ -121,7 +174,7 @@ def neighbor_joining_hybrid_opt(
     seed=7,
     existing_tree=None,
 ):
-    return run_agglomerative_reconstruction(
+    return _run_configured_algorithm(
         dist_matrix,
         cells,
         max_id,
@@ -152,7 +205,7 @@ def neighbor_joining_hybrid_opt_adaptive(
     gamma=0.1,
     epsilon=1e-6,
 ):
-    return run_agglomerative_reconstruction(
+    return _run_configured_algorithm(
         dist_matrix,
         cells,
         max_id,
@@ -174,7 +227,7 @@ def neighbor_joining_hybrid_opt_v2(
     lam=1.0,
     epsilon=1e-6,
 ):
-    return run_agglomerative_reconstruction(
+    return _run_configured_algorithm(
         dist_matrix,
         cells,
         max_id,
@@ -195,7 +248,7 @@ def neighbor_joining_hybrid_opt_refined(
     beta=1.0,
     gamma=1.0,
 ):
-    return run_agglomerative_reconstruction(
+    return _run_configured_algorithm(
         dist_matrix,
         cells,
         max_id,
@@ -227,7 +280,7 @@ def neighbor_joining_hybrid_anticentral_opt(
     (note the + instead of - in hybrid_opt)
     """
 
-    return run_agglomerative_reconstruction(
+    return _run_configured_algorithm(
         dist_matrix,
         cells,
         max_id,
@@ -259,7 +312,7 @@ def neighbor_joining_hybrid_anticentral_adaptive_v2(
     Adaptive scaling adjusts alpha,beta,gamma with iteration depth.
     """
 
-    return run_agglomerative_reconstruction(
+    return _run_configured_algorithm(
         dist_matrix,
         cells,
         max_id,
@@ -300,7 +353,7 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3(dist_matrix, cells, max_id,
     root_cell_id : any
     """
 
-    return run_agglomerative_reconstruction(
+    return _run_anticentral_v3_algorithm(
         dist_matrix,
         cells,
         max_id,
@@ -308,9 +361,6 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3(dist_matrix, cells, max_id,
         existing_tree=existing_tree,
         pair_selector=make_anticentral_adaptive_v3_pair_selector(alpha, beta, gamma),
         ancestor_selector=keep_pair_order_parent_selector,
-        merge_strategy=anticentral_weighted_copy_parent_node,
-        distance_update=anticentral_v3_distance_update,
-        configure_state=configure_anticentral_v3_state,
     )
 
 
@@ -347,7 +397,7 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible(
     the anticentral adaptive scoring or pair ordering.
     """
 
-    return run_agglomerative_reconstruction(
+    return _run_anticentral_v3_algorithm(
         dist_matrix,
         cells,
         max_id,
@@ -355,9 +405,6 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible(
         existing_tree=existing_tree,
         pair_selector=make_anticentral_adaptive_v3_pair_selector(alpha, beta, gamma),
         ancestor_selector=make_plausible_pair_order_parent_selector(enforce_plausibility),
-        merge_strategy=anticentral_weighted_copy_parent_node,
-        distance_update=anticentral_v3_distance_update,
-        configure_state=configure_anticentral_v3_state,
     )
 
 
@@ -386,7 +433,7 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible(
     This enforces biological realism without destroying the NJ-like ordering.
     """
 
-    return run_agglomerative_reconstruction(
+    return _run_anticentral_v3_algorithm(
         dist_matrix,
         cells,
         max_id,
@@ -394,9 +441,6 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible(
         existing_tree=existing_tree,
         pair_selector=make_anticentral_adaptive_v3_skip_unplausible_pair_selector(alpha, beta, gamma),
         ancestor_selector=pair_choice_orientation_selector,
-        merge_strategy=anticentral_weighted_copy_parent_node,
-        distance_update=anticentral_v3_distance_update,
-        configure_state=configure_anticentral_v3_state,
     )
 
 
@@ -430,7 +474,7 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony(
     biologically realistic way (ancestor is less aberrant).
     """
 
-    return run_agglomerative_reconstruction(
+    return _run_anticentral_v3_algorithm(
         dist_matrix,
         cells,
         max_id,
@@ -438,9 +482,6 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony(
         existing_tree=existing_tree,
         pair_selector=make_anticentral_adaptive_v3_pair_selector(alpha, beta, gamma),
         ancestor_selector=make_plausible_parsimony_parent_selector(baseline_cn),
-        merge_strategy=anticentral_weighted_copy_parent_node,
-        distance_update=anticentral_v3_distance_update,
-        configure_state=configure_anticentral_v3_state,
     )
 
 

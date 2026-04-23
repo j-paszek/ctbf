@@ -15,16 +15,13 @@ from ctbs import run_single_test
 from ctbs_utils import get_biopsy_nodes_ids
 from evaluator_full import evaluate_4
 from evaluator import grf_tree
-from reconstructor import build_evolution_tree, visualize_tree_plotly, \
-    neighbor_joining_adaptive_centrality, \
-    neighbor_joining_adaptive_centrality_nonlinear, neighbor_joining_adaptive_centrality_reversed, \
-    neighbor_joining_hybrid_opt, neighbor_joining_hybrid_opt_adaptive, neighbor_joining_hybrid_opt_v2, \
-    neighbor_joining_hybrid_opt_refined, neighbor_joining_hybrid_anticentral_opt, \
-    neighbor_joining_hybrid_anticentral_adaptive_v3, \
-    neighbor_joining_baseline, make_nj_full_variant, make_nj_full_cps_variant, make_nj_hybrid_variant, \
-    make_nj_hybrid_inv_cent_variant, neighbor_joining_hybrid_anticentral_adaptive_v3_plausible, \
-    neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible, \
-    neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony
+from reconstructor import build_evolution_tree, visualize_tree_plotly
+from reconstructor_registry import (
+    LEGACY_ALGORITHM_NAMES,
+    get_algorithms_to_test,
+    get_experimental_algorithms_to_test,
+    get_legacy_algorithms_to_test,
+)
 
 CONFIG_BY_PROFILE = {
     "base": TEST_DATA_DIR / "config_for_pic.json",
@@ -33,29 +30,6 @@ CONFIG_BY_PROFILE = {
 }
 DEFAULT_BIOPSY_GENERATIONS = [4, 6, 8]
 DEFAULT_SEEDS_FILE = TEST_DATA_DIR / "seeds.json"
-LEGACY_ALGORITHM_NAMES = [
-    "neighbor_joining_baseline",
-    "neighbor_joining_full_full",
-    "neighbor_joining_full_partial",
-    "neighbor_joining_full_cps_full",
-    "neighbor_joining_full_cps_partial",
-    "neighbor_joining_hybrid_full",
-    "neighbor_joining_hybrid_partial",
-    "neighbor_joining_hybrid_inverse_centrality_full",
-    "neighbor_joining_hybrid_inverse_centrality_partial",
-    "neighbor_joining_adaptive_centrality",
-    "neighbor_joining_adaptive_centrality_nonlinear",
-    "neighbor_joining_adaptive_centrality_reversed",
-    "neighbor_joining_hybrid_opt",
-    "neighbor_joining_hybrid_opt_adaptive",
-    "neighbor_joining_hybrid_opt_v2",
-    "neighbor_joining_hybrid_opt_refined",
-    "neighbor_joining_hybrid_anticentral_opt",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible",
-    "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
-]
 
 
 def get_root_id(tr):
@@ -63,48 +37,6 @@ def get_root_id(tr):
     if len(roots) != 1:
         raise ValueError(f"Tree must have exactly one root (found {len(roots)})")
     return roots[0]
-
-
-def get_legacy_algorithms_to_test():
-    neighbor_joining_full_full = make_nj_full_variant(True)
-    neighbor_joining_full_partial = make_nj_full_variant(False)
-    neighbor_joining_full_cps_full = make_nj_full_cps_variant(True)
-    neighbor_joining_full_cps_partial = make_nj_full_cps_variant(False)
-    neighbor_joining_hybrid_full = make_nj_hybrid_variant(True)
-    neighbor_joining_hybrid_partial = make_nj_hybrid_variant(False)
-    neighbor_joining_hybrid_inverse_centrality_full = make_nj_hybrid_inv_cent_variant(True)
-    neighbor_joining_hybrid_inverse_centrality_partial = make_nj_hybrid_inv_cent_variant(False)
-    return [
-            neighbor_joining_baseline,
-            neighbor_joining_full_full,
-            neighbor_joining_full_partial,
-            neighbor_joining_full_cps_full,
-            neighbor_joining_full_cps_partial,
-            neighbor_joining_hybrid_full,
-            neighbor_joining_hybrid_partial,
-            neighbor_joining_hybrid_inverse_centrality_full,
-            neighbor_joining_hybrid_inverse_centrality_partial,
-            neighbor_joining_adaptive_centrality,
-            neighbor_joining_adaptive_centrality_nonlinear,
-            neighbor_joining_adaptive_centrality_reversed,
-            neighbor_joining_hybrid_opt,
-            neighbor_joining_hybrid_opt_adaptive,
-            neighbor_joining_hybrid_opt_v2,
-            neighbor_joining_hybrid_opt_refined,
-            neighbor_joining_hybrid_anticentral_opt,
-            neighbor_joining_hybrid_anticentral_adaptive_v3,
-            neighbor_joining_hybrid_anticentral_adaptive_v3_plausible,
-            neighbor_joining_hybrid_anticentral_adaptive_v3_skip_unplausible,
-            neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony
-            ]
-
-
-def get_experimental_algorithms_to_test():
-    return []
-
-
-def get_algorithms_to_test():
-    return get_legacy_algorithms_to_test() + get_experimental_algorithms_to_test()
 
 
 def format_bss_token(bss):
