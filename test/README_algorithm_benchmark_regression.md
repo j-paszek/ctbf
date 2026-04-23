@@ -558,6 +558,218 @@ python test/tools/heatmaps_from_json.py \
   --output-file test/heatmaps_side_by_side_new_alg.png
 ```
 
+## Adding `brand_new_algorithm`
+
+Use this sequence.
+
+### 1. Build the algorithm
+
+If `brand_new_algorithm` is a real reconstruction algorithm, add it in `reconstructor_algorithms.py`.
+
+You choose blocks:
+
+- pair selector from `reconstructor_pair_selection.py`
+- ancestor selector from `reconstructor_ancestor_selection.py`
+- merge strategy from `reconstructor_merge.py`
+- distance update from `reconstructor_distance_update.py`
+- optional state setup from `reconstructor_anticentral.py` or elsewhere
+
+Typical shape:
+
+```python
+def brand_new_algorithm(
+    dist_matrix,
+    cells,
+    max_id,
+    seed=None,
+    existing_tree=None,
+):
+    return _run_configured_algorithm(
+        dist_matrix,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        pair_selector=YOUR_PAIR_SELECTOR,
+        ancestor_selector=YOUR_ANCESTOR_SELECTOR,
+        merge_strategy=YOUR_MERGE_STRATEGY,
+        distance_update=YOUR_DISTANCE_UPDATE,
+        configure_state=YOUR_CONFIGURE_STATE,
+    )
+```
+
+If it matches the anticentral-v3 family, usually use `_run_anticentral_v3_algorithm(...)` instead.
+
+### 2. Register it
+
+Add it to `reconstructor_algorithm_specs.py`.
+
+If it is experimental:
+
+```python
+EXPERIMENTAL_ALGORITHM_SPECS = [
+    ReconstructionAlgorithmSpec("brand_new_algorithm", _constant_algorithm(brand_new_algorithm), legacy=False),
+]
+```
+
+After that it becomes available through the registry.
+
+### 3. Describe it
+
+Add metadata in `reconstructor_algorithm_config.py`.
+
+That is where you document:
+
+- label
+- summary
+- pair selection
+- ancestor selection
+- distance update
+- merge strategy
+- plausibility behavior
+- comparison groups
+- heatmap highlighting
+
+Example:
+
+```python
+AlgorithmDisplayConfig(
+    name="brand_new_algorithm",
+    label="brand_new_algorithm",
+    summary="Short explanation.",
+    procedure=AlgorithmProcedureConfig(
+        pair_selection="...",
+        ancestor_selection="...",
+        distance_update="...",
+        merge_strategy="...",
+        plausibility="...",
+        biopsy_guided_preset=None,
+    ),
+    groups=("experimental", "my_comparison_group"),
+    highlight_in_heatmap=True,
+)
+```
+
+If you want it in a standard comparison set:
+
+```python
+COMPARISON_GROUPS["my_comparison_group"] = (
+    "neighbor_joining_baseline",
+    "neighbor_joining_hybrid_opt",
+    "brand_new_algorithm",
+)
+```
+
+### 4. If you want biopsy-guided inference
+
+There are two different cases.
+
+#### Case A: same reconstruction algorithm, but run inside biopsy-guided top-level inference
+
+Then you do not create a biopsy preset. You just freeze results for `brand_new_algorithm`, and it will produce both:
+
+- `full_cnp/brand_new_algorithm.json`
+- `biopsy_guided_top/brand_new_algorithm.json`
+
+using:
+
+```bash
+python test/tools/freeze_algorithm_variant_cases.py \
+  --existing-seeds \
+  --results-only \
+  --algorithm-name brand_new_algorithm \
+  --overwrite
+```
+
+#### Case B: you want a special biopsy-guided heuristic config
+
+For example:
+
+- special parent choice between biopsy levels
+- tie breaker
+- binarized subgroup inference
+- subtree pair selector / ancestor selector
+
+Then define a preset in `reconstructor_biopsy_presets.py`, backed by blocks from:
+
+- `reconstructor_biopsy_blocks.py`
+- `reconstructor_pair_selection.py`
+- `reconstructor_ancestor_selection.py`
+
+That gives you a benchmark row like `biopsy_preset_xxx`, not a registry algorithm.
+
+### 5. Test locally before freezing
+
+Run focused tests first:
+
+```bash
+python -m pytest -q test/test_reconstructor_blocks.py test/test_reconstructor_biopsy_blocks.py test/test_reconstructor_algorithm_variants.py test/test_reconstructor_refactor_surfaces.py
+```
+
+If your algorithm is registry-based, also check it appears:
+
+```bash
+python -m pytest -q test/test_reconstructor_algorithm_variants.py::test_combined_algorithm_registry_keeps_legacy_prefix_and_unique_names
+```
+
+### 6. Freeze benchmark outputs
+
+For a real algorithm:
+
+```bash
+python test/tools/freeze_algorithm_variant_cases.py \
+  --existing-seeds \
+  --results-only \
+  --algorithm-name brand_new_algorithm \
+  --overwrite
+```
+
+That writes frozen JSON results from existing inputs only. No new simulation, no new `cnp2cnp`.
+
+### 7. Validate only the new algorithm
+
+Do not use the canonical checker yet.
+
+Use the experimental checker:
+
+```bash
+python test/tools/run_experimental_json_checks.py \
+  --algorithm-name brand_new_algorithm
+```
+
+If you also want a heatmap:
+
+```bash
+python test/tools/run_experimental_json_checks.py \
+  --algorithm-name neighbor_joining_baseline \
+  --algorithm-name neighbor_joining_hybrid_opt \
+  --algorithm-name neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony \
+  --algorithm-name brand_new_algorithm \
+  --check metrics \
+  --check determinism \
+  --check heatmap \
+  --heatmap-output-file test/heatmaps_side_by_side_brand_new_algorithm.png
+```
+
+### 8. Only after you accept it, make it canonical
+
+If you decide it should join the canonical benchmark set:
+
+- move it into the canonical list logic in `reconstructor_algorithm_specs.py` if appropriate
+- or include it in `PUBLICATION_HEATMAP_ALGORITHM_NAMES` flow
+- regenerate canonical frozen outputs as needed
+- then `python tools/run_algorithm_case_json_checks.py` will include it automatically
+
+### Rule of thumb
+
+- `reconstructor_algorithms.py`: executable composition of blocks
+- `reconstructor_algorithm_specs.py`: registry membership
+- `reconstructor_algorithm_config.py`: explanation, labels, comparison groups, highlighting
+- `reconstructor_biopsy_presets.py`: biopsy-guided heuristic presets
+- `freeze_algorithm_variant_cases.py`: freeze results for registry algorithms
+- `run_experimental_json_checks.py`: validate non-canonical additions
+- `run_algorithm_case_json_checks.py`: canonical set only
+
 The test suite also validates these JSON workflows on a representative fixture:
 
 ```bash
