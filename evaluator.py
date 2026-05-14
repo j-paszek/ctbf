@@ -3,6 +3,16 @@ import itertools
 import re
 from collections import Counter
 
+
+GRF_METRIC_NAME = "grf"
+GRF_METRIC_KIND = "similarity"
+GRF_HIGHER_IS_BETTER = True
+GRF_SCORE_RANGE = (0.0, 1.0)
+GRF_METRIC_DESCRIPTION = (
+    "Cluster-multiset topology similarity. 1.0 means identical cluster structure "
+    "under this score; lower values mean poorer agreement. This is not a distance."
+)
+
 def parse_newick_to_nx(newick_str, prefix="node"):
     """
     Parses a Newick string into a NetworkX DiGraph.
@@ -105,6 +115,13 @@ def jaccard_distance(ms1, ms2):
     return 1 - (intersection / union) if union else 0
 
 def grf_tree(G1, root1, G2, root2):
+    """
+    Return the GRF-like topology similarity score.
+
+    Directionality: higher is better. The current implementation returns
+    1 minus normalized cluster-multiset Jaccard penalties, so callers should
+    treat stored `grf` values as similarities, not distances.
+    """
     A = compute_all_clusters(G1, root1)
     B = compute_all_clusters(G2, root2)
 
@@ -120,6 +137,7 @@ def grf_tree(G1, root1, G2, root2):
     return 1 - ((num1 / (len(A) * union_size)) + (num2 / (len(B) * union_size)))
 
 def grf(newick1, newick2):
+    """Return the GRF-like topology similarity for two Newick strings."""
     G1, root1 = parse_newick_to_nx(newick1, prefix="A")
     G2, root2 = parse_newick_to_nx(newick2, prefix="B")
     return grf_tree(G1, root1, G2, root2)

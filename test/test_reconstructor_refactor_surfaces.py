@@ -4,6 +4,18 @@ import pytest
 import networkx as nx
 import numpy as np
 
+from evaluator import (
+    GRF_HIGHER_IS_BETTER,
+    GRF_METRIC_KIND,
+    GRF_METRIC_NAME,
+    grf_tree,
+)
+from evaluator_full import (
+    EVALUATE_4_HIGHER_IS_BETTER,
+    EVALUATE_4_MODE_SPECS,
+    EVALUATE_4_VALUE_DIRECTION,
+    evaluate_4,
+)
 from reconstructor import (
     BIOPSY_GUIDED_PRESETS,
     make_anticentral_binarized_biopsy_guided_config,
@@ -39,8 +51,63 @@ def test_plausibility_public_names_match_expected_rules():
 
 def test_algorithm_specs_are_registry_source_of_truth():
     assert [spec.name for spec in LEGACY_ALGORITHM_SPECS] == LEGACY_ALGORITHM_NAMES
+    assert [spec.stable_id for spec in LEGACY_ALGORITHM_SPECS] == LEGACY_ALGORITHM_NAMES
     assert [algorithm.__name__ for algorithm in get_legacy_algorithms()] == LEGACY_ALGORITHM_NAMES
     assert all(isinstance(spec, ReconstructionAlgorithmSpec) for spec in LEGACY_ALGORITHM_SPECS)
+    assert LEGACY_ALGORITHM_NAMES[0] == "neighbor_joining_baseline"
+    assert LEGACY_ALGORITHM_NAMES[20] == "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony"
+
+
+def _metric_tree(edges):
+    tree = nx.DiGraph()
+    for parent, child in edges:
+        tree.add_node(parent, cell_id=str(parent))
+        tree.add_node(child, cell_id=str(child))
+        tree.add_edge(parent, child)
+    return tree
+
+
+def test_grf_metadata_identifies_similarity_direction():
+    true_tree = _metric_tree([(1, 2), (1, 3)])
+    same_tree = _metric_tree([(1, 2), (1, 3)])
+    different_tree = _metric_tree([(1, 2), (2, 3)])
+
+    same_score = grf_tree(true_tree, 1, same_tree, 1)
+    different_score = grf_tree(true_tree, 1, different_tree, 1)
+
+    assert GRF_METRIC_NAME == "grf"
+    assert GRF_METRIC_KIND == "similarity"
+    assert GRF_HIGHER_IS_BETTER is True
+    assert same_score == pytest.approx(1.0)
+    assert different_score < same_score
+
+
+def test_evaluate_4_metadata_identifies_similarity_modes_and_ad_f1():
+    true_tree = _metric_tree([(1, 2), (1, 3)])
+    same_tree = _metric_tree([(1, 2), (1, 3)])
+    worse_tree = _metric_tree([(1, 2), (2, 3)])
+
+    same_metrics = evaluate_4(true_tree, same_tree, restrict_labels={"1", "2", "3"})
+    worse_metrics = evaluate_4(true_tree, worse_tree, restrict_labels={"1", "2", "3"})
+
+    assert set(EVALUATE_4_MODE_SPECS) == set(same_metrics)
+    assert EVALUATE_4_MODE_SPECS["ancestors_unique_restricted"]["paper_name"] == (
+        "AD-F1 when reading the F1 value"
+    )
+    assert all(spec["kind"] == "similarity" for spec in EVALUATE_4_MODE_SPECS.values())
+    assert all(spec["higher_is_better"] is True for spec in EVALUATE_4_MODE_SPECS.values())
+    assert EVALUATE_4_HIGHER_IS_BETTER == {
+        "precision": True,
+        "recall": True,
+        "F1": True,
+        "IoU": True,
+    }
+    assert EVALUATE_4_VALUE_DIRECTION["TP"] == "count"
+    assert EVALUATE_4_VALUE_DIRECTION["FP"] == "count"
+    assert EVALUATE_4_VALUE_DIRECTION["FN"] == "count"
+    assert EVALUATE_4_VALUE_DIRECTION["F1"] == "similarity"
+    assert same_metrics["ancestors_unique_restricted"]["F1"] == pytest.approx(1.0)
+    assert worse_metrics["ancestors_unique_restricted"]["F1"] < same_metrics["ancestors_unique_restricted"]["F1"]
 
 
 def test_algorithm_display_config_explains_legacy_and_fast_benchmark_rows():

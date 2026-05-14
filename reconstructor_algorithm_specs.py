@@ -25,9 +25,20 @@ from reconstructor_algorithms import (
 
 @dataclass(frozen=True)
 class ReconstructionAlgorithmSpec:
+    """
+    Stable registry entry for a reconstruction algorithm.
+
+    `name` is the stable selection/display id. The position of an entry in
+    `LEGACY_ALGORITHM_SPECS` is also a compatibility surface for historical
+    benchmark filenames such as `0rec.csv`; do not reorder legacy entries.
+    """
     name: str
     builder: Callable
     legacy: bool = True
+
+    @property
+    def stable_id(self):
+        return self.name
 
     def build(self):
         algorithm = self.builder()

@@ -4,6 +4,53 @@ from typing import Tuple, Dict, Iterable, Optional, Any
 import networkx as nx
 
 
+EVALUATE_4_VALUE_DIRECTION = {
+    "TP": "count",
+    "FP": "count",
+    "FN": "count",
+    "precision": "similarity",
+    "recall": "similarity",
+    "F1": "similarity",
+    "IoU": "similarity",
+}
+
+EVALUATE_4_HIGHER_IS_BETTER = {
+    "precision": True,
+    "recall": True,
+    "F1": True,
+    "IoU": True,
+}
+
+EVALUATE_4_MODE_SPECS = {
+    "ancestors_multiset": {
+        "comparison": "ancestor-descendant label pairs with multiplicity",
+        "kind": "similarity",
+        "higher_is_better": True,
+    },
+    "ancestors_unique": {
+        "comparison": "unique ancestor-descendant label pairs",
+        "kind": "similarity",
+        "higher_is_better": True,
+    },
+    "edges_multiset": {
+        "comparison": "direct parent-child label edges with multiplicity",
+        "kind": "similarity",
+        "higher_is_better": True,
+    },
+    "edges_unique": {
+        "comparison": "unique direct parent-child label edges",
+        "kind": "similarity",
+        "higher_is_better": True,
+    },
+    "ancestors_unique_restricted": {
+        "comparison": "unique ancestor-descendant label pairs restricted to observed labels",
+        "kind": "similarity",
+        "higher_is_better": True,
+        "paper_name": "AD-F1 when reading the F1 value",
+    },
+}
+
+
 # ---------------------------
 # --- Newick -> NetworkX
 # ---------------------------
@@ -290,6 +337,12 @@ def _set_confusion(true_ctr: Counter, rec_ctr: Counter, restrict_labels: Optiona
 
 
 def prf1_iou(tp: int, fp: int, fn: int):
+    """
+    Return precision, recall, F1, and IoU similarity scores.
+
+    Directionality: higher is better for all four values. TP/FP/FN remain
+    raw counts and are not themselves similarity or distance metrics.
+    """
     prec = tp / (tp + fp) if (tp + fp) else 0.0
     rec = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = (2 * prec * rec / (prec + rec)) if (prec + rec) else 0.0
@@ -356,8 +409,13 @@ def evaluate_4(true_tree: Any,
                print_debug: bool = False):
     """
     Full 4-mode evaluation. Inputs may be nx.DiGraph or Newick strings.
-    Returns dict with keys 'ancestors_multiset','ancestors_unique','edges_multiset','edges_unique'.
+    Returns dict with keys 'ancestors_multiset','ancestors_unique','edges_multiset',
+    'edges_unique', and 'ancestors_unique_restricted'.
     Each value is a dict with TP,FP,FN,precision,recall,F1,IoU and counts.
+
+    Directionality: precision, recall, F1, and IoU are similarity scores where
+    higher is better. The paper-facing AD-F1 metric is
+    result['ancestors_unique_restricted']['F1'].
     """
     Tt = ensure_nx(true_tree)
     Tr = ensure_nx(rec_tree)
