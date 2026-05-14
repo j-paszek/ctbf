@@ -2,6 +2,7 @@ from reconstructor_biopsy_blocks import (
     assign_compatible_node_ids,
     assign_new_node_levels,
     build_final_distance_matrix,
+    copy_reconstruction_cell_lists,
     initialize_biopsy_tree,
     make_id_to_index,
     make_unique_node_counter,
@@ -23,6 +24,7 @@ def build_evolution_tree_impl(
     biopsy_guided_config=None,
 ):
     biopsy_guided_config = normalize_biopsy_guided_config(biopsy_guided_config)
+    cell_lists = copy_reconstruction_cell_lists(cell_lists)
 
     if dist_matrix_path:
         ids, full_dist_matrix = parse_distance_matrix(dist_matrix_path)

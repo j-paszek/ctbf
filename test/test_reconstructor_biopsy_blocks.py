@@ -27,6 +27,7 @@ from reconstructor_biopsy_blocks import (
     select_first_candidate,
     select_same_id_candidate,
 )
+from reconstructor import build_evolution_tree
 from reconstructor_ancestor_selection import (
     keep_pair_order_parent_selector,
     more_central_parent_selector_left_tie,
@@ -66,6 +67,39 @@ def test_extend_biopsy_levels_copies_missing_intermediate_observation():
     assert [cell.cell_id for cell in extended[1]] == [7]
     assert extended[1][0].node_id == 7
     assert extended[1][0] is not first
+
+
+def test_build_evolution_tree_does_not_mutate_caller_biopsy_inputs():
+    top = Genotype([2, 2], 7)
+    top.node_id = 700
+    middle = []
+    bottom = Genotype([2, 2], 7)
+    bottom.node_id = 701
+    cell_lists = [[top], middle, [bottom]]
+    ids = [7]
+    distances = np.array([[0.0]])
+
+    first_tree, first_levels, first_root = build_evolution_tree(
+        cell_lists,
+        inids=ids,
+        indm=distances,
+        r=0,
+        seed=7,
+    )
+    second_tree, second_levels, second_root = build_evolution_tree(
+        cell_lists,
+        inids=ids,
+        indm=distances,
+        r=0,
+        seed=7,
+    )
+
+    assert top.node_id == 700
+    assert bottom.node_id == 701
+    assert middle == []
+    assert list(first_tree.edges(data="weight")) == list(second_tree.edges(data="weight"))
+    assert dict(first_levels) == dict(second_levels)
+    assert first_root == second_root
 
 
 def test_biopsy_parent_selection_prefers_same_cell_id_before_plausibility():

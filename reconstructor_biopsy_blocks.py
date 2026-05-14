@@ -90,6 +90,27 @@ def normalize_biopsy_guided_config(config=None):
     )
 
 
+def clone_reconstruction_cell(cell):
+    return Genotype(
+        np.array(cell.genome, copy=True),
+        cell.node_id,
+        generation=getattr(cell, "generation", None),
+        cell_id=cell.cell_id,
+    )
+
+
+def copy_reconstruction_cell_lists(cell_lists):
+    clones = {}
+
+    def copy_cell(cell):
+        key = id(cell)
+        if key not in clones:
+            clones[key] = clone_reconstruction_cell(cell)
+        return clones[key]
+
+    return [[copy_cell(cell) for cell in cell_list] for cell_list in cell_lists]
+
+
 def extend_biopsy_levels(cell_lists):
     """
     Ensure that a cell observed in multiple biopsy levels also appears in
@@ -479,7 +500,9 @@ __all__ = [
     "assign_compatible_node_ids",
     "assign_new_node_levels",
     "build_final_distance_matrix",
+    "clone_reconstruction_cell",
     "copy_missing_parent_to_upper",
+    "copy_reconstruction_cell_lists",
     "deduplicate_cells_by_cell_id",
     "distance_between",
     "extend_biopsy_levels",
