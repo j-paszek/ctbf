@@ -1,3 +1,5 @@
+import json
+
 import pytest
 import networkx as nx
 import numpy as np
@@ -85,6 +87,49 @@ def test_unknown_biopsy_guided_preset_raises_clear_error():
         resolve_biopsy_guided_config("missing")
 
 
+def test_ctbs_runtime_config_loads_explicit_file(tmp_path):
+    import ctbs
+
+    config = ctbs.default_ctbs_runtime_config().as_legacy_dict()
+    config["cnp2cnp_FILE"] = "/tmp/custom_cnp2cnp.py"
+    config["RUN_SINGLE_TEST"]["seed"] = 123
+    config_path = tmp_path / "ctbs_config.json"
+    config_path.write_text(json.dumps(config))
+
+    runtime_config = ctbs.load_ctbs_runtime_config(config_path)
+
+    assert runtime_config.cnp2cnp_file == "/tmp/custom_cnp2cnp.py"
+    assert runtime_config.run_single_test["seed"] == 123
+    legacy_copy = runtime_config.as_legacy_dict()
+    legacy_copy["RUN_SINGLE_TEST"]["seed"] = 999
+    assert runtime_config.run_single_test["seed"] == 123
+
+
+def test_ctbs_pairwise_distance_uses_explicit_runtime_config(monkeypatch):
+    import ctbs
+
+    calls = []
+
+    def fake_run(args, capture_output, text, check):
+        calls.append(args)
+        return type("Completed", (), {"stdout": "7"})()
+
+    monkeypatch.setattr(ctbs.subprocess, "run", fake_run)
+    runtime_config = ctbs.default_ctbs_runtime_config()
+    runtime_config = ctbs.CtbsRuntimeConfig(
+        in_file_name=runtime_config.in_file_name,
+        out_file_name=runtime_config.out_file_name,
+        sim_dm=runtime_config.sim_dm,
+        cnp2cnp_folder=runtime_config.cnp2cnp_folder,
+        cnp2cnp_file="/tmp/runtime_cnp2cnp.py",
+        true_tree_root_id=runtime_config.true_tree_root_id,
+        run_single_test=runtime_config.run_single_test,
+    )
+
+    assert ctbs.use_cnp2cnp_to_compute_pairwise_distance(">1\n2,2\n", runtime_config=runtime_config) == "7"
+    assert calls[0][1] == "/tmp/runtime_cnp2cnp.py"
+
+
 def test_ctbs_passes_biopsy_guided_config_only_to_reconstruction(monkeypatch):
     import ctbs
 
@@ -117,6 +162,7 @@ def test_ctbs_passes_biopsy_guided_config_only_to_reconstruction(monkeypatch):
         inid=[1, 2, 3],
         indm=np.zeros((3, 3)),
         time_collector=None,
+        runtime_config=ctbs.default_ctbs_runtime_config(),
     )
 
     assert calls[0][0] is True

@@ -5,6 +5,7 @@ import sys
 import tempfile
 import time
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from copy import deepcopy
 import numpy as np
@@ -43,23 +44,63 @@ CTBS_CONFIG_PATH = Path(__file__).with_name("ctbs_config.json")
 RECONSTRUCTION_ALGORITHMS = get_algorithm_map()
 
 
+@dataclass(frozen=True)
+class CtbsRuntimeConfig:
+    in_file_name: str
+    out_file_name: str
+    sim_dm: str
+    cnp2cnp_folder: str
+    cnp2cnp_file: str
+    true_tree_root_id: int
+    run_single_test: dict
+
+    @classmethod
+    def from_mapping(cls, config):
+        return cls(
+            in_file_name=config["IN_FILE_NAME"],
+            out_file_name=config["OUT_FILE_NAME"],
+            sim_dm=config["SIM_DM"],
+            cnp2cnp_folder=config["cnp2cnp_FOLDER"],
+            cnp2cnp_file=config["cnp2cnp_FILE"],
+            true_tree_root_id=config["TRUE_TREE_ROOT_ID"],
+            run_single_test=deepcopy(config["RUN_SINGLE_TEST"]),
+        )
+
+    def as_legacy_dict(self):
+        return {
+            "IN_FILE_NAME": self.in_file_name,
+            "OUT_FILE_NAME": self.out_file_name,
+            "SIM_DM": self.sim_dm,
+            "cnp2cnp_FOLDER": self.cnp2cnp_folder,
+            "cnp2cnp_FILE": self.cnp2cnp_file,
+            "TRUE_TREE_ROOT_ID": self.true_tree_root_id,
+            "RUN_SINGLE_TEST": deepcopy(self.run_single_test),
+        }
+
+
 def load_ctbs_config(config_path=CTBS_CONFIG_PATH):
     with open(config_path, "r") as f:
         loaded_config = json.load(f)
 
-    config = DEFAULT_CTBS_CONFIG.copy()
+    config = deepcopy(DEFAULT_CTBS_CONFIG)
     config.update(loaded_config)
     return config
 
 
-CTBS_CONFIG = load_ctbs_config()
-IN_FILE_NAME = CTBS_CONFIG["IN_FILE_NAME"]
-OUT_FILE_NAME = CTBS_CONFIG["OUT_FILE_NAME"]
-SIM_DM = CTBS_CONFIG["SIM_DM"]
-cnp2cnp_FOLDER = CTBS_CONFIG["cnp2cnp_FOLDER"]
-cnp2cnp_FILE = CTBS_CONFIG["cnp2cnp_FILE"]
-TRUE_TREE_ROOT_ID = CTBS_CONFIG["TRUE_TREE_ROOT_ID"]
-RUN_SINGLE_TEST_CONFIG = CTBS_CONFIG["RUN_SINGLE_TEST"]
+def load_ctbs_runtime_config(config_path=CTBS_CONFIG_PATH):
+    return CtbsRuntimeConfig.from_mapping(load_ctbs_config(config_path))
+
+
+def default_ctbs_runtime_config():
+    return CtbsRuntimeConfig.from_mapping(DEFAULT_CTBS_CONFIG)
+
+
+def _coerce_runtime_config(runtime_config=None):
+    if runtime_config is None:
+        return load_ctbs_runtime_config()
+    if isinstance(runtime_config, CtbsRuntimeConfig):
+        return runtime_config
+    return CtbsRuntimeConfig.from_mapping(runtime_config)
 
 
 class Timer:
@@ -88,21 +129,26 @@ def to_file(file, cells):
 
 
 def _compute_pair(args):
-    c, d, i, j  = args
+    c, d, i, j, runfile = args
     input_str = f">{c.get_id()}\n{c.get_cnp()}\n>{d.get_id()}\n{d.get_cnp()}\n"
-    dist = use_cnp2cnp_to_compute_pairwise_distance(input_str)
+    dist = use_cnp2cnp_to_compute_pairwise_distance(input_str, runfile=runfile)
     return i, j, dist
 
 
-def distance_matrix_from_biopsy(cells, max_threads=None):
+def distance_matrix_from_biopsy(cells, max_threads=None, runtime_config=None):
     """
     Build a distance matrix for a list of cells using cnp2cnp.
     """
+    runtime_config = _coerce_runtime_config(runtime_config)
     n = len(cells)
     ids = [c.get_id() for c in cells]
     dist_matrix = np.zeros((n, n), dtype=float)
 
-    pairs = [(cells[i], cells[j], i, j) for i in range(n) for j in range(i + 1, n)]
+    pairs = [
+        (cells[i], cells[j], i, j, runtime_config.cnp2cnp_file)
+        for i in range(n)
+        for j in range(i + 1, n)
+    ]
 
     with ProcessPoolExecutor(max_workers=max_threads) as executor:
         for i, j, dist in executor.map(_compute_pair, pairs):
@@ -112,7 +158,9 @@ def distance_matrix_from_biopsy(cells, max_threads=None):
     return ids, dist_matrix
 
 
-def use_cnp2cnp_to_compute_pairwise_distance(str_in, runfile=cnp2cnp_FILE):
+def use_cnp2cnp_to_compute_pairwise_distance(str_in, runfile=None, runtime_config=None):
+    if runfile is None:
+        runfile = _coerce_runtime_config(runtime_config).cnp2cnp_file
     pypath = str(sys.executable)
 
     with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
@@ -127,9 +175,8 @@ def use_cnp2cnp_to_compute_pairwise_distance(str_in, runfile=cnp2cnp_FILE):
     return out.stdout
 
 
-def use_cnp2cnp_to_compute_dist_matrix(sample=IN_FILE_NAME,
-                                       folder=cnp2cnp_FOLDER, runfile=cnp2cnp_FILE,
-                                       output=OUT_FILE_NAME):
+def use_cnp2cnp_to_compute_dist_matrix(sample=None, folder=None, runfile=None,
+                                       output=None, runtime_config=None):
     """
     Execute cnp2cnp. Input CNPs of cells and obtain evolutionary distance matrix of given cells.
 
@@ -161,6 +208,12 @@ def use_cnp2cnp_to_compute_dist_matrix(sample=IN_FILE_NAME,
         The file will contain distance matrix of cells, which CNPs are given in file described by argument 'input'.
         The file is generated by an external tool cnp2cnp.
     """
+    runtime_config = _coerce_runtime_config(runtime_config)
+    sample = runtime_config.in_file_name if sample is None else sample
+    folder = runtime_config.cnp2cnp_folder if folder is None else folder
+    runfile = runtime_config.cnp2cnp_file if runfile is None else runfile
+    output = runtime_config.out_file_name if output is None else output
+
     shutil.copy(sample, folder)     # copy file to the cnp2cnp project
     cnp2cnp_in = os.path.join(folder, sample)
     cnp2cnp_out = os.path.join(folder, output)
@@ -199,7 +252,8 @@ def _run_simulation(config, bedfile, seed, simulator_with_loaded_tree, time_coll
     print("Simulation finished. Generated cell evolution tree total nodes:", len(sim.tree.nodes()))
     return sim
 
-def _perform_biopsies(sim, biopsy_generations, biopsy_size, biopsy_size_scalable, seed, compare_dm):
+def _perform_biopsies(sim, biopsy_generations, biopsy_size, biopsy_size_scalable, seed,
+                      compare_dm, runtime_config):
     cell_lists, all_in_one_sample = [], [[]]
 
     for b_gen in biopsy_generations:
@@ -216,7 +270,7 @@ def _perform_biopsies(sim, biopsy_generations, biopsy_size, biopsy_size_scalable
             print(f"Biopsy sample from generation {b_gen} has no cells. Skipping.")
 
     if compare_dm:
-        sim.to_distance_matrix(SIM_DM, [x.cell_id for x in all_in_one_sample[0]])
+        sim.to_distance_matrix(runtime_config.sim_dm, [x.cell_id for x in all_in_one_sample[0]])
 
     print("Number of biopsy cells:", len(all_in_one_sample[0]))
     return cell_lists, all_in_one_sample
@@ -227,31 +281,33 @@ def _handle_small_biopsy(time_collector):
         for key in ["Computing cnp2cnp distance matrix: ", "Clear CNPs: ", "GRF our: ", "GRF NJ: "]:
             time_collector[key] = 0
 
-def _compute_distance_matrix(all_in_one_sample, parallel, time_collector):
+def _compute_distance_matrix(all_in_one_sample, parallel, time_collector, runtime_config):
     # for parallel case single distances are being computed
     # for not parallel we write biopsy to cnp2cnp format file, and proces that
     unique_cells = list({cell.cell_id: cell for cell in all_in_one_sample[0]}.values())
 
     if not parallel:
-        to_file(IN_FILE_NAME, unique_cells)
+        to_file(runtime_config.in_file_name, unique_cells)
 
     inid = indm = None
     if time_collector is not None:
         with Timer("Computing cnp2cnp distance matrix: ", time_collector):
             if parallel:
-                inid, indm = distance_matrix_from_biopsy(unique_cells)
+                inid, indm = distance_matrix_from_biopsy(unique_cells, runtime_config=runtime_config)
             else:
-                use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
+                use_cnp2cnp_to_compute_dist_matrix(runtime_config.in_file_name, runtime_config=runtime_config)
     else:
         if parallel:
-            inid, indm = distance_matrix_from_biopsy(unique_cells)
+            inid, indm = distance_matrix_from_biopsy(unique_cells, runtime_config=runtime_config)
         else:
-            use_cnp2cnp_to_compute_dist_matrix(IN_FILE_NAME)
+            use_cnp2cnp_to_compute_dist_matrix(runtime_config.in_file_name, runtime_config=runtime_config)
     return inid, indm
 
 def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, visualize,
                               clear_cnps, parallel, write_newick, reconstruction_algorithm,
-                              biopsy_guided_config, inid, indm, time_collector):
+                              biopsy_guided_config, inid, indm, time_collector,
+                              runtime_config=None):
+    runtime_config = _coerce_runtime_config(runtime_config)
     cl, osl = deepcopy(cell_lists), deepcopy(all_in_one_sample)
     show_cells(cell_lists)
 
@@ -306,7 +362,7 @@ def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, 
     if parallel:
         build_kwargs.update({"dist_matrix_path": None, "inids": inid, "indm": indm})
     else:
-        build_kwargs.update({"dist_matrix_path": OUT_FILE_NAME})
+        build_kwargs.update({"dist_matrix_path": runtime_config.out_file_name})
     if reconstruction_algorithm:
         build_kwargs["neighbor_joining"] = reconstruction_algorithm
 
@@ -337,12 +393,12 @@ def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, 
     # --- Evaluate GRF distances ---
     if time_collector is not None:
         with Timer("GRF our: ", time_collector):
-            ret1 = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, tree, root_rt)
+            ret1 = grf_tree(true_tree_simplified, runtime_config.true_tree_root_id, tree, root_rt)
         with Timer("GRF NJ: ", time_collector):
-            ret2 = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, njtree, root_nj)
+            ret2 = grf_tree(true_tree_simplified, runtime_config.true_tree_root_id, njtree, root_nj)
     else:
-        ret1 = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, tree, root_rt)
-        ret2 = grf_tree(true_tree_simplified, TRUE_TREE_ROOT_ID, njtree, root_nj)
+        ret1 = grf_tree(true_tree_simplified, runtime_config.true_tree_root_id, tree, root_rt)
+        ret2 = grf_tree(true_tree_simplified, runtime_config.true_tree_root_id, njtree, root_nj)
 
     print("GRF - reconstructed:", ret1)
     print("GRF - NJ:", ret2)
@@ -355,7 +411,7 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
                     visualize=False, time_collector=None, clear_cnps=False, compare_dm=False,
                     write_newick=False, simulator_with_loaded_tree=None, parallel=False,
                     reconstruction_algorithm=None, biopsy_guided_strategy=None,
-                    biopsy_guided_config=None):
+                    biopsy_guided_config=None, runtime_config=None):
     """
     Runs one test that consists of simulation, biopsy, tree reconstruction and tree evaluation.
 
@@ -381,6 +437,8 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
     and between simulated tree and NJ-reconstructed tree.
 
     """
+    runtime_config = _coerce_runtime_config(runtime_config)
+
     if biopsy_guided_config is None:
         biopsy_guided_config = resolve_biopsy_guided_config(biopsy_guided_strategy)
 
@@ -389,14 +447,15 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
 
     # 2. Biopsy phase
     cell_lists, all_in_one_sample = _perform_biopsies(sim, biopsy_generations, biopsy_size,
-                                                      biopsy_size_scalable, seed, compare_dm)
+                                                      biopsy_size_scalable, seed, compare_dm,
+                                                      runtime_config)
 
     if len(all_in_one_sample[0]) < 3:
         _handle_small_biopsy(time_collector)
         return
 
     # 3. Distance matrix computation
-    inid, indm = _compute_distance_matrix(all_in_one_sample, parallel, time_collector)
+    inid, indm = _compute_distance_matrix(all_in_one_sample, parallel, time_collector, runtime_config)
 
     # 4. Tree reconstruction and evaluation
     return _reconstruct_and_evaluate(
@@ -414,6 +473,7 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
         inid,
         indm,
         time_collector,
+        runtime_config,
     )
 
 
@@ -549,14 +609,15 @@ if __name__ == "__main__":
 
     # seed 35 !!!
     # seed 632
-    run_config = RUN_SINGLE_TEST_CONFIG.copy()
+    runtime_config = load_ctbs_runtime_config()
+    run_config = runtime_config.run_single_test.copy()
     run_config["reconstruction_algorithm"] = resolve_reconstruction_algorithm(
         run_config.get("reconstruction_algorithm")
     )
     run_config["biopsy_guided_config"] = resolve_biopsy_guided_config(
         run_config.pop("biopsy_guided_strategy", None)
     )
-    a, b, c = run_single_test(**run_config)
+    a, b, c = run_single_test(**run_config, runtime_config=runtime_config)
 
     biopsy_nodes_ids = get_biopsy_nodes_ids(b, c)
 

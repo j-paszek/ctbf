@@ -25,7 +25,7 @@ from algorithm_evaluation.tester import (  # noqa: E402
     load_seeds,
     select_algorithm_indices,
 )
-from ctbs import cnp2cnp_FILE, use_cnp2cnp_to_compute_pairwise_distance  # noqa: E402
+from ctbs import load_ctbs_runtime_config, use_cnp2cnp_to_compute_pairwise_distance  # noqa: E402
 from ctbs_utils import to_newick  # noqa: E402
 from evaluator import grf_tree  # noqa: E402
 from evaluator_full import evaluate_4  # noqa: E402
@@ -176,13 +176,14 @@ def write_cnp2cnp_input(path, cells):
 def cnp2cnp_distance_matrix(cells):
     if not cells:
         return [], np.zeros((0, 0), dtype=float)
+    cnp2cnp_file = load_ctbs_runtime_config().cnp2cnp_file
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
         input_file = tmpdir_path / "biopsy.txt"
         output_file = tmpdir_path / "cnp_distance_matrix.txt"
         write_cnp2cnp_input(input_file, cells)
         subprocess.run(
-            [sys.executable, cnp2cnp_FILE, "-m", "matrix", "-i", str(input_file), "-o", str(output_file)],
+            [sys.executable, cnp2cnp_file, "-m", "matrix", "-i", str(input_file), "-o", str(output_file)],
             check=True,
         )
         return parse_cnp2cnp_matrix(output_file)
