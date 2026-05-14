@@ -11,6 +11,7 @@ class AlgorithmProcedureConfig:
     merge_strategy: str
     plausibility: str = "none"
     biopsy_guided_preset: str | None = None
+    top_reconstruction_algorithm: str | None = None
 
 
 @dataclass(frozen=True)
@@ -50,18 +51,27 @@ def _legacy(
     )
 
 
-def _biopsy_preset(name, label, preset_name, summary, *, groups=()):
+def _biopsy_preset(
+    name,
+    label,
+    preset_name,
+    summary,
+    *,
+    top_reconstruction_algorithm="neighbor_joining_standard",
+    groups=(),
+):
     return AlgorithmDisplayConfig(
         name=name,
         label=label,
         summary=summary,
         procedure=AlgorithmProcedureConfig(
-            pair_selection="neighbor_joining_standard on final biopsy layer",
+            pair_selection=f"{top_reconstruction_algorithm} on final biopsy layer",
             ancestor_selection="biopsy-guided parent selector",
             distance_update="frozen cnp2cnp distance matrix",
             merge_strategy="biopsy-guided tree attachment",
             plausibility="biopsy parent plausibility filter",
             biopsy_guided_preset=preset_name,
+            top_reconstruction_algorithm=top_reconstruction_algorithm,
         ),
         groups=("biopsy_preset", "fast_benchmark") + tuple(groups),
     )
@@ -274,6 +284,38 @@ ALGORITHM_DISPLAY_CONFIGS = [
         "Biopsy-guided preset combining anticentral tie-breaking and binarized attachments.",
         groups=("biopsy_preset_comparison",),
     ),
+    _biopsy_preset(
+        "biopsy_preset_default_top_anticentral",
+        "biopsy preset: default + top anticentral",
+        "default",
+        "Default biopsy-guided preset with anticentral plausible-parsimony reconstruction on the final biopsy layer.",
+        top_reconstruction_algorithm="neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
+        groups=("biopsy_preset_top_algorithm_comparison",),
+    ),
+    _biopsy_preset(
+        "biopsy_preset_anticentral_tie_top_anticentral",
+        "biopsy preset: anticentral tie + top anticentral",
+        "anticentral_tie",
+        "Anticentral tie-breaking preset with anticentral plausible-parsimony reconstruction on the final biopsy layer.",
+        top_reconstruction_algorithm="neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
+        groups=("biopsy_preset_top_algorithm_comparison",),
+    ),
+    _biopsy_preset(
+        "biopsy_preset_binarized_top_anticentral",
+        "biopsy preset: binarized + top anticentral",
+        "binarized",
+        "Binarized biopsy-guided preset with anticentral plausible-parsimony reconstruction on the final biopsy layer.",
+        top_reconstruction_algorithm="neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
+        groups=("biopsy_preset_top_algorithm_comparison",),
+    ),
+    _biopsy_preset(
+        "biopsy_preset_anticentral_binarized_top_anticentral",
+        "biopsy preset: anticentral binarized + top anticentral",
+        "anticentral_binarized",
+        "Anticentral binarized biopsy-guided preset with anticentral plausible-parsimony reconstruction on the final biopsy layer.",
+        top_reconstruction_algorithm="neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
+        groups=("biopsy_preset_top_algorithm_comparison",),
+    ),
 ]
 
 
@@ -297,6 +339,19 @@ COMPARISON_GROUPS = {
         "biopsy_preset_anticentral_tie",
         "biopsy_preset_binarized",
         "biopsy_preset_anticentral_binarized",
+    ),
+    "biopsy_preset_top_algorithm_comparison": (
+        "neighbor_joining_baseline",
+        "neighbor_joining_hybrid_opt",
+        "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
+        "biopsy_preset_default",
+        "biopsy_preset_anticentral_tie",
+        "biopsy_preset_binarized",
+        "biopsy_preset_anticentral_binarized",
+        "biopsy_preset_default_top_anticentral",
+        "biopsy_preset_anticentral_tie_top_anticentral",
+        "biopsy_preset_binarized_top_anticentral",
+        "biopsy_preset_anticentral_binarized_top_anticentral",
     ),
     "new_alg_comparison": (
         "neighbor_joining_baseline",

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import argparse
 import copy
+from dataclasses import dataclass
 from pathlib import Path
 import sys
 import traceback
@@ -21,6 +22,7 @@ from reconstructor import (  # noqa: E402
     resolve_biopsy_guided_config,
 )
 from reconstructor_algorithm_config import ALGORITHM_CONFIG_BY_NAME  # noqa: E402
+from reconstructor_registry import resolve_reconstruction_algorithm  # noqa: E402
 
 from freeze_algorithm_variant_cases import (  # noqa: E402
     DEFAULT_OUTPUT_ROOT,
@@ -37,11 +39,39 @@ from freeze_algorithm_variant_cases import (  # noqa: E402
 )
 
 
-BIOPSY_PRESET_BENCHMARKS = {
-    name: config.procedure.biopsy_guided_preset
-    for name, config in ALGORITHM_CONFIG_BY_NAME.items()
-    if config.procedure.biopsy_guided_preset is not None
-}
+@dataclass(frozen=True)
+class BiopsyPresetBenchmarkSpec:
+    benchmark_name: str
+    preset_name: str
+    neighbor_joining: object
+    top_reconstruction_algorithm: str
+
+
+def _resolve_top_reconstruction_algorithm(name):
+    if name in {None, "neighbor_joining_standard"}:
+        return neighbor_joining_standard, "neighbor_joining_standard"
+    return resolve_reconstruction_algorithm(name), name
+
+
+def _build_biopsy_preset_benchmarks():
+    benchmarks = {}
+    for name, config in ALGORITHM_CONFIG_BY_NAME.items():
+        preset_name = config.procedure.biopsy_guided_preset
+        if preset_name is None:
+            continue
+        top_algorithm, top_algorithm_name = _resolve_top_reconstruction_algorithm(
+            config.procedure.top_reconstruction_algorithm
+        )
+        benchmarks[name] = BiopsyPresetBenchmarkSpec(
+            benchmark_name=name,
+            preset_name=preset_name,
+            neighbor_joining=top_algorithm,
+            top_reconstruction_algorithm=top_algorithm_name,
+        )
+    return benchmarks
+
+
+BIOPSY_PRESET_BENCHMARKS = _build_biopsy_preset_benchmarks()
 
 
 def resolve_variants(selected_variants):
@@ -60,14 +90,14 @@ def resolve_presets(selected_presets):
             f"Unknown preset benchmark names: {unknown}. "
             f"Available: {sorted(BIOPSY_PRESET_BENCHMARKS)}"
         )
-    return [(name, BIOPSY_PRESET_BENCHMARKS[name]) for name in names]
+    return [BIOPSY_PRESET_BENCHMARKS[name] for name in names]
 
 
 def input_path(cases_root, variant_name, seed):
     return Path(cases_root) / variant_name / str(seed) / "input.json"
 
 
-def biopsy_preset_result(input_case, benchmark_name, preset_name):
+def biopsy_preset_result(input_case, spec):
     cell_lists = cell_lists_from_input(input_case)
     matrix = input_case["distance_matrices"]["cnp2cnp"]
     reconstructed_tree, _, reconstructed_root = build_evolution_tree(
@@ -76,18 +106,18 @@ def biopsy_preset_result(input_case, benchmark_name, preset_name):
         seed=input_case["seed"],
         inids=matrix["ids"],
         indm=np.array(matrix["matrix"], dtype=float),
-        neighbor_joining=neighbor_joining_standard,
-        biopsy_guided_config=resolve_biopsy_guided_config(preset_name),
+        neighbor_joining=spec.neighbor_joining,
+        biopsy_guided_config=resolve_biopsy_guided_config(spec.preset_name),
     )
     true_tree = true_tree_from_input(input_case)
     return {
         "case_id": input_case["case_id"],
         "variant": input_case["variant"],
         "seed": input_case["seed"],
-        "algorithm": benchmark_name,
+        "algorithm": spec.benchmark_name,
         "mode": "biopsy_guided_top",
-        "biopsy_guided_preset": preset_name,
-        "neighbor_joining": neighbor_joining_standard.__name__,
+        "biopsy_guided_preset": spec.preset_name,
+        "neighbor_joining": spec.top_reconstruction_algorithm,
         "root": reconstructed_root,
         "newick": to_newick(reconstructed_tree),
         "reconstructed_tree": node_link_data(reconstructed_tree),
@@ -99,14 +129,14 @@ def write_case_presets(cases_root, variant_name, seed, presets, overwrite=False,
     input_case = load_json(input_path(cases_root, variant_name, seed))
     written = []
     skipped = []
-    for benchmark_name, preset_name in presets:
-        output_path = result_path(cases_root, variant_name, seed, "biopsy_guided_top", benchmark_name)
+    for spec in presets:
+        output_path = result_path(cases_root, variant_name, seed, "biopsy_guided_top", spec.benchmark_name)
         if skip_existing and output_path.exists():
             skipped.append(output_path)
             continue
         write_json(
             output_path,
-            biopsy_preset_result(input_case, benchmark_name, preset_name),
+            biopsy_preset_result(input_case, spec),
             overwrite=overwrite,
         )
         written.append(output_path)
@@ -153,7 +183,7 @@ def main():
     for variant_name in variants:
         seeds = seeds_by_variant[variant_name]
         print(f"Seeds for {variant_name}: {len(seeds)}", ", ".join(str(seed) for seed in seeds))
-    print("Preset rows:", ", ".join(name for name, _ in presets))
+    print("Preset rows:", ", ".join(spec.benchmark_name for spec in presets))
     print("Cases root:", args.cases_root)
     if args.dry_run:
         return
