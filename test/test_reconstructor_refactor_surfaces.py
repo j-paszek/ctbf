@@ -130,6 +130,84 @@ def test_ctbs_pairwise_distance_uses_explicit_runtime_config(monkeypatch):
     assert calls[0][1] == "/tmp/runtime_cnp2cnp.py"
 
 
+def test_ctbs_distance_matrix_validates_id_alignment():
+    import ctbs
+
+    with pytest.raises(ValueError, match="2 rows but 1 ids"):
+        ctbs.DistanceMatrix(ids=[1], matrix=np.zeros((2, 2)))
+
+    with pytest.raises(ValueError, match="symmetric"):
+        ctbs.DistanceMatrix(ids=[1, 2], matrix=np.array([[0.0, 1.0], [2.0, 0.0]]))
+
+    with pytest.raises(ValueError, match="diagonal"):
+        ctbs.DistanceMatrix(ids=[1, 2], matrix=np.array([[1.0, 0.0], [0.0, 0.0]]))
+
+
+def test_ctbs_supplied_distance_provider_returns_validated_matrix():
+    import ctbs
+
+    provider = ctbs.SuppliedDistanceProvider(
+        ids=[1, 2, 3],
+        matrix=np.array(
+            [
+                [0.0, 1.0, 2.0],
+                [1.0, 0.0, 3.0],
+                [2.0, 3.0, 0.0],
+            ]
+        ),
+    )
+
+    distance_matrix = provider.compute([Genotype([2], 1), Genotype([2], 2), Genotype([2], 3)])
+
+    assert distance_matrix.build_tree_kwargs()["inids"] == [1, 2, 3]
+    assert np.array_equal(distance_matrix.build_tree_kwargs()["indm"], provider.matrix)
+
+
+def test_ctbs_file_distance_provider_preserves_configured_file_mode(monkeypatch):
+    import ctbs
+
+    runtime_config = ctbs.default_ctbs_runtime_config()
+    calls = []
+
+    monkeypatch.setattr(ctbs, "to_file", lambda path, cells: calls.append(("to_file", path, len(cells))))
+    monkeypatch.setattr(
+        ctbs,
+        "use_cnp2cnp_to_compute_dist_matrix",
+        lambda sample, runtime_config: calls.append(("cnp2cnp", sample, runtime_config.out_file_name)),
+    )
+
+    provider = ctbs.Cnp2CnpFileDistanceProvider(runtime_config)
+    distance_matrix = provider.compute([Genotype([2], 1), Genotype([2], 2)])
+
+    assert distance_matrix.build_tree_kwargs() == {"dist_matrix_path": runtime_config.out_file_name}
+    assert calls == [
+        ("to_file", runtime_config.in_file_name, 2),
+        ("cnp2cnp", runtime_config.in_file_name, runtime_config.out_file_name),
+    ]
+
+
+def test_reconstructor_accepts_distance_matrix_adapter(monkeypatch):
+    import ctbs
+    import reconstructor
+
+    calls = []
+
+    def fake_build_evolution_tree_impl(cell_lists, **kwargs):
+        calls.append(kwargs)
+        tree = nx.DiGraph()
+        tree.add_node(1, cell_id=1, genome=np.array([2]))
+        return tree, {}, 1
+
+    monkeypatch.setattr(reconstructor, "build_evolution_tree_impl", fake_build_evolution_tree_impl)
+    distance_matrix = ctbs.DistanceMatrix(ids=[1], matrix=np.zeros((1, 1)))
+
+    reconstructor.build_evolution_tree([[Genotype([2], 1)]], distance_matrix=distance_matrix)
+
+    assert calls[0]["dist_matrix_path"] is None
+    assert calls[0]["inids"] == [1]
+    assert np.array_equal(calls[0]["indm"], np.zeros((1, 1)))
+
+
 def test_ctbs_passes_biopsy_guided_config_only_to_reconstruction(monkeypatch):
     import ctbs
 

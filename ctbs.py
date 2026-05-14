@@ -103,6 +103,96 @@ def _coerce_runtime_config(runtime_config=None):
     return CtbsRuntimeConfig.from_mapping(runtime_config)
 
 
+def validate_distance_matrix(ids, matrix):
+    matrix = np.asarray(matrix, dtype=float)
+    if matrix.ndim != 2:
+        raise ValueError("Distance matrix must be two-dimensional.")
+    rows, cols = matrix.shape
+    if rows != cols:
+        raise ValueError(f"Distance matrix must be square, got shape {matrix.shape}.")
+    if ids is None:
+        raise ValueError("Distance matrix ids are required for in-memory matrices.")
+    if len(ids) != rows:
+        raise ValueError(f"Distance matrix has {rows} rows but {len(ids)} ids.")
+    if not np.allclose(matrix, matrix.T):
+        raise ValueError("Distance matrix must be symmetric.")
+    if not np.allclose(np.diag(matrix), np.zeros(rows)):
+        raise ValueError("Distance matrix diagonal must be zero.")
+    return list(ids), matrix
+
+
+@dataclass(frozen=True)
+class DistanceMatrix:
+    ids: list | None = None
+    matrix: object | None = None
+    path: str | None = None
+
+    def __post_init__(self):
+        if self.path is None and self.matrix is None:
+            raise ValueError("DistanceMatrix requires either an in-memory matrix or a path.")
+        if self.matrix is not None:
+            ids, matrix = validate_distance_matrix(self.ids, self.matrix)
+            object.__setattr__(self, "ids", ids)
+            object.__setattr__(self, "matrix", matrix)
+
+    def build_tree_kwargs(self):
+        if self.matrix is not None:
+            return {
+                "dist_matrix_path": None,
+                "inids": self.ids,
+                "indm": self.matrix,
+            }
+        return {"dist_matrix_path": self.path}
+
+
+class DistanceProvider:
+    def compute(self, cells):
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class SuppliedDistanceProvider(DistanceProvider):
+    ids: list
+    matrix: object
+
+    def compute(self, cells):
+        return DistanceMatrix(ids=self.ids, matrix=self.matrix)
+
+
+@dataclass(frozen=True)
+class Cnp2CnpPairwiseDistanceProvider(DistanceProvider):
+    runtime_config: CtbsRuntimeConfig
+    max_threads: int | None = None
+
+    def compute(self, cells):
+        ids, matrix = distance_matrix_from_biopsy(
+            cells,
+            max_threads=self.max_threads,
+            runtime_config=self.runtime_config,
+        )
+        return DistanceMatrix(ids=ids, matrix=matrix)
+
+
+@dataclass(frozen=True)
+class Cnp2CnpFileDistanceProvider(DistanceProvider):
+    runtime_config: CtbsRuntimeConfig
+
+    def compute(self, cells):
+        to_file(self.runtime_config.in_file_name, cells)
+        use_cnp2cnp_to_compute_dist_matrix(
+            self.runtime_config.in_file_name,
+            runtime_config=self.runtime_config,
+        )
+        return DistanceMatrix(path=self.runtime_config.out_file_name)
+
+
+def default_distance_provider(parallel=False, runtime_config=None, max_threads=None):
+    runtime_config = _coerce_runtime_config(runtime_config)
+    if parallel:
+        return Cnp2CnpPairwiseDistanceProvider(runtime_config, max_threads=max_threads)
+    return Cnp2CnpFileDistanceProvider(runtime_config)
+
+
 class Timer:
     def __init__(self, label, collector=None, verbose=False):
         self.label = label
@@ -281,33 +371,30 @@ def _handle_small_biopsy(time_collector):
         for key in ["Computing cnp2cnp distance matrix: ", "Clear CNPs: ", "GRF our: ", "GRF NJ: "]:
             time_collector[key] = 0
 
-def _compute_distance_matrix(all_in_one_sample, parallel, time_collector, runtime_config):
+def _compute_distance_matrix(all_in_one_sample, parallel, time_collector, runtime_config, distance_provider=None):
     # for parallel case single distances are being computed
     # for not parallel we write biopsy to cnp2cnp format file, and proces that
     unique_cells = list({cell.cell_id: cell for cell in all_in_one_sample[0]}.values())
+    if distance_provider is None:
+        distance_provider = default_distance_provider(parallel=parallel, runtime_config=runtime_config)
 
-    if not parallel:
-        to_file(runtime_config.in_file_name, unique_cells)
-
-    inid = indm = None
     if time_collector is not None:
         with Timer("Computing cnp2cnp distance matrix: ", time_collector):
-            if parallel:
-                inid, indm = distance_matrix_from_biopsy(unique_cells, runtime_config=runtime_config)
-            else:
-                use_cnp2cnp_to_compute_dist_matrix(runtime_config.in_file_name, runtime_config=runtime_config)
+            distance_matrix = distance_provider.compute(unique_cells)
     else:
-        if parallel:
-            inid, indm = distance_matrix_from_biopsy(unique_cells, runtime_config=runtime_config)
-        else:
-            use_cnp2cnp_to_compute_dist_matrix(runtime_config.in_file_name, runtime_config=runtime_config)
-    return inid, indm
+        distance_matrix = distance_provider.compute(unique_cells)
+    return distance_matrix
 
 def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, visualize,
                               clear_cnps, parallel, write_newick, reconstruction_algorithm,
                               biopsy_guided_config, inid, indm, time_collector,
-                              runtime_config=None):
+                              runtime_config=None, distance_matrix=None):
     runtime_config = _coerce_runtime_config(runtime_config)
+    if distance_matrix is None:
+        if parallel:
+            distance_matrix = DistanceMatrix(ids=inid, matrix=indm)
+        else:
+            distance_matrix = DistanceMatrix(path=runtime_config.out_file_name)
     cl, osl = deepcopy(cell_lists), deepcopy(all_in_one_sample)
     show_cells(cell_lists)
 
@@ -359,10 +446,7 @@ def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, 
     # --- unified build config ---
     build_kwargs = {"r": r_dist}
     build_kwargs.update({"seed": seed})
-    if parallel:
-        build_kwargs.update({"dist_matrix_path": None, "inids": inid, "indm": indm})
-    else:
-        build_kwargs.update({"dist_matrix_path": runtime_config.out_file_name})
+    build_kwargs.update(distance_matrix.build_tree_kwargs())
     if reconstruction_algorithm:
         build_kwargs["neighbor_joining"] = reconstruction_algorithm
 
@@ -411,7 +495,7 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
                     visualize=False, time_collector=None, clear_cnps=False, compare_dm=False,
                     write_newick=False, simulator_with_loaded_tree=None, parallel=False,
                     reconstruction_algorithm=None, biopsy_guided_strategy=None,
-                    biopsy_guided_config=None, runtime_config=None):
+                    biopsy_guided_config=None, runtime_config=None, distance_provider=None):
     """
     Runs one test that consists of simulation, biopsy, tree reconstruction and tree evaluation.
 
@@ -455,7 +539,13 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
         return
 
     # 3. Distance matrix computation
-    inid, indm = _compute_distance_matrix(all_in_one_sample, parallel, time_collector, runtime_config)
+    distance_matrix = _compute_distance_matrix(
+        all_in_one_sample,
+        parallel,
+        time_collector,
+        runtime_config,
+        distance_provider=distance_provider,
+    )
 
     # 4. Tree reconstruction and evaluation
     return _reconstruct_and_evaluate(
@@ -470,10 +560,11 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
         write_newick,
         reconstruction_algorithm,
         biopsy_guided_config,
-        inid,
-        indm,
+        distance_matrix.ids,
+        distance_matrix.matrix,
         time_collector,
         runtime_config,
+        distance_matrix,
     )
 
 
