@@ -17,47 +17,61 @@ def parse_distance_matrix(path):
     return ids, np.array(matrix)
 
 
+def _cell_id_sort_key(tree, node_id):
+    cell_id = tree.nodes[node_id].get("cell_id")
+    return (cell_id is None, cell_id)
+
+
 def visualize_tree_plotly(tree, node_levels=None, output_file="reconstructed.html", level_node_ordering=None):
     pos = {}
     level_to_nodes = defaultdict(list)
 
     # Group nodes by level and sort them
     for node, level in node_levels.items():
-        level_to_nodes[level].append(node)
+        node_id = node.node_id if hasattr(node, "node_id") else node
+        level_to_nodes[level].append(node_id)
 
     for level in level_to_nodes:
-        nodes_in_level = level_to_nodes[level]
+        node_ids_in_level = level_to_nodes[level]
         if level_node_ordering and level in level_node_ordering:
             # Map from cell_id to node
-            cell_id_to_node = {n.cell_id: n for n in nodes_in_level}
+            cell_id_to_node = {
+                tree.nodes[node_id].get("cell_id"): node_id
+                for node_id in node_ids_in_level
+            }
             specified_ids = level_node_ordering[level]
             specified_nodes = [cell_id_to_node[cid] for cid in specified_ids if cid in cell_id_to_node]
 
             # Get remaining nodes not specified
-            remaining_nodes = [n for n in nodes_in_level if n.cell_id not in specified_ids]
-            remaining_nodes.sort(key=lambda n: n.cell_id)  # optional sort of unspecified nodes
+            remaining_nodes = [
+                node_id
+                for node_id in node_ids_in_level
+                if tree.nodes[node_id].get("cell_id") not in specified_ids
+            ]
+            remaining_nodes.sort(key=lambda node_id: _cell_id_sort_key(tree, node_id))  # optional sort of unspecified nodes
 
             # Combine specified + remaining
             level_to_nodes[level] = specified_nodes + remaining_nodes
         else:
             # Default: sort by cell_id
-            level_to_nodes[level].sort(key=lambda n: n.cell_id)
+            level_to_nodes[level].sort(key=lambda node_id: _cell_id_sort_key(tree, node_id))
 
     # Assign x/y positions
     offset = 0.25
     max_level = len(level_to_nodes)
     z = 1
     for level, nodes in level_to_nodes.items():
-        for i, node in enumerate(nodes):
-            if node.genome.size == 1 and node.genome.flatten()[0] is None:
+        for i, node_id in enumerate(nodes):
+            genome = tree.nodes[node_id].get("genome", np.array([None]))
+            if genome.size == 1 and genome.flatten()[0] is None:
                 if z % 2:
-                    pos[node.node_id] = (offset, level)
+                    pos[node_id] = (offset, level)
                 else:
-                    pos[node.node_id] = (max_level - offset, level)
+                    pos[node_id] = (max_level - offset, level)
                 offset += 0.5
                 z += 1
             else:
-                pos[node.node_id] = (i, level)
+                pos[node_id] = (i, level)
 
     edge_x = []
     edge_y = []

@@ -127,6 +127,7 @@ def make_unique_node_counter(ids):
 
 
 def assign_compatible_node_ids(cell_lists):
+    """Assign reconstruction-local graph ids without using simulator node_id values."""
     for cell_list in cell_lists:
         for cell in cell_list:
             cell.node_id = cell.cell_id
@@ -138,13 +139,13 @@ def initialize_biopsy_tree(cell_lists, unique_node_counter, only_nj=False):
 
     for level, cell_list in enumerate(cell_lists[::-1]):
         for cell in cell_list:
-            node_levels[cell] = level
             if cell.node_id in tree.nodes:
                 if not only_nj:
                     cell.node_id = next(unique_node_counter)
                     tree.add_node(cell.node_id, genome=cell.genome, cell_id=cell.cell_id)
             else:
                 tree.add_node(cell.node_id, genome=cell.genome, cell_id=cell.cell_id)
+            node_levels[cell.node_id] = level
 
     return tree, node_levels
 
@@ -237,7 +238,7 @@ def copy_missing_parent_to_upper(
     copied_cell = Genotype(list(y.genome), y.cell_id)
     copied_cell.node_id = next(unique_node_counter)
     upper_cells.append(copied_cell)
-    node_levels[copied_cell] = copied_level
+    node_levels[copied_cell.node_id] = copied_level
     tree.add_node(copied_cell.node_id, genome=copied_cell.genome, cell_id=copied_cell.cell_id)
     tree.add_edge(copied_cell.node_id, y.node_id, weight=0)
     return copied_cell
@@ -390,7 +391,7 @@ def make_binarized_group_attachment_strategy(
         _consume_used_node_ids(unique_node_counter, len(new_nodes))
 
         for node in new_nodes:
-            node_levels[node] = child_level
+            node_levels[node.node_id] = child_level
 
         tree.add_edge(
             parent.node_id,
@@ -465,8 +466,10 @@ def build_final_distance_matrix(final_cells, full_dist_matrix, id_to_index):
 
 
 def assign_new_node_levels(new_nodes, node_levels):
+    max_level = max((level for level in node_levels.values() if level is not None), default=-1)
     for node in new_nodes:
-        node_levels[node] = max(node_levels.values()) + 1
+        max_level += 1
+        node_levels[node.node_id] = max_level
 
 
 __all__ = [

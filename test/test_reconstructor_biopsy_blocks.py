@@ -7,6 +7,7 @@ import numpy as np
 from reconstructor_biopsy_blocks import (
     BiopsyGuidedConfig,
     BiopsySubtreeConfig,
+    assign_compatible_node_ids,
     build_final_distance_matrix,
     copy_missing_parent_to_upper,
     default_biopsy_guided_config,
@@ -14,6 +15,7 @@ from reconstructor_biopsy_blocks import (
     extend_biopsy_levels,
     filter_plausible_ancestor_candidates,
     find_radius_candidates,
+    initialize_biopsy_tree,
     make_binarized_group_attachment_strategy,
     make_id_to_index,
     normalize_biopsy_guided_config,
@@ -195,8 +197,30 @@ def test_copy_missing_parent_adds_upper_cell_and_zero_weight_edge():
     assert upper == [copied]
     assert copied.cell_id == child.cell_id
     assert copied.node_id == 20
-    assert node_levels[copied] == 1
+    assert node_levels[copied.node_id] == 1
     assert tree.edges[copied.node_id, child.node_id]["weight"] == 0
+
+
+def test_initialize_biopsy_tree_records_levels_by_node_id_not_object_identity():
+    older = Genotype([2], 7)
+    older.node_id = 700
+    younger_same_genotype = Genotype([2], 7)
+    younger_same_genotype.node_id = 701
+
+    assign_compatible_node_ids([[older], [younger_same_genotype]])
+    tree, node_levels = initialize_biopsy_tree(
+        [[older], [younger_same_genotype]],
+        itertools.count(start=20),
+    )
+
+    assert older.node_id != 700
+    assert younger_same_genotype.node_id != 701
+    assert set(node_levels) == set(tree.nodes)
+    assert node_levels[younger_same_genotype.node_id] == 0
+    assert node_levels[older.node_id] == 1
+    copied_older = Genotype([2], older.cell_id)
+    copied_older.node_id = older.node_id
+    assert node_levels[copied_older.node_id] == node_levels[older.node_id]
 
 
 def test_build_final_distance_matrix_uses_cell_ids_not_node_ids():
