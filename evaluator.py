@@ -12,6 +12,14 @@ GRF_METRIC_DESCRIPTION = (
     "Cluster-multiset topology similarity. 1.0 means identical cluster structure "
     "under this score; lower values mean poorer agreement. This is not a distance."
 )
+EXT_GRF_METRIC_NAME = "ext_grf"
+EXT_GRF_METRIC_KIND = "distance"
+EXT_GRF_HIGHER_IS_BETTER = False
+EXT_GRF_SCORE_RANGE = (0.0, 1.0)
+EXT_GRF_METRIC_DESCRIPTION = (
+    "Exact generalized Robinson-Foulds distance on multisets of label multisets. "
+    "0.0 means identical cluster-multiset structure; higher values mean poorer agreement."
+)
 
 def parse_newick_to_nx(newick_str, prefix="node"):
     """
@@ -114,30 +122,87 @@ def jaccard_distance(ms1, ms2):
 
     return 1 - (intersection / union) if union else 0
 
-def grf_tree(G1, root1, G2, root2):
-    """
-    Return the GRF-like topology similarity score.
 
-    Directionality: higher is better. The current implementation returns
-    1 minus normalized cluster-multiset Jaccard penalties, so callers should
-    treat stored `grf` values as similarities, not distances.
+def _multiset_union_size(counts1, counts2):
+    return sum(
+        max(counts1.get(item, 0), counts2.get(item, 0))
+        for item in counts1.keys() | counts2.keys()
+    )
+
+
+def _multiset_difference_counts(left_counts, right_counts):
+    return Counter(
+        {
+            item: count - right_counts.get(item, 0)
+            for item, count in left_counts.items()
+            if count > right_counts.get(item, 0)
+        }
+    )
+
+
+def _weighted_jaccard_distance_sum(left_counts, right_counts):
+    return sum(
+        left_multiplicity
+        * right_multiplicity
+        * jaccard_distance(left_cluster, right_cluster)
+        for left_cluster, left_multiplicity in left_counts.items()
+        for right_cluster, right_multiplicity in right_counts.items()
+    )
+
+
+def _ext_grf_from_clusters(A, B):
+    A_counts = Counter(A)
+    B_counts = Counter(B)
+    len_A = sum(A_counts.values())
+    len_B = sum(B_counts.values())
+    union_size = _multiset_union_size(A_counts, B_counts)
+
+    if union_size == 0:
+        return 0.0
+    if len_A == 0 or len_B == 0:
+        return 1.0
+
+    b_minus_a = _multiset_difference_counts(B_counts, A_counts)
+    a_minus_b = _multiset_difference_counts(A_counts, B_counts)
+
+    num1 = _weighted_jaccard_distance_sum(A_counts, b_minus_a)
+    num2 = _weighted_jaccard_distance_sum(a_minus_b, B_counts)
+
+    return (num1 / (len_A * union_size)) + (num2 / (len_B * union_size))
+
+
+def ext_grf_tree(G1, root1, G2, root2):
+    """
+    Return the exact generalized Robinson-Foulds distance.
+
+    Directionality: lower is better. The implementation follows the literature
+    formula over multisets of clusters, so repeated equal clusters contribute
+    with their multiplicity instead of being collapsed to set membership.
     """
     A = compute_all_clusters(G1, root1)
     B = compute_all_clusters(G2, root2)
+    return _ext_grf_from_clusters(A, B)
 
-    A_set = set(A)
-    B_set = set(B)
-    union_size = len(A_set | B_set)
-    if union_size == 0:
-        return 0.0
 
-    num1 = sum(jaccard_distance(a, b) for a in A for b in B if b not in A_set)
-    num2 = sum(jaccard_distance(b, a) for b in B for a in A if a not in B_set)
+def grf_tree(G1, root1, G2, root2):
+    """
+    Return the project-facing generalized Robinson-Foulds similarity score.
 
-    return 1 - ((num1 / (len(A) * union_size)) + (num2 / (len(B) * union_size)))
+    Directionality: higher is better. This is retained as the legacy benchmark
+    value and is defined as 1 minus the exact GRF distance returned by
+    `ext_grf_tree`.
+    """
+    return 1 - ext_grf_tree(G1, root1, G2, root2)
+
+
+def ext_grf(newick1, newick2):
+    """Return the exact generalized Robinson-Foulds distance for two Newick strings."""
+    G1, root1 = parse_newick_to_nx(newick1, prefix="A")
+    G2, root2 = parse_newick_to_nx(newick2, prefix="B")
+    return ext_grf_tree(G1, root1, G2, root2)
 
 def grf(newick1, newick2):
-    """Return the GRF-like topology similarity for two Newick strings."""
+    """Return the project-facing GRF similarity for two Newick strings."""
     G1, root1 = parse_newick_to_nx(newick1, prefix="A")
     G2, root2 = parse_newick_to_nx(newick2, prefix="B")
     return grf_tree(G1, root1, G2, root2)
@@ -266,7 +331,8 @@ if __name__ == "__main__":
     # tree, root = parse_newick_to_nx(tree_B)
     # print([data['cell_id'] for x, data in tree.nodes(data=True)])
 
-    print("GRF distance:", grf(tree_A, tree_B))
+    print("GRF similarity:", grf(tree_A, tree_B))
+    print("ext_GRF distance:", ext_grf(tree_A, tree_B))
     # print("RGRF distance:", rgrf(tree_A, tree_B))
     # print("BGRF distance:", bgrf(tree_A, tree_B, {'a', 'b', 'c'}))
 
