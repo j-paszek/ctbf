@@ -11,7 +11,7 @@ import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CASES_ROOT = PROJECT_ROOT / "test" / "data" / "algorithm_cases"
-TEST_VARIANTS = [
+LEGACY_TEST_VARIANTS = [
     "r2bss025",
     "r2bss05",
     "r2bss075",
@@ -20,6 +20,15 @@ TEST_VARIANTS = [
     "r4bss05high",
     "r4bss05highdm",
 ]
+ADAPTIVE_RADIUS_TEST_VARIANTS = [
+    "rAbss025",
+    "rAbss05",
+    "rAbss075",
+    "rAbss05high",
+    "rAbss05highdm",
+]
+TEST_VARIANTS = LEGACY_TEST_VARIANTS
+ALL_TEST_VARIANTS = LEGACY_TEST_VARIANTS + ADAPTIVE_RADIUS_TEST_VARIANTS
 
 
 @dataclass
@@ -124,6 +133,7 @@ class VariantStats:
     variant: str
     cases: int = 0
     r_values: set = field(default_factory=set)
+    r_distances: MomentTotals = field(default_factory=MomentTotals)
     input_pair_distances: MomentTotals = field(default_factory=MomentTotals)
     radius_neighbors: MomentTotals = field(default_factory=MomentTotals)
     plausible_neighbors: MomentTotals = field(default_factory=MomentTotals)
@@ -142,6 +152,7 @@ class VariantStats:
     def add_case(self, stats):
         self.cases += 1
         self.r_values.add(stats.r_dist)
+        self.r_distances.add(stats.r_dist)
         self.input_pair_distances.count += stats.input_pair_distances.count
         self.input_pair_distances.total += stats.input_pair_distances.total
         self.input_pair_distances.total_sq += stats.input_pair_distances.total_sq
@@ -168,12 +179,13 @@ class VariantStats:
         self.children_in_multi_child_groups += stats.children_in_multi_child_groups
 
     def to_row(self):
-        r_dist = sorted(self.r_values)[0] if len(self.r_values) == 1 else ""
+        r_dist = sorted(self.r_values)[0] if len(self.r_values) == 1 else self.r_distances.mean
         mean_d = self.input_pair_distances.mean
         return {
             "variant": self.variant,
             "cases": self.cases,
             "r_dist": r_dist,
+            "r_dist_variance": self.r_distances.variance,
             "parent_opportunities": self.parent_opportunities,
             "r_neighborhood_mean": self.radius_neighbors.mean,
             "r_neighborhood_variance": self.radius_neighbors.variance,
@@ -205,8 +217,8 @@ class VariantStats:
             "input_pair_distance_count": self.input_pair_distances.count,
             "input_pair_distance_mean": mean_d,
             "input_pair_distance_variance": self.input_pair_distances.variance,
-            "r_over_d": safe_ratio(r_dist, mean_d) if r_dist != "" else "",
-            "r_minus_d": r_dist - mean_d if r_dist != "" else "",
+            "r_over_d": safe_ratio(r_dist, mean_d),
+            "r_minus_d": r_dist - mean_d,
         }
 
 
@@ -375,9 +387,9 @@ def analyze_case(input_case, *, extend_levels=True):
 def selected_variants(variants):
     if not variants:
         return TEST_VARIANTS
-    unknown = sorted(set(variants) - set(TEST_VARIANTS))
+    unknown = sorted(set(variants) - set(ALL_TEST_VARIANTS))
     if unknown:
-        raise ValueError(f"Unknown variants: {unknown}. Available: {TEST_VARIANTS}")
+        raise ValueError(f"Unknown variants: {unknown}. Available: {ALL_TEST_VARIANTS}")
     return variants
 
 
@@ -458,7 +470,7 @@ def parse_args():
     )
     parser.add_argument("--cases-root", type=Path, default=DEFAULT_CASES_ROOT)
     parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--variant", action="append", choices=TEST_VARIANTS)
+    parser.add_argument("--variant", action="append", choices=ALL_TEST_VARIANTS)
     parser.add_argument("--seed", type=int, action="append", default=None)
     parser.add_argument("--limit", type=int, default=None, help="Limit seeds per selected variant.")
     parser.add_argument(

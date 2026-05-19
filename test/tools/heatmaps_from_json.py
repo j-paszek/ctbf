@@ -18,6 +18,7 @@ if str(TEST_DIR) not in sys.path:
     sys.path.insert(0, str(TEST_DIR))
 
 from json_case_results import (  # noqa: E402
+    ALL_TEST_VARIANTS,
     DEFAULT_CASES_ROOT,
     TEST_VARIANTS,
     algorithms_for_variant,
@@ -122,8 +123,11 @@ def parse_args():
     parser.add_argument("--cases-root", type=Path, default=DEFAULT_CASES_ROOT)
     parser.add_argument("--rankings-dir", type=Path, default=PROJECT_ROOT / "test" / "data" / "results_from_json")
     parser.add_argument("--output-file", type=Path, default=PROJECT_ROOT / "test" / "heatmaps_side_by_side_from_json.png")
-    parser.add_argument("--variant", action="append", choices=TEST_VARIANTS,
-                        help="Variant to include. Can be passed multiple times. Defaults to all variants.")
+    parser.add_argument("--variant", action="append", choices=ALL_TEST_VARIANTS,
+                        help=(
+                            "Variant to include. Can be passed multiple times. "
+                            "Defaults to legacy fixed-r variants."
+                        ))
     parser.add_argument("--algorithm-group", action="append",
                         help="Comparison group from reconstructor_algorithm_config.py. Can be passed multiple times.")
     parser.add_argument("--algorithm-name", action="append",

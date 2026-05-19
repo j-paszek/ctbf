@@ -20,6 +20,11 @@ fast_spec = importlib.util.spec_from_file_location("fast_biopsy_preset_benchmark
 fast_biopsy_preset_benchmark = importlib.util.module_from_spec(fast_spec)
 fast_spec.loader.exec_module(fast_biopsy_preset_benchmark)
 
+OBS_DROPOUT_TOOL_PATH = PROJECT_ROOT / "test" / "tools" / "observation_dropout_stress.py"
+obs_spec = importlib.util.spec_from_file_location("observation_dropout_stress", OBS_DROPOUT_TOOL_PATH)
+observation_dropout_stress = importlib.util.module_from_spec(obs_spec)
+obs_spec.loader.exec_module(observation_dropout_stress)
+
 REFERENCE_ALGORITHM_NAMES = freeze_algorithm_variant_cases.REFERENCE_ALGORITHM_NAMES
 case_dir = freeze_algorithm_variant_cases.case_dir
 genotype_to_json = freeze_algorithm_variant_cases.genotype_to_json
@@ -31,7 +36,7 @@ result_path = freeze_algorithm_variant_cases.result_path
 from simulator import Genotype  # noqa: E402
 
 
-def test_resolve_variants_defaults_to_all_known_variants():
+def test_resolve_variants_defaults_to_legacy_fixed_radius_variants():
     variants = resolve_variants(None)
 
     assert [name for name, _ in variants] == [
@@ -48,6 +53,108 @@ def test_resolve_variants_defaults_to_all_known_variants():
 def test_resolve_variants_rejects_unknown_variant():
     with pytest.raises(ValueError, match="Unknown variants"):
         resolve_variants(["not_a_variant"])
+
+
+def test_resolve_variants_accepts_adaptive_radius_labels_without_defaulting_to_them():
+    variants = resolve_variants(["rAbss025", "rAbss05highdm"])
+
+    assert [name for name, _ in variants] == ["rAbss025", "rAbss05highdm"]
+    assert variants[0][1]["radius_mode"] == freeze_algorithm_variant_cases.ADAPTIVE_RADIUS_MODE
+    assert variants[0][1]["source_variant"] == "r2bss025"
+    assert variants[1][1]["source_variant"] == "r4bss05highdm"
+
+
+def test_adaptive_radius_input_case_is_derived_from_mean_pairwise_distance():
+    source_case = {
+        "case_id": "r2bss05_seed123",
+        "variant": "r2bss05",
+        "seed": 123,
+        "profile": "base",
+        "r_dist": 2,
+        "biopsy_size_scalable": 0.5,
+        "distance_matrices": {
+            "cnp2cnp": {
+                "ids": [1, 2, 3],
+                "matrix": [
+                    [0.0, 2.0, 4.0],
+                    [2.0, 0.0, 6.0],
+                    [4.0, 6.0, 0.0],
+                ],
+            }
+        },
+    }
+    variant = freeze_algorithm_variant_cases.VARIANT_PRESETS["rAbss05"]
+
+    derived = freeze_algorithm_variant_cases.input_case_from_existing(
+        source_case,
+        "rAbss05",
+        variant,
+        adaptive_radius_scale=0.75,
+    )
+
+    assert derived["case_id"] == "rAbss05_seed123"
+    assert derived["variant"] == "rAbss05"
+    assert derived["r_dist"] == pytest.approx(3.0)
+    assert derived["radius_mode"] == freeze_algorithm_variant_cases.ADAPTIVE_RADIUS_MODE
+    assert derived["adaptive_radius_scale"] == pytest.approx(0.75)
+    assert derived["adaptive_radius_distance_mean"] == pytest.approx(4.0)
+    assert source_case["variant"] == "r2bss05"
+    assert source_case["r_dist"] == 2
+
+
+def test_observation_dropout_stress_perturbs_observed_genomes_consistently_by_cell_id():
+    source_case = {
+        "case_id": "r2bss05_seed123",
+        "variant": "r2bss05",
+        "seed": 123,
+        "profile": "base",
+        "r_dist": 2,
+        "biopsy_size_scalable": 0.5,
+        "biopsies": [
+            {
+                "generation": 1,
+                "cells": [
+                    {"node_id": 1, "cell_id": 10, "generation": 1, "genome": [2, 1, 0]},
+                    {"node_id": 2, "cell_id": 11, "generation": 1, "genome": [0, 3, 2]},
+                ],
+            },
+            {
+                "generation": 2,
+                "cells": [
+                    {"node_id": 3, "cell_id": 10, "generation": 2, "genome": [2, 1, 0]},
+                ],
+            },
+        ],
+        "distance_matrices": {
+            "cnp2cnp": {
+                "ids": [10, 11],
+                "matrix": [[0.0, 1.0], [1.0, 0.0]],
+            }
+        },
+    }
+
+    perturbed = observation_dropout_stress.perturb_input_case(
+        source_case,
+        dropout_rate=1.0,
+        stress_seed=7,
+        distance_mode="l1",
+    )
+
+    first_cell = perturbed["biopsies"][0]["cells"][0]
+    repeated_cell = perturbed["biopsies"][1]["cells"][0]
+    second_cell = perturbed["biopsies"][0]["cells"][1]
+    assert first_cell["genome"] == [0, 0, 0]
+    assert repeated_cell["genome"] == [0, 0, 0]
+    assert second_cell["genome"] == [0, 0, 0]
+    assert perturbed["observation_perturbation"]["kind"] == observation_dropout_stress.STRESS_KIND
+    assert perturbed["observation_perturbation"]["positive_bins"] == 4
+    assert perturbed["observation_perturbation"]["dropped_bins"] == 4
+    assert perturbed["distance_matrices"]["cnp2cnp"]["ids"] == [10, 11]
+    assert np.array_equal(
+        perturbed["distance_matrices"]["cnp2cnp"]["matrix"],
+        np.zeros((2, 2)),
+    )
+    assert source_case["biopsies"][0]["cells"][0]["genome"] == [2, 1, 0]
 
 
 def test_default_reference_algorithm_indices_match_accepted_reference_algorithms():

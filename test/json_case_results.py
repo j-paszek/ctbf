@@ -10,7 +10,7 @@ from scipy.stats import wilcoxon
 TEST_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = TEST_DIR.parent
 DEFAULT_CASES_ROOT = PROJECT_ROOT / "test" / "data" / "algorithm_cases"
-TEST_VARIANTS = [
+LEGACY_TEST_VARIANTS = [
     "r2bss025",
     "r2bss05",
     "r2bss075",
@@ -19,6 +19,15 @@ TEST_VARIANTS = [
     "r4bss05high",
     "r4bss05highdm",
 ]
+ADAPTIVE_RADIUS_TEST_VARIANTS = [
+    "rAbss025",
+    "rAbss05",
+    "rAbss075",
+    "rAbss05high",
+    "rAbss05highdm",
+]
+TEST_VARIANTS = LEGACY_TEST_VARIANTS
+ALL_TEST_VARIANTS = LEGACY_TEST_VARIANTS + ADAPTIVE_RADIUS_TEST_VARIANTS
 MODES = ["full_cnp", "biopsy_guided_top"]
 MODE_TO_HEATMAP_SUFFIX = {
     "full_cnp": "nj",

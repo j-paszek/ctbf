@@ -9,7 +9,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = SCRIPT_DIR / "results"
 
 
-TEST_VARIANTS = [
+LEGACY_TEST_VARIANTS = [
     "r2bss025",
     "r2bss05",
     "r2bss075",
@@ -18,6 +18,14 @@ TEST_VARIANTS = [
     "r4bss05high",
     "r4bss05highdm",
 ]
+ADAPTIVE_RADIUS_TEST_VARIANTS = [
+    "rAbss025",
+    "rAbss05",
+    "rAbss075",
+    "rAbss05high",
+    "rAbss05highdm",
+]
+TEST_VARIANTS = LEGACY_TEST_VARIANTS
 
 METRIC_PAIRS = [
     ("3-f1", "nj"),

@@ -9,6 +9,8 @@ import numpy as np
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = SCRIPT_DIR / "results"
+LEGACY_TEST_VARIANTS = ["r2bss05", "r2bss025", "r2bss075", "r4bss05", "r4bss05high", "r4bss075", "r4bss05highdm"]
+ADAPTIVE_RADIUS_TEST_VARIANTS = ["rAbss025", "rAbss05", "rAbss075", "rAbss05high", "rAbss05highdm"]
 
 
 # --------------------------------------------------------------
@@ -259,7 +261,7 @@ def compare_two(i, j, rec=False):
 
 
 if __name__ == "__main__":
-    test_variants = ["r2bss05", "r2bss025", "r2bss075", "r4bss05", "r4bss05high", "r4bss075", "r4bss05highdm"]
+    test_variants = LEGACY_TEST_VARIANTS
 
     alg_names = get_algorithms_to_test()
     all_seeds = load_seeds(DEFAULT_SEEDS_FILE)

@@ -26,6 +26,7 @@ from reconstructor_registry import resolve_reconstruction_algorithm  # noqa: E40
 
 from freeze_algorithm_variant_cases import (  # noqa: E402
     DEFAULT_OUTPUT_ROOT,
+    LEGACY_VARIANT_NAMES,
     VARIANT_PRESETS,
     cell_lists_from_input,
     existing_seeds_for_variant,
@@ -75,7 +76,7 @@ BIOPSY_PRESET_BENCHMARKS = _build_biopsy_preset_benchmarks()
 
 
 def resolve_variants(selected_variants):
-    names = selected_variants or list(VARIANT_PRESETS)
+    names = selected_variants or LEGACY_VARIANT_NAMES
     unknown = sorted(set(names) - set(VARIANT_PRESETS))
     if unknown:
         raise ValueError(f"Unknown variants: {unknown}. Available: {sorted(VARIANT_PRESETS)}")
@@ -97,7 +98,24 @@ def input_path(cases_root, variant_name, seed):
     return Path(cases_root) / variant_name / str(seed) / "input.json"
 
 
-def biopsy_preset_result(input_case, spec):
+def normalize_preset_spec(spec):
+    if isinstance(spec, BiopsyPresetBenchmarkSpec):
+        return spec
+    if isinstance(spec, tuple) and len(spec) == 2:
+        top_algorithm, top_algorithm_name = _resolve_top_reconstruction_algorithm(None)
+        return BiopsyPresetBenchmarkSpec(
+            benchmark_name=spec[0],
+            preset_name=spec[1],
+            neighbor_joining=top_algorithm,
+            top_reconstruction_algorithm=top_algorithm_name,
+        )
+    raise TypeError(f"Unsupported biopsy preset benchmark spec: {spec!r}")
+
+
+def biopsy_preset_result(input_case, spec, preset_name=None):
+    if preset_name is not None:
+        spec = (spec, preset_name)
+    spec = normalize_preset_spec(spec)
     cell_lists = cell_lists_from_input(input_case)
     matrix = input_case["distance_matrices"]["cnp2cnp"]
     reconstructed_tree, _, reconstructed_root = build_evolution_tree(
@@ -129,7 +147,8 @@ def write_case_presets(cases_root, variant_name, seed, presets, overwrite=False,
     input_case = load_json(input_path(cases_root, variant_name, seed))
     written = []
     skipped = []
-    for spec in presets:
+    for raw_spec in presets:
+        spec = normalize_preset_spec(raw_spec)
         output_path = result_path(cases_root, variant_name, seed, "biopsy_guided_top", spec.benchmark_name)
         if skip_existing and output_path.exists():
             skipped.append(output_path)
@@ -153,7 +172,10 @@ def parse_args():
     )
     parser.add_argument("--cases-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--variant", action="append", choices=sorted(VARIANT_PRESETS),
-                        help="Variant to run. Can be passed multiple times. Defaults to all variants.")
+                        help=(
+                            "Variant to run. Can be passed multiple times. "
+                            "Defaults to legacy fixed-r variants."
+                        ))
     parser.add_argument("--seed", type=int, action="append", default=None,
                         help="Seed to run. Can be passed multiple times. Defaults to existing frozen seeds.")
     parser.add_argument("--preset", action="append", choices=sorted(BIOPSY_PRESET_BENCHMARKS),

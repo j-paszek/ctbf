@@ -36,7 +36,10 @@ from simulator import CancerCellEvolutionSimulator, Genotype  # noqa: E402
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "test" / "data" / "algorithm_cases"
 PUBLICATION_HEATMAP_ALGORITHM_NAMES = list(LEGACY_ALGORITHM_NAMES)
 REFERENCE_ALGORITHM_NAMES = PUBLICATION_HEATMAP_ALGORITHM_NAMES
-VARIANT_PRESETS = {
+ADAPTIVE_RADIUS_MODE = "adaptive_mean_pairwise_input_distance"
+DEFAULT_ADAPTIVE_RADIUS_SCALE = 1.0
+ADAPTIVE_RADIUS_GRID = (0.5, 0.75, 1.0, 1.25)
+LEGACY_VARIANT_PRESETS = {
     "r2bss025": {"r_dist": 2, "biopsy_size_scalable": 0.25, "profile": "base"},
     "r2bss05": {"r_dist": 2, "biopsy_size_scalable": 0.5, "profile": "base"},
     "r2bss075": {"r_dist": 2, "biopsy_size_scalable": 0.75, "profile": "base"},
@@ -45,6 +48,49 @@ VARIANT_PRESETS = {
     "r4bss05high": {"r_dist": 4, "biopsy_size_scalable": 0.5, "profile": "high"},
     "r4bss05highdm": {"r_dist": 4, "biopsy_size_scalable": 0.5, "profile": "highdm"},
 }
+ADAPTIVE_RADIUS_VARIANT_PRESETS = {
+    "rAbss025": {
+        "radius_mode": ADAPTIVE_RADIUS_MODE,
+        "adaptive_radius_scale": DEFAULT_ADAPTIVE_RADIUS_SCALE,
+        "biopsy_size_scalable": 0.25,
+        "profile": "base",
+        "source_variant": "r2bss025",
+    },
+    "rAbss05": {
+        "radius_mode": ADAPTIVE_RADIUS_MODE,
+        "adaptive_radius_scale": DEFAULT_ADAPTIVE_RADIUS_SCALE,
+        "biopsy_size_scalable": 0.5,
+        "profile": "base",
+        "source_variant": "r2bss05",
+    },
+    "rAbss075": {
+        "radius_mode": ADAPTIVE_RADIUS_MODE,
+        "adaptive_radius_scale": DEFAULT_ADAPTIVE_RADIUS_SCALE,
+        "biopsy_size_scalable": 0.75,
+        "profile": "base",
+        "source_variant": "r2bss075",
+    },
+    "rAbss05high": {
+        "radius_mode": ADAPTIVE_RADIUS_MODE,
+        "adaptive_radius_scale": DEFAULT_ADAPTIVE_RADIUS_SCALE,
+        "biopsy_size_scalable": 0.5,
+        "profile": "high",
+        "source_variant": "r4bss05high",
+    },
+    "rAbss05highdm": {
+        "radius_mode": ADAPTIVE_RADIUS_MODE,
+        "adaptive_radius_scale": DEFAULT_ADAPTIVE_RADIUS_SCALE,
+        "biopsy_size_scalable": 0.5,
+        "profile": "highdm",
+        "source_variant": "r4bss05highdm",
+    },
+}
+VARIANT_PRESETS = {
+    **LEGACY_VARIANT_PRESETS,
+    **ADAPTIVE_RADIUS_VARIANT_PRESETS,
+}
+LEGACY_VARIANT_NAMES = list(LEGACY_VARIANT_PRESETS)
+ADAPTIVE_RADIUS_VARIANT_NAMES = list(ADAPTIVE_RADIUS_VARIANT_PRESETS)
 
 
 def json_ready(value):
@@ -93,12 +139,85 @@ def existing_seeds_for_variant(output_root, variant_name):
     return sorted(seeds)
 
 
+def source_variant_name(variant_name, variant):
+    return variant.get("source_variant", variant_name)
+
+
 def resolve_variants(selected_variants):
-    names = selected_variants or list(VARIANT_PRESETS)
+    names = selected_variants or LEGACY_VARIANT_NAMES
     unknown = sorted(set(names) - set(VARIANT_PRESETS))
     if unknown:
         raise ValueError(f"Unknown variants: {unknown}. Available: {sorted(VARIANT_PRESETS)}")
     return [(name, VARIANT_PRESETS[name]) for name in names]
+
+
+def is_adaptive_radius_variant(variant):
+    return variant.get("radius_mode") == ADAPTIVE_RADIUS_MODE
+
+
+def mean_pairwise_input_distance(matrix):
+    matrix = np.asarray(matrix, dtype=float)
+    if matrix.shape[0] < 2:
+        return 0.0
+    values = matrix[np.triu_indices(matrix.shape[0], k=1)]
+    return float(values.mean()) if values.size else 0.0
+
+
+def adaptive_radius_from_matrix(matrix, scale):
+    return float(scale) * mean_pairwise_input_distance(matrix)
+
+
+def resolve_variant_radius(variant, matrix, adaptive_radius_scale=None):
+    if not is_adaptive_radius_variant(variant):
+        return variant["r_dist"], None
+
+    scale = (
+        float(adaptive_radius_scale)
+        if adaptive_radius_scale is not None
+        else float(variant.get("adaptive_radius_scale", DEFAULT_ADAPTIVE_RADIUS_SCALE))
+    )
+    d_mean = mean_pairwise_input_distance(matrix)
+    r_dist = float(scale * d_mean)
+    return r_dist, {
+        "radius_mode": ADAPTIVE_RADIUS_MODE,
+        "adaptive_radius_scale": scale,
+        "adaptive_radius_distance_mean": d_mean,
+        "adaptive_radius_formula": "rA = adaptive_radius_scale * adaptive_radius_distance_mean",
+    }
+
+
+def apply_variant_metadata(input_case, variant_name, variant, adaptive_radius_scale=None):
+    matrix = input_case["distance_matrices"]["cnp2cnp"]["matrix"]
+    r_dist, radius_metadata = resolve_variant_radius(
+        variant,
+        matrix,
+        adaptive_radius_scale=adaptive_radius_scale,
+    )
+    input_case["case_id"] = f"{variant_name}_seed{input_case['seed']}"
+    input_case["variant"] = variant_name
+    input_case["profile"] = variant["profile"]
+    input_case["r_dist"] = r_dist
+    input_case["biopsy_size_scalable"] = variant["biopsy_size_scalable"]
+    for key in [
+        "radius_mode",
+        "adaptive_radius_scale",
+        "adaptive_radius_distance_mean",
+        "adaptive_radius_formula",
+    ]:
+        input_case.pop(key, None)
+    if radius_metadata is not None:
+        input_case.update(radius_metadata)
+    return input_case
+
+
+def input_case_from_existing(source_input_case, variant_name, variant, adaptive_radius_scale=None):
+    input_case = copy.deepcopy(source_input_case)
+    return apply_variant_metadata(
+        input_case,
+        variant_name,
+        variant,
+        adaptive_radius_scale=adaptive_radius_scale,
+    )
 
 
 def algorithm_by_name():
@@ -279,7 +398,7 @@ def perform_biopsies(simulator, biopsy_generations, biopsy_size_scalable, seed):
     return biopsies, cell_lists
 
 
-def input_case_from_simulation(variant_name, variant, seed, config_path, bedfile):
+def input_case_from_simulation(variant_name, variant, seed, config_path, bedfile, adaptive_radius_scale=None):
     simulator = build_simulator(config_path, bedfile, seed)
     biopsies, cell_lists = perform_biopsies(
         simulator,
@@ -290,14 +409,14 @@ def input_case_from_simulation(variant_name, variant, seed, config_path, bedfile
     unique_cells = unique_cells_by_cell_id(cell_lists)
     cnp_ids, cnp_matrix = cnp2cnp_distance_matrix(unique_cells)
     true_ids, true_matrix = true_tree_distance_matrix(simulator.tree, cnp_ids)
-    return {
+    input_case = {
         "case_id": f"{variant_name}_seed{seed}",
         "variant": variant_name,
         "seed": seed,
         "profile": variant["profile"],
         "config": str(config_path),
         "bedfile": str(bedfile) if bedfile is not None else None,
-        "r_dist": variant["r_dist"],
+        "r_dist": variant.get("r_dist"),
         "biopsy_size_scalable": variant["biopsy_size_scalable"],
         "biopsy_generations": DEFAULT_BIOPSY_GENERATIONS,
         "true_tree": node_link_data(simulator.tree),
@@ -313,6 +432,12 @@ def input_case_from_simulation(variant_name, variant, seed, config_path, bedfile
             },
         },
     }
+    return apply_variant_metadata(
+        input_case,
+        variant_name,
+        variant,
+        adaptive_radius_scale=adaptive_radius_scale,
+    )
 
 
 def cell_lists_from_input(input_case):
@@ -378,13 +503,38 @@ def write_seed_case(
     bedfile=None,
     results_only=False,
     skip_existing=False,
+    source_cases_root=None,
+    adaptive_radius_scale=None,
 ):
     config_path = CONFIG_BY_PROFILE[variant["profile"]]
     current_input_path = input_path(output_root, variant_name, seed)
     if results_only:
         input_case = load_json(current_input_path)
+    elif source_cases_root is not None:
+        if skip_existing and current_input_path.exists():
+            input_case = load_json(current_input_path)
+        else:
+            source_input_path = input_path(
+                source_cases_root,
+                source_variant_name(variant_name, variant),
+                seed,
+            )
+            input_case = input_case_from_existing(
+                load_json(source_input_path),
+                variant_name,
+                variant,
+                adaptive_radius_scale=adaptive_radius_scale,
+            )
+            write_json(current_input_path, input_case, overwrite)
     else:
-        input_case = input_case_from_simulation(variant_name, variant, seed, config_path, bedfile)
+        input_case = input_case_from_simulation(
+            variant_name,
+            variant,
+            seed,
+            config_path,
+            bedfile,
+            adaptive_radius_scale=adaptive_radius_scale,
+        )
         if not (skip_existing and current_input_path.exists()):
             write_json(current_input_path, input_case, overwrite)
 
@@ -405,7 +555,10 @@ def parse_args():
         description="Freeze nested algorithm fixtures for benchmark variants and publication heatmap algorithms."
     )
     parser.add_argument("--variant", action="append", choices=sorted(VARIANT_PRESETS),
-                        help="Benchmark variant to freeze. Can be passed multiple times. Defaults to all variants.")
+                        help=(
+                            "Benchmark variant to freeze. Can be passed multiple times. "
+                            "Defaults to legacy fixed-r variants."
+                        ))
     parser.add_argument("--seed", type=int, action="append", default=None,
                         help="Seed to freeze. Can be passed multiple times. Overrides --seeds-file.")
     parser.add_argument("--seeds-file", type=Path, default=PROJECT_ROOT / "test" / "data" / "seeds.json")
@@ -413,6 +566,24 @@ def parse_args():
     parser.add_argument("--algorithm-name", action="append", default=None,
                         help="Algorithm name to freeze. Defaults to all publication heatmap algorithms.")
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument(
+        "--source-cases-root",
+        type=Path,
+        default=None,
+        help=(
+            "Copy frozen input.json data from this cases root before applying the selected "
+            "variant metadata. Intended for scratch adaptive-radius cases."
+        ),
+    )
+    parser.add_argument(
+        "--adaptive-radius-scale",
+        type=float,
+        default=None,
+        help=(
+            "Alpha for adaptive-radius variants. For rA variants, r_dist is set to "
+            "alpha times the mean pairwise input distance d."
+        ),
+    )
     parser.add_argument("--input-only", action="store_true")
     parser.add_argument("--results-only", action="store_true",
                         help="Reuse existing input.json files and write only algorithm result JSON files.")
@@ -435,9 +606,10 @@ def main():
         fixed_seeds = args.seed
         seeds_by_variant = {name: fixed_seeds for name, _ in variants}
     elif args.existing_seeds:
+        seed_root = args.source_cases_root if args.source_cases_root is not None else args.output_root
         seeds_by_variant = {
-            name: existing_seeds_for_variant(args.output_root, name)
-            for name, _ in variants
+            name: existing_seeds_for_variant(seed_root, source_variant_name(name, variant))
+            for name, variant in variants
         }
     else:
         fixed_seeds = load_seeds(args.seeds_file)
@@ -456,6 +628,10 @@ def main():
         print(f"Seeds for {variant_name}:", len(seeds), ", ".join(str(seed) for seed in seeds))
     print("Algorithms:", ", ".join(getattr(algorithm, "__name__", str(algorithm)) for algorithm in algorithms))
     print("Output root:", args.output_root)
+    if args.source_cases_root is not None:
+        print("Source cases root:", args.source_cases_root)
+    if args.adaptive_radius_scale is not None:
+        print("Adaptive radius scale:", args.adaptive_radius_scale)
     if args.dry_run:
         return
 
@@ -473,6 +649,8 @@ def main():
                     args.input_only,
                     results_only=args.results_only,
                     skip_existing=args.skip_existing,
+                    source_cases_root=args.source_cases_root,
+                    adaptive_radius_scale=args.adaptive_radius_scale,
                 )
                 print(f"Wrote {variant_name}/{seed}")
             except Exception as exc:
