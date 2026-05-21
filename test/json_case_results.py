@@ -1,4 +1,5 @@
 import json
+import os
 from itertools import combinations
 from pathlib import Path
 
@@ -9,7 +10,12 @@ from scipy.stats import wilcoxon
 
 TEST_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = TEST_DIR.parent
-DEFAULT_CASES_ROOT = PROJECT_ROOT / "test" / "data" / "algorithm_cases"
+DEFAULT_CASES_ROOT = Path(
+    os.environ.get(
+        "CTBF_ALGORITHM_CASES_ROOT",
+        PROJECT_ROOT / "test" / "data" / "algorithm_cases",
+    )
+)
 LEGACY_TEST_VARIANTS = [
     "r2bss025",
     "r2bss05",

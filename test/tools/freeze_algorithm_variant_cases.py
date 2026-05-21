@@ -27,7 +27,7 @@ from algorithm_evaluation.tester import (  # noqa: E402
 )
 from ctbs import load_ctbs_runtime_config, use_cnp2cnp_to_compute_pairwise_distance  # noqa: E402
 from ctbs_utils import to_newick  # noqa: E402
-from evaluator import grf_tree  # noqa: E402
+from evaluator import compute_all_clusters, ext_grf_tree, jaccard_distance  # noqa: E402
 from evaluator_full import evaluate_4  # noqa: E402
 from reconstructor import build_evolution_tree  # noqa: E402
 from simulator import CancerCellEvolutionSimulator, Genotype  # noqa: E402
@@ -36,6 +36,8 @@ from simulator import CancerCellEvolutionSimulator, Genotype  # noqa: E402
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "test" / "data" / "algorithm_cases"
 PUBLICATION_HEATMAP_ALGORITHM_NAMES = list(LEGACY_ALGORITHM_NAMES)
 REFERENCE_ALGORITHM_NAMES = PUBLICATION_HEATMAP_ALGORITHM_NAMES
+EXT_GRF_METRIC_FIELD = "ext_grf"
+LEGACY_GRF_SET_SIMILARITY_FIELD = "grf_legacy_set_similarity"
 ADAPTIVE_RADIUS_MODE = "adaptive_mean_pairwise_input_distance"
 DEFAULT_ADAPTIVE_RADIUS_SCALE = 1.0
 ADAPTIVE_RADIUS_GRID = (0.5, 0.75, 1.0, 1.25)
@@ -269,7 +271,8 @@ def genotypes_from_json(cells):
 def unique_cells_by_cell_id(cell_lists):
     unique = {}
     for cell in [cell for level in cell_lists for cell in level]:
-        unique[cell.cell_id] = cell
+        if cell.cell_id not in unique:
+            unique[cell.cell_id] = cell
     return list(unique.values())
 
 
@@ -293,8 +296,8 @@ def write_cnp2cnp_input(path, cells):
 
 
 def cnp2cnp_distance_matrix(cells):
-    if not cells:
-        return [], np.zeros((0, 0), dtype=float)
+    if len(cells) <= 1:
+        return [cell.get_id() for cell in cells], np.zeros((len(cells), len(cells)), dtype=float)
     cnp2cnp_file = load_ctbs_runtime_config().cnp2cnp_file
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -351,6 +354,43 @@ def root_id(tree):
     return roots[0]
 
 
+def legacy_set_grf_distance_tree(true_tree, true_root, reconstructed_tree, reconstructed_root):
+    true_clusters = compute_all_clusters(true_tree, true_root)
+    reconstructed_clusters = compute_all_clusters(reconstructed_tree, reconstructed_root)
+    true_cluster_set = set(true_clusters)
+    reconstructed_cluster_set = set(reconstructed_clusters)
+    union_size = len(true_cluster_set | reconstructed_cluster_set)
+    if union_size == 0:
+        return 0.0
+    if not true_clusters or not reconstructed_clusters:
+        return 1.0
+
+    numerator_1 = sum(
+        jaccard_distance(true_cluster, reconstructed_cluster)
+        for true_cluster in true_clusters
+        for reconstructed_cluster in reconstructed_clusters
+        if reconstructed_cluster not in true_cluster_set
+    )
+    numerator_2 = sum(
+        jaccard_distance(reconstructed_cluster, true_cluster)
+        for reconstructed_cluster in reconstructed_clusters
+        for true_cluster in true_clusters
+        if true_cluster not in reconstructed_cluster_set
+    )
+    return (numerator_1 / (len(true_clusters) * union_size)) + (
+        numerator_2 / (len(reconstructed_clusters) * union_size)
+    )
+
+
+def legacy_set_grf_similarity_tree(true_tree, true_root, reconstructed_tree, reconstructed_root):
+    return 1 - legacy_set_grf_distance_tree(
+        true_tree,
+        true_root,
+        reconstructed_tree,
+        reconstructed_root,
+    )
+
+
 def metric_summary(true_tree, reconstructed_tree):
     metrics = evaluate_4(true_tree, reconstructed_tree)
     restricted_labels = {
@@ -363,11 +403,21 @@ def metric_summary(true_tree, reconstructed_tree):
         reconstructed_tree,
         restrict_labels=restricted_labels,
     )["ancestors_unique_restricted"]
+    true_root = root_id(true_tree)
+    reconstructed_root = root_id(reconstructed_tree)
+    ext_grf = ext_grf_tree(true_tree, true_root, reconstructed_tree, reconstructed_root)
     return {
         "ancestors_unique_restricted": restricted_metrics,
         "ancestors_multiset": metrics["ancestors_multiset"],
         "ancestors_unique": metrics["ancestors_unique"],
-        "grf": grf_tree(true_tree, root_id(true_tree), reconstructed_tree, root_id(reconstructed_tree)),
+        "grf": 1 - ext_grf,
+        EXT_GRF_METRIC_FIELD: ext_grf,
+        LEGACY_GRF_SET_SIMILARITY_FIELD: legacy_set_grf_similarity_tree(
+            true_tree,
+            true_root,
+            reconstructed_tree,
+            reconstructed_root,
+        ),
     }
 
 

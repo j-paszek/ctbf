@@ -1,0 +1,46 @@
+{
+  "case_id": "repeated_cell_ids_5_7_chain",
+  "description": "Four biopsy levels observe two persistent genotype ids.",
+  "true_newick": "(((7)7)5)5;",
+  "expected_raw_observation_count": 4,
+  "expected_unique_cell_ids": [5, 7],
+  "biopsies": [
+    {
+      "level": "L1",
+      "generation": 1,
+      "cells": [
+        {"node_id": 50, "cell_id": 5, "generation": 1, "genome": [2, 2]}
+      ]
+    },
+    {
+      "level": "L2",
+      "generation": 2,
+      "cells": [
+        {"node_id": 51, "cell_id": 5, "generation": 2, "genome": [2, 2]}
+      ]
+    },
+    {
+      "level": "L3",
+      "generation": 3,
+      "cells": [
+        {"node_id": 70, "cell_id": 7, "generation": 3, "genome": [3, 2]}
+      ]
+    },
+    {
+      "level": "L4",
+      "generation": 4,
+      "cells": [
+        {"node_id": 71, "cell_id": 7, "generation": 4, "genome": [3, 2]}
+      ]
+    }
+  ],
+  "distance_matrices": {
+    "cnp2cnp": {
+      "ids": [5, 7],
+      "matrix": [
+        [0.0, 1.0],
+        [1.0, 0.0]
+      ]
+    }
+  }
+}

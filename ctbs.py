@@ -145,6 +145,19 @@ class DistanceMatrix:
         return {"dist_matrix_path": self.path}
 
 
+def unique_cells_by_cell_id(cells):
+    unique = {}
+    for cell in cells:
+        if cell.cell_id not in unique:
+            unique[cell.cell_id] = cell
+    return list(unique.values())
+
+
+def _trivial_distance_matrix(cells):
+    ids = [cell.get_id() for cell in cells]
+    return DistanceMatrix(ids=ids, matrix=np.zeros((len(ids), len(ids)), dtype=float))
+
+
 class DistanceProvider:
     def compute(self, cells):
         raise NotImplementedError
@@ -165,6 +178,8 @@ class Cnp2CnpPairwiseDistanceProvider(DistanceProvider):
     max_threads: int | None = None
 
     def compute(self, cells):
+        if len(cells) <= 1:
+            return _trivial_distance_matrix(cells)
         ids, matrix = distance_matrix_from_biopsy(
             cells,
             max_threads=self.max_threads,
@@ -178,6 +193,8 @@ class Cnp2CnpFileDistanceProvider(DistanceProvider):
     runtime_config: CtbsRuntimeConfig
 
     def compute(self, cells):
+        if len(cells) <= 1:
+            return _trivial_distance_matrix(cells)
         to_file(self.runtime_config.in_file_name, cells)
         use_cnp2cnp_to_compute_dist_matrix(
             self.runtime_config.in_file_name,
@@ -229,10 +246,12 @@ def distance_matrix_from_biopsy(cells, max_threads=None, runtime_config=None):
     """
     Build a distance matrix for a list of cells using cnp2cnp.
     """
-    runtime_config = _coerce_runtime_config(runtime_config)
     n = len(cells)
     ids = [c.get_id() for c in cells]
     dist_matrix = np.zeros((n, n), dtype=float)
+    if n <= 1:
+        return ids, dist_matrix
+    runtime_config = _coerce_runtime_config(runtime_config)
 
     pairs = [
         (cells[i], cells[j], i, j, runtime_config.cnp2cnp_file)
@@ -374,7 +393,7 @@ def _handle_small_biopsy(time_collector):
 def _compute_distance_matrix(all_in_one_sample, parallel, time_collector, runtime_config, distance_provider=None):
     # for parallel case single distances are being computed
     # for not parallel we write biopsy to cnp2cnp format file, and proces that
-    unique_cells = list({cell.cell_id: cell for cell in all_in_one_sample[0]}.values())
+    unique_cells = unique_cells_by_cell_id(all_in_one_sample[0])
     if distance_provider is None:
         distance_provider = default_distance_provider(parallel=parallel, runtime_config=runtime_config)
 

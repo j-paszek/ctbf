@@ -34,6 +34,7 @@ resolve_reference_algorithm_indices = freeze_algorithm_variant_cases.resolve_ref
 resolve_variants = freeze_algorithm_variant_cases.resolve_variants
 result_path = freeze_algorithm_variant_cases.result_path
 from simulator import Genotype  # noqa: E402
+from evaluator import parse_newick_to_nx  # noqa: E402
 
 
 def test_resolve_variants_defaults_to_legacy_fixed_radius_variants():
@@ -195,6 +196,22 @@ def test_json_ready_converts_numpy_values():
     }
 
 
+def test_metric_summary_stores_exact_ext_grf_and_legacy_set_similarity():
+    true_tree, _ = parse_newick_to_nx("(a,a);", prefix="true")
+    reconstructed_tree, _ = parse_newick_to_nx("(a,b);", prefix="reconstructed")
+
+    summary = freeze_algorithm_variant_cases.metric_summary(true_tree, reconstructed_tree)
+
+    assert summary["grf"] == pytest.approx(4 / 9)
+    assert summary[freeze_algorithm_variant_cases.EXT_GRF_METRIC_FIELD] == pytest.approx(5 / 9)
+    assert summary[freeze_algorithm_variant_cases.LEGACY_GRF_SET_SIMILARITY_FIELD] == pytest.approx(
+        31 / 72
+    )
+    assert summary[freeze_algorithm_variant_cases.LEGACY_GRF_SET_SIMILARITY_FIELD] != pytest.approx(
+        summary["grf"]
+    )
+
+
 def test_genotype_to_json_stores_reconstructable_cell_data():
     cell = Genotype([2, 0, 2], node_id=14, generation=8, cell_id=7)
     data = genotype_to_json(cell)
@@ -203,6 +220,31 @@ def test_genotype_to_json_stores_reconstructable_cell_data():
     assert data["cell_id"] == 7
     assert data["generation"] == 8
     assert np.array_equal(data["genome"], np.array([2, 0, 2]))
+
+
+def test_unique_cells_by_cell_id_preserves_first_repeated_observation():
+    first = Genotype([2, 2], node_id=50, generation=1, cell_id=5)
+    repeated = Genotype([2, 2], node_id=51, generation=2, cell_id=5)
+    other = Genotype([3, 2], node_id=70, generation=3, cell_id=7)
+
+    assert freeze_algorithm_variant_cases.unique_cells_by_cell_id([[first], [repeated], [other]]) == [
+        first,
+        other,
+    ]
+
+
+def test_cnp2cnp_distance_matrix_returns_singleton_zero_without_runtime_config(monkeypatch):
+    def fail_if_called():
+        raise AssertionError("single-genotype distance matrix should not call cnp2cnp config")
+
+    monkeypatch.setattr(freeze_algorithm_variant_cases, "load_ctbs_runtime_config", fail_if_called)
+
+    ids, matrix = freeze_algorithm_variant_cases.cnp2cnp_distance_matrix(
+        [Genotype([2, 2], node_id=50, generation=1, cell_id=5)]
+    )
+
+    assert ids == [5]
+    assert np.array_equal(matrix, np.array([[0.0]]))
 
 
 def test_fast_biopsy_preset_benchmark_writes_preset_result_from_frozen_input(tmp_path):

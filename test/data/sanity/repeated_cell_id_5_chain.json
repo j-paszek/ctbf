@@ -1,0 +1,36 @@
+{
+  "case_id": "repeated_cell_id_5_chain",
+  "description": "Three biopsy levels observe the same genotype id.",
+  "true_newick": "((5)5)5;",
+  "expected_raw_observation_count": 3,
+  "expected_unique_cell_ids": [5],
+  "biopsies": [
+    {
+      "level": "L1",
+      "generation": 1,
+      "cells": [
+        {"node_id": 50, "cell_id": 5, "generation": 1, "genome": [2, 2]}
+      ]
+    },
+    {
+      "level": "L2",
+      "generation": 2,
+      "cells": [
+        {"node_id": 51, "cell_id": 5, "generation": 2, "genome": [2, 2]}
+      ]
+    },
+    {
+      "level": "L3",
+      "generation": 3,
+      "cells": [
+        {"node_id": 52, "cell_id": 5, "generation": 3, "genome": [2, 2]}
+      ]
+    }
+  ],
+  "distance_matrices": {
+    "cnp2cnp": {
+      "ids": [5],
+      "matrix": [[0.0]]
+    }
+  }
+}

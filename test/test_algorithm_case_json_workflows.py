@@ -20,8 +20,6 @@ from json_case_results import (  # noqa: E402
 )
 from reconstructor_algorithm_config import resolve_comparison_algorithm_names  # noqa: E402
 from ctbs_utils import to_newick  # noqa: E402
-from evaluator import grf_tree  # noqa: E402
-from evaluator_full import evaluate_4  # noqa: E402
 
 TOOL_PATH = PROJECT_ROOT / "test" / "tools" / "freeze_algorithm_variant_cases.py"
 spec = importlib.util.spec_from_file_location("freeze_algorithm_variant_cases", TOOL_PATH)
@@ -56,10 +54,25 @@ def _tree_from_node_link(data):
     return json_graph.node_link_graph(data, directed=True, edges="links")
 
 
-def _root_id(tree):
-    roots = [node for node, indegree in tree.in_degree() if indegree == 0]
-    assert len(roots) == 1
-    return roots[0]
+def _assert_stored_metrics_match_current(input_case, result):
+    true_tree = _tree_from_node_link(input_case["true_tree"])
+    reconstructed_tree = _tree_from_node_link(result["reconstructed_tree"])
+    current = freeze_algorithm_variant_cases.metric_summary(true_tree, reconstructed_tree)
+
+    stored = result["metrics"]["ancestors_unique_restricted"]
+    actual = current["ancestors_unique_restricted"]
+    assert actual["precision"] == pytest.approx(stored["precision"])
+    assert actual["recall"] == pytest.approx(stored["recall"])
+    assert actual["F1"] == pytest.approx(stored["F1"])
+    assert current["grf"] == pytest.approx(result["metrics"]["grf"])
+
+    ext_field = freeze_algorithm_variant_cases.EXT_GRF_METRIC_FIELD
+    if ext_field in result["metrics"]:
+        assert current[ext_field] == pytest.approx(result["metrics"][ext_field])
+
+    legacy_field = freeze_algorithm_variant_cases.LEGACY_GRF_SET_SIMILARITY_FIELD
+    if legacy_field in result["metrics"]:
+        assert current[legacy_field] == pytest.approx(result["metrics"][legacy_field])
 
 
 def _stored_tree_metric_cases():
@@ -147,23 +160,7 @@ def _reconstruct_from_stored_result(input_case, stored_result, mode):
 def test_json_reconstructed_tree_metrics_match_stored_values(mode, algorithm):
     input_case = _input_case()
     result = _result(mode, algorithm)
-    true_tree = _tree_from_node_link(input_case["true_tree"])
-    reconstructed_tree = _tree_from_node_link(result["reconstructed_tree"])
-    labels = {
-        str(data.get("cell_id"))
-        for _, data in reconstructed_tree.nodes(data=True)
-        if data.get("cell_id") is not None
-    }
-
-    metrics = evaluate_4(true_tree, reconstructed_tree, restrict_labels=labels)
-    grf = grf_tree(true_tree, _root_id(true_tree), reconstructed_tree, _root_id(reconstructed_tree))
-
-    stored = result["metrics"]["ancestors_unique_restricted"]
-    actual = metrics["ancestors_unique_restricted"]
-    assert actual["precision"] == pytest.approx(stored["precision"])
-    assert actual["recall"] == pytest.approx(stored["recall"])
-    assert actual["F1"] == pytest.approx(stored["F1"])
-    assert grf == pytest.approx(result["metrics"]["grf"])
+    _assert_stored_metrics_match_current(input_case, result)
 
 
 def test_json_biopsies_recompute_cnp2cnp_matrix():
@@ -288,23 +285,7 @@ def test_selected_extra_json_reconstructed_tree_metrics_match_stored_values(case
     _, _, _, _, input_file, result_file = case
     input_case = load_json(input_file)
     result = load_json(result_file)
-    true_tree = _tree_from_node_link(input_case["true_tree"])
-    reconstructed_tree = _tree_from_node_link(result["reconstructed_tree"])
-    labels = {
-        str(data.get("cell_id"))
-        for _, data in reconstructed_tree.nodes(data=True)
-        if data.get("cell_id") is not None
-    }
-
-    metrics = evaluate_4(true_tree, reconstructed_tree, restrict_labels=labels)
-    grf = grf_tree(true_tree, _root_id(true_tree), reconstructed_tree, _root_id(reconstructed_tree))
-
-    stored = result["metrics"]["ancestors_unique_restricted"]
-    actual = metrics["ancestors_unique_restricted"]
-    assert actual["precision"] == pytest.approx(stored["precision"])
-    assert actual["recall"] == pytest.approx(stored["recall"])
-    assert actual["F1"] == pytest.approx(stored["F1"])
-    assert grf == pytest.approx(result["metrics"]["grf"])
+    _assert_stored_metrics_match_current(input_case, result)
 
 
 @pytest.mark.parametrize(
@@ -376,20 +357,4 @@ def test_all_json_reconstructed_tree_metrics_match_stored_values(case):
     _, _, _, _, input_file, result_file = case
     input_case = load_json(input_file)
     result = load_json(result_file)
-    true_tree = _tree_from_node_link(input_case["true_tree"])
-    reconstructed_tree = _tree_from_node_link(result["reconstructed_tree"])
-    labels = {
-        str(data.get("cell_id"))
-        for _, data in reconstructed_tree.nodes(data=True)
-        if data.get("cell_id") is not None
-    }
-
-    metrics = evaluate_4(true_tree, reconstructed_tree, restrict_labels=labels)
-    grf = grf_tree(true_tree, _root_id(true_tree), reconstructed_tree, _root_id(reconstructed_tree))
-
-    stored = result["metrics"]["ancestors_unique_restricted"]
-    actual = metrics["ancestors_unique_restricted"]
-    assert actual["precision"] == pytest.approx(stored["precision"])
-    assert actual["recall"] == pytest.approx(stored["recall"])
-    assert actual["F1"] == pytest.approx(stored["F1"])
-    assert grf == pytest.approx(result["metrics"]["grf"])
+    _assert_stored_metrics_match_current(input_case, result)

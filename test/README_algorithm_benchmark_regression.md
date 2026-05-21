@@ -177,6 +177,36 @@ The heatmap tool uses mode-specific algorithm lists: the `full_cnp` panels remai
 
 The nested JSON fixtures support fast checks that do not rerun the simulator except where explicitly noted.
 
+## Corrected-GRF Metric Refresh
+
+After the exact multiset-GRF fix, result JSON metrics can be refreshed from
+stored true/reconstructed trees without rerunning simulation, distance
+computation, or reconstruction:
+
+```bash
+python test/tools/refresh_algorithm_case_metrics.py \
+  --cases-root /tmp/ctbf_algorithm_cases_refreshed \
+  --summary-file /tmp/ctbf_algorithm_cases_refreshed/metric_refresh_summary.csv
+```
+
+The refreshed metric schema keeps corrected `metrics["grf"]` as the
+higher-is-better exact-multiset similarity, adds `metrics["ext_grf"]` as the
+underlying distance, and preserves the old set-collapsed similarity at
+`metrics["grf_legacy_set_similarity"]`.
+
+Use the single GRF metric gate for evaluator exactness plus frozen JSON metric
+consistency:
+
+```bash
+python test/tools/run_grf_metric_checks.py \
+  --cases-root /tmp/ctbf_algorithm_cases_refreshed \
+  --algorithm-name new_alg \
+  --algorithm-name biopsy_preset_default \
+  --algorithm-name biopsy_preset_anticentral_tie \
+  --algorithm-name biopsy_preset_binarized \
+  --algorithm-name biopsy_preset_anticentral_binarized
+```
+
 ## Universal Legacy JSON Checker
 
 `run_algorithm_case_json_checks.py` is now the canonical checker. It validates only the publication benchmark set committed in `PUBLICATION_HEATMAP_ALGORITHM_NAMES`, even if extra stored rows such as `new_alg` or `biopsy_preset_*` are present under `test/data/algorithm_cases/`.
