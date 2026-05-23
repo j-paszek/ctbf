@@ -19,7 +19,10 @@ The default `python ctbs.py` run is also configured in `ctbs_config.json`, in th
 - `seed` - random seed used by the simulator and biopsy sampling.
 - `config` - path to the main simulator JSON config.
 - `bedfile` - optional CSV file with genome-position-specific simulator parameters.
-- `biopsy_size_scalable` - fraction of cells sampled from each requested generation.
+- `biopsy_size_scalable` - fraction of cells sampled from each requested generation;
+  non-empty generations contribute at least one sampled cell even when the
+  scaled fraction floors to zero. Sampling is over genotype representatives;
+  the simulator does not track an abundance weight per genotype.
 - `biopsy_generations` - list of generations from which biopsy samples are taken.
 - `r_dist` - reconstruction radius used while connecting biopsy cells into the inferred tree.
 - `write_newick` - if `true`, prints the simulated, reconstructed, and NJ trees in Newick format.

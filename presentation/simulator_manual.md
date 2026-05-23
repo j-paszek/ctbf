@@ -128,6 +128,32 @@ If `MODEL_TELOMERIC_REGIONS` is enabled:
 | `representative` | Within one spawning step, repeated child genomes are collapsed using genome equality. |
 | `full` | All children are retained, even if they have identical genomes. |
 
+## Biopsy Sampling
+
+`CancerCellEvolutionSimulator.perform_biopsy` samples unique genotype
+representatives from the requested generation.
+
+The simulator does not currently store an explicit population size or abundance
+weight for each genotype representative. A genotype node should therefore be
+read as the observable copy-number state present at that generation, not as a
+single explicitly counted biological cell. If a selected generation contains one
+genotype representative, that means the simulated state available for biopsy at
+that generation is represented by that one genotype. Scalable biopsy sampling
+therefore treats genotype representatives as equally weighted and ensures that a
+non-empty selected generation contributes at least one representative.
+
+The method supports two sizing modes:
+
+- `biopsy_size`: fixed number of cells, capped at the number available in the
+  requested generation.
+- `biopsy_size_scalable`: fraction of the requested generation. For non-empty
+  generations this mode samples at least one cell, even when
+  `int(biopsy_size_scalable * generation_size)` would be `0`. Empty generations
+  still return an empty biopsy.
+
+If both sizing modes are provided, `biopsy_size_scalable` controls the final
+sample size.
+
 ## Output Helpers
 
 The simulator currently exposes two helper exporters:
@@ -152,4 +178,3 @@ The old `simulator_parameters.csv` includes several entries that do not reflect 
 - Use the JSON file to control global simulation behavior.
 - Use the BED-like CSV only when founder-genome heterogeneity or per-locus annotations are needed.
 - If precise biological interpretation matters, treat the inactive parameters listed above as **unsupported in the current implementation**, even if they appear in older documentation.
-

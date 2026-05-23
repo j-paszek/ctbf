@@ -147,6 +147,49 @@ def test_pairwise_distance_helper_returns_zero_matrix_for_single_unique_genotype
     assert np.array_equal(matrix, np.array([[0.0]]))
 
 
+@pytest.mark.parametrize("algorithm", get_algorithms_to_test(), ids=lambda algorithm: algorithm.__name__)
+def test_full_cnp_algorithms_accept_two_unique_biopsy_observations(algorithm):
+    raw_cells = [
+        Genotype([2, 2], node_id=50, generation=1, cell_id=5),
+        Genotype([3, 2], node_id=70, generation=2, cell_id=7),
+    ]
+
+    tree, _, returned_root = build_evolution_tree(
+        [raw_cells],
+        only_nj=True,
+        inids=[5, 7],
+        indm=np.array([[0.0, 1.0], [1.0, 0.0]], dtype=float),
+        neighbor_joining=algorithm,
+        seed=7,
+    )
+
+    assert returned_root in tree.nodes
+    _assert_valid_rooted_tree(tree)
+    reconstructed_labels = {data.get("cell_id") for _, data in tree.nodes(data=True)}
+    assert {5, 7} <= reconstructed_labels
+
+
+@pytest.mark.parametrize("algorithm", get_algorithms_to_test(), ids=lambda algorithm: algorithm.__name__)
+def test_biopsy_guided_algorithms_accept_two_raw_observations_with_one_unique_distance_id(algorithm):
+    cell_lists = [
+        [Genotype([2, 2], node_id=50, generation=1, cell_id=5)],
+        [Genotype([2, 2], node_id=51, generation=2, cell_id=5)],
+    ]
+
+    tree, _, returned_root = build_evolution_tree(
+        cell_lists,
+        inids=[5],
+        indm=np.array([[0.0]], dtype=float),
+        neighbor_joining=algorithm,
+        seed=7,
+    )
+
+    assert returned_root in tree.nodes
+    _assert_valid_rooted_tree(tree)
+    reconstructed_labels = {data.get("cell_id") for _, data in tree.nodes(data=True)}
+    assert reconstructed_labels == {5}
+
+
 @pytest.mark.parametrize("case_path", SANITY_CASE_PATHS, ids=_case_id)
 @pytest.mark.parametrize("algorithm", get_algorithms_to_test(), ids=lambda algorithm: algorithm.__name__)
 def test_all_full_cnp_algorithms_accept_repeated_biopsy_observations(case_path, algorithm):

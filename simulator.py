@@ -5,6 +5,8 @@ import networkx as nx
 import plotly.graph_objects as go
 import csv
 
+from ctbf_constraints import MIN_BIOPSY_CELLS_FROM_BIOPSY
+
 """
 Represents a unique type of cell (genotype) with:
   - genome: CN profile (e.g., numpy array)
@@ -478,15 +480,26 @@ class CancerCellEvolutionSimulator:
     def perform_biopsy(self, generation, biopsy_size=0, biopsy_size_scalable=None, seed=None):
         """
         Randomly selects unique genotypes from a given generation.
+
+        When biopsy_size_scalable is provided, a non-empty generation always
+        contributes at least one sampled cell, even if the scaled size floors to
+        zero. Empty generations still return an empty list.
+
         Returns a list of selected genotype objects.
         """
         # Get genotypes from the specified generation
         genotypes_from_generation = [g for g in self.genotypes.values() if g.generation == generation]
 
-        # If there are fewer genotypes than the biopsy size, return all available
-        biopsy_size = min(biopsy_size, len(genotypes_from_generation))
         if biopsy_size_scalable is not None:
-            biopsy_size = int(biopsy_size_scalable * len(genotypes_from_generation))
+            available_count = len(genotypes_from_generation)
+            biopsy_size = 0 if available_count == 0 else max(
+                MIN_BIOPSY_CELLS_FROM_BIOPSY,
+                int(biopsy_size_scalable * available_count),
+            )
+            biopsy_size = min(biopsy_size, available_count)
+        else:
+            # If there are fewer genotypes than the biopsy size, return all available.
+            biopsy_size = min(biopsy_size, len(genotypes_from_generation))
 
         if seed is not None:
             np.random.seed(seed)

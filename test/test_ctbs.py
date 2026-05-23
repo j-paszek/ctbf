@@ -7,18 +7,29 @@ from networkx.utils.misc import flatten
 import atexit
 import os
 
-from ctbs import run_single_test, use_cnp2cnp_to_compute_pairwise_distance, distance_matrix_from_biopsy
+from ctbs import (
+    SuppliedDistanceProvider,
+    run_single_test,
+    use_cnp2cnp_to_compute_pairwise_distance,
+    distance_matrix_from_biopsy,
+)
 from ctbs_utils import to_newick, vizualize_nx_tree, vizualize_from_newick
 
 import json
 import networkx as nx
 from networkx.readwrite import json_graph
 
+import ctbs
 from evaluator_full import evaluate_4
 from reconstructor import (build_evolution_tree, visualize_tree_plotly,
                            # neighbor_joining_full, neighbor_joining_full_cps, \
     # neighbor_joining_hybrid, neighbor_joining_hybrid_inverse_centrality, neighbor_joining_adaptive_centrality, \
     neighbor_joining_adaptive_centrality_nonlinear)
+from reconstructor_algorithms import (
+    neighbor_joining_baseline,
+    neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony,
+    neighbor_joining_hybrid_opt,
+)
 from simulator import CancerCellEvolutionSimulator, Genotype
 
 SHOW_FIGURES = False
@@ -98,10 +109,77 @@ def test_no_nj_in_reconstruction():
 #                     reconstruction_algorithm=neighbor_joining_full)
 
 
-def test_empty_biopsy_simulator():
+def test_scalable_biopsy_samples_one_cell_from_nonempty_generation():
     sim = get_sim_from_tree(689)
     biopsy = sim.perform_biopsy(biopsy_size_scalable=0.5, generation=4, seed=689)
+    assert [(cell.node_id, cell.cell_id) for cell in biopsy] == [(4, 1)]
+
+
+def test_scalable_biopsy_keeps_empty_generation_empty():
+    sim = get_sim_from_tree(689)
+    biopsy = sim.perform_biopsy(biopsy_size_scalable=0.5, generation=99, seed=689)
     assert biopsy == []
+
+
+@pytest.mark.parametrize(
+    "algorithm",
+    [
+        neighbor_joining_baseline,
+        neighbor_joining_hybrid_opt,
+        neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony,
+    ],
+    ids=lambda algorithm: algorithm.__name__,
+)
+def test_run_single_test_accepts_two_biopsy_cells_and_uses_actual_grf_roots(monkeypatch, algorithm):
+    class TwoCellSimulator:
+        def __init__(self):
+            self.tree = nx.DiGraph()
+            self.tree.add_node(0, genome=[2, 2], generation=0, cell_id=0)
+            self.tree.add_node(5, genome=[2, 2], generation=1, cell_id=5)
+            self.tree.add_node(7, genome=[3, 2], generation=2, cell_id=7)
+            self.tree.add_edge(0, 5, events="")
+            self.tree.add_edge(5, 7, events="duplication(pos=0, copies=1)")
+
+        def perform_biopsy(self, generation, biopsy_size=0, biopsy_size_scalable=None, seed=None):
+            if generation == 1:
+                return [Genotype([2, 2], node_id=5, generation=1, cell_id=5)]
+            if generation == 2:
+                return [Genotype([3, 2], node_id=7, generation=2, cell_id=7)]
+            return []
+
+    seen_roots = []
+
+    def actual_root(tree):
+        roots = [node for node, indegree in tree.in_degree() if indegree == 0]
+        assert len(roots) == 1
+        return roots[0]
+
+    def capture_grf(true_tree, true_root, reconstructed_tree, reconstructed_root):
+        seen_roots.append(reconstructed_root)
+        assert reconstructed_root == actual_root(reconstructed_tree)
+        return 1.0
+
+    monkeypatch.setattr(ctbs, "grf_tree", capture_grf)
+    distance_provider = SuppliedDistanceProvider(
+        ids=[5, 7],
+        matrix=np.array([
+            [0.0, 1.0],
+            [1.0, 0.0],
+        ]),
+    )
+
+    result = run_single_test(
+        seed=7,
+        simulator_with_loaded_tree=TwoCellSimulator(),
+        biopsy_generations=[1, 2],
+        biopsy_size_scalable=0.5,
+        r_dist=4,
+        distance_provider=distance_provider,
+        reconstruction_algorithm=algorithm,
+    )
+
+    assert result is not None
+    assert len(seen_roots) == 2
 
 
 def test_empty_biopsy_ctbf(): #capsys
@@ -124,16 +202,30 @@ def test_reconstructor_no_connecting_within_distance():
         biopsy = sim.perform_biopsy(generation=b_gen, **common_params)
         if biopsy:
             cell_lists.append(biopsy)
-    assert [[7], [7, 13]] == [[c.cell_id for c in cl] for cl in cell_lists]
-    # empty biopsy from generation 4 is not included; same genotype in two biopsies
-    assert [[7], [14, 13]] == [[c.node_id for c in cl] for cl in cell_lists]
+    assert [[1], [7], [7, 13]] == [[c.cell_id for c in cl] for cl in cell_lists]
+    # generation 4 now contributes one cell due the scalable-biopsy minimum.
+    assert [[4], [7], [14, 13]] == [[c.node_id for c in cl] for cl in cell_lists]
     # cells 7 and 14 share the same genotype
-    assert 0 == cell_lists[0][0].genome[1]  # cell 7 (oldest) has 0 in CNP (for i=1, cnp(i)=0)
+    assert 0 == cell_lists[1][0].genome[1]  # cell 7 (oldest) has 0 in CNP (for i=1, cnp(i)=0)
                                             # [Genotype(ID=7, Gen=6, cell_id=7, genome=[2 0 2 2 2 2 2 4 2 2])]
-    assert 0 < cell_lists[1][1].genome[1]   # cell 13 has non-zero CNP in position where potential match has 0
+    assert 0 < cell_lists[2][1].genome[1]   # cell 13 has non-zero CNP in position where potential match has 0
                                             # Genotype(ID=13, Gen=8, cell_id=13, genome=[2 2 2 2 2 2 2 4 2 2])
-    tt, rt, nj = run_single_test(biopsy_generations=[4, 6, 8], r_dist=4, simulator_with_loaded_tree=sim, **common_params)
-    assert "((7:0.0000)7:0.0000,(13:0.0000)13:0.0000)None;" == to_newick(rt)
+    distance_provider = SuppliedDistanceProvider(
+        ids=[1, 7, 13],
+        matrix=np.array([
+            [0.0, 3.0, 3.0],
+            [3.0, 0.0, 2.0],
+            [3.0, 2.0, 0.0],
+        ]),
+    )
+    tt, rt, nj = run_single_test(
+        biopsy_generations=[4, 6, 8],
+        r_dist=4,
+        simulator_with_loaded_tree=sim,
+        distance_provider=distance_provider,
+        **common_params,
+    )
+    assert "((7:0.0000)7:3.0000,(13:0.0000)13:3.0000)1;" == to_newick(rt)
     # cell 14 is connected to cell 7, whereas cell 13 not despite dist=0 < r_dist
     # the cell 13 is copied into upper level, and then connected with common father with 7
 

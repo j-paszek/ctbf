@@ -12,6 +12,7 @@ import numpy as np
 import random
 from concurrent.futures import ProcessPoolExecutor
 
+from ctbf_constraints import MIN_TOTAL_BIOPSY_CELLS
 from simulator import CancerCellEvolutionSimulator, Genotype
 from reconstructor import build_evolution_tree, resolve_biopsy_guided_config, visualize_tree_plotly
 from reconstructor_registry import get_algorithm_map, resolve_reconstruction_algorithm
@@ -343,6 +344,12 @@ def show_cells(cell_list):
     for cell_l in cell_list:
         print("Biopsy: ", [cell.cell_id for cell in cell_l])
 
+def _actual_root(tree):
+    roots = [node for node, indegree in tree.in_degree() if indegree == 0]
+    if len(roots) != 1:
+        raise ValueError(f"Tree must have exactly one root, found {len(roots)}")
+    return roots[0]
+
 def _run_simulation(config, bedfile, seed, simulator_with_loaded_tree, time_collector):
     if simulator_with_loaded_tree:
         return simulator_with_loaded_tree
@@ -384,8 +391,8 @@ def _perform_biopsies(sim, biopsy_generations, biopsy_size, biopsy_size_scalable
     print("Number of biopsy cells:", len(all_in_one_sample[0]))
     return cell_lists, all_in_one_sample
 
-def _handle_small_biopsy(time_collector):
-    print("Total number of cells in biopsy less than 3.")
+def _handle_small_biopsy(time_collector, min_total_cells=MIN_TOTAL_BIOPSY_CELLS):
+    print(f"Total number of cells in biopsy less than {min_total_cells}.")
     if time_collector is not None:
         for key in ["Computing cnp2cnp distance matrix: ", "Clear CNPs: ", "GRF our: ", "GRF NJ: "]:
             time_collector[key] = 0
@@ -470,11 +477,13 @@ def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, 
         build_kwargs["neighbor_joining"] = reconstruction_algorithm
 
     # --- build trees ---
-    njtree, nj_info, root_nj = build_evolution_tree(osl, only_nj=True, **build_kwargs)
+    njtree, nj_info, _returned_root_nj = build_evolution_tree(osl, only_nj=True, **build_kwargs)
     rec_build_kwargs = build_kwargs.copy()
     if biopsy_guided_config is not None:
         rec_build_kwargs["biopsy_guided_config"] = biopsy_guided_config
-    tree, rt_info, root_rt = build_evolution_tree(cl, **rec_build_kwargs)
+    tree, rt_info, _returned_root_rt = build_evolution_tree(cl, **rec_build_kwargs)
+    actual_root_nj = _actual_root(njtree)
+    actual_root_rt = _actual_root(tree)
 
     if write_newick:
         print("Newick simulated:", to_newick(sim.tree))
@@ -496,12 +505,12 @@ def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, 
     # --- Evaluate GRF distances ---
     if time_collector is not None:
         with Timer("GRF our: ", time_collector):
-            ret1 = grf_tree(true_tree_simplified, runtime_config.true_tree_root_id, tree, root_rt)
+            ret1 = grf_tree(true_tree_simplified, runtime_config.true_tree_root_id, tree, actual_root_rt)
         with Timer("GRF NJ: ", time_collector):
-            ret2 = grf_tree(true_tree_simplified, runtime_config.true_tree_root_id, njtree, root_nj)
+            ret2 = grf_tree(true_tree_simplified, runtime_config.true_tree_root_id, njtree, actual_root_nj)
     else:
-        ret1 = grf_tree(true_tree_simplified, runtime_config.true_tree_root_id, tree, root_rt)
-        ret2 = grf_tree(true_tree_simplified, runtime_config.true_tree_root_id, njtree, root_nj)
+        ret1 = grf_tree(true_tree_simplified, runtime_config.true_tree_root_id, tree, actual_root_rt)
+        ret2 = grf_tree(true_tree_simplified, runtime_config.true_tree_root_id, njtree, actual_root_nj)
 
     print("GRF - reconstructed:", ret1)
     print("GRF - NJ:", ret2)
@@ -553,7 +562,7 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
                                                       biopsy_size_scalable, seed, compare_dm,
                                                       runtime_config)
 
-    if len(all_in_one_sample[0]) < 3:
+    if len(all_in_one_sample[0]) < MIN_TOTAL_BIOPSY_CELLS:
         _handle_small_biopsy(time_collector)
         return
 
