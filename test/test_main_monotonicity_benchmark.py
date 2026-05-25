@@ -1,5 +1,6 @@
 from pathlib import Path
 import importlib.util
+import json
 import sys
 
 import networkx as nx
@@ -16,7 +17,7 @@ spec = importlib.util.spec_from_file_location("main_monotonicity_benchmark", TOO
 main_benchmark = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(main_benchmark)
 
-from ctbf_constraints import MIN_BIOPSY_CELLS_FROM_BIOPSY  # noqa: E402
+from ctbf_constraints import MIN_BIOPSY_CELLS_FROM_BIOPSY, MIN_TOTAL_BIOPSY_CELLS  # noqa: E402
 from reconstructor_algorithms import neighbor_joining_baseline  # noqa: E402
 from simulator import Genotype  # noqa: E402
 
@@ -60,7 +61,7 @@ def test_iter_case_specs_uses_cartesian_grid_and_event_shape_values():
         generation_counts=[10],
         seeds=[1, 2],
         biopsy_size_scalables=[0.25, 0.5],
-        biopsy_level_counts=[1],
+        biopsy_level_counts=[2],
         event_probs=[0.01],
         event_shapes=["low", "high"],
     ))
@@ -68,6 +69,19 @@ def test_iter_case_specs_uses_cartesian_grid_and_event_shape_values():
     assert len(specs) == 8
     assert {(spec.event_shape_label, spec.single_or_multiple_event_prob, spec.duplication_multiplicity)
             for spec in specs} == {("low", 0.01, 1), ("high", 0.05, 1)}
+    assert {spec.biopsy_level_count for spec in specs} == {2}
+
+
+def test_default_case_grid_scope_is_curated_l2_to_l4_g10_only():
+    specs = list(main_benchmark.iter_case_specs(
+        seeds=[1],
+        event_shapes=["low"],
+        event_probs=[0.01],
+    ))
+
+    assert {spec.generation_count for spec in specs} == {10}
+    assert {spec.biopsy_level_count for spec in specs} == {2, 3, 4}
+    assert all("_L1_" not in main_benchmark.case_id(spec) for spec in specs)
 
 
 def test_build_config_snapshot_applies_only_case_overrides():
@@ -125,6 +139,30 @@ class GenerationSizedFakeSimulator:
         ]
 
 
+def test_perform_biopsies_preserves_ordered_distinct_generation_levels():
+    generations = [2, 5, 8]
+
+    biopsies, cell_lists = main_benchmark.perform_biopsies(
+        GenerationSizedFakeSimulator({2: 4, 5: 4, 8: 4}),
+        generations,
+        biopsy_size_scalable=0.5,
+        seed=11,
+    )
+
+    assert [biopsy["level"] for biopsy in biopsies] == ["L1", "L2", "L3"]
+    assert [biopsy["generation"] for biopsy in biopsies] == generations
+    assert all(
+        cell["generation"] == biopsy["generation"]
+        for biopsy in biopsies
+        for cell in biopsy["cells"]
+    )
+    assert [[cell.generation for cell in level] for level in cell_lists] == [
+        [2, 2],
+        [5, 5],
+        [8, 8],
+    ]
+
+
 def test_choose_biopsy_generations_is_deterministic_and_records_counts():
     spec = _spec(generation_count=10, biopsy_level_count=2, biopsy_size_scalable=0.25)
     first = main_benchmark.choose_biopsy_generations_with_retry(FakeSimulator(12), spec)
@@ -136,64 +174,74 @@ def test_choose_biopsy_generations_is_deterministic_and_records_counts():
     assert first["nonempty_biopsy_levels"] == 2
     assert first["selection_strategy"] == "random_retry"
     assert first["fallback_used"] is False
+    assert first["selected_generations"] == sorted(set(first["selected_generations"]))
+    assert [biopsy["generation"] for biopsy in first["biopsies"]] == first["selected_generations"]
 
 
 def test_choose_biopsy_generations_accepts_two_total_sampled_cells():
-    spec = _spec(generation_count=10, biopsy_level_count=1, biopsy_size_scalable=0.5)
+    spec = _spec(generation_count=10, biopsy_level_count=2, biopsy_size_scalable=0.5)
 
     selection = main_benchmark.choose_biopsy_generations_with_retry(
-        FakeSimulator(4),
+        FakeSimulator(2),
         spec,
-        max_retries=0,
+        max_retries=1,
     )
 
     assert selection["status"] == "ok"
     assert selection["failure_reason"] is None
     assert selection["total_sampled_biopsy_cells"] == 2
+    assert selection["random_attempt_count"] == 1
+    assert selection["max_random_attempts"] == 1
 
 
 def test_input_case_records_two_cell_minimum(monkeypatch):
-    spec = _spec(generation_count=10, biopsy_level_count=1, biopsy_size_scalable=0.5)
+    spec = _spec(generation_count=10, biopsy_level_count=2, biopsy_size_scalable=0.5)
     monkeypatch.setattr(
         main_benchmark,
         "build_simulator_from_config",
-        lambda config, seed: FakeSimulator(4),
+        lambda config, seed: FakeSimulator(2),
     )
 
-    input_case = main_benchmark.input_case_from_simulation(spec, {}, max_retries=0)
+    input_case = main_benchmark.input_case_from_simulation(spec, {}, max_retries=1)
 
     assert input_case["status"] == "ok"
     assert input_case["biopsy_selection"]["total_sampled_biopsy_cells"] == 2
-    assert input_case["biopsy_selection"]["min_total_sampled_biopsy_cells"] == 2
+    assert input_case["biopsy_selection"]["min_total_sampled_biopsy_cells"] == MIN_TOTAL_BIOPSY_CELLS
+    assert input_case["biopsy_selection"]["random_attempt_count"] == 1
+    assert main_benchmark._check_biopsy_order(input_case, "input_case") == []
+    assert [biopsy["generation"] for biopsy in input_case["biopsies"]] == input_case["biopsy_generations"]
 
 
 def test_choose_biopsy_generations_falls_back_to_latest_generations_after_retries():
     spec = _spec(
         generation_count=10,
         seed=1,
-        biopsy_level_count=1,
+        biopsy_level_count=2,
         biopsy_size_scalable=0.25,
     )
 
     selection = main_benchmark.choose_biopsy_generations_with_retry(
-        GenerationSizedFakeSimulator({9: 12}),
+        GenerationSizedFakeSimulator({8: 4, 9: 4}),
         spec,
-        max_retries=0,
+        max_retries=1,
     )
 
     assert selection["status"] == "ok"
-    assert selection["selected_generations"] == [9]
-    assert selection["total_sampled_biopsy_cells"] == 3
+    assert selection["selected_generations"] == [8, 9]
+    assert selection["total_sampled_biopsy_cells"] == 2
     assert selection["selection_strategy"] == "latest_generations_fallback"
     assert selection["fallback_used"] is True
-    assert selection["pre_fallback_selected_generations"] == [6]
+    assert selection["random_attempt_count"] == 1
+    assert selection["retry_count"] == 1
+    assert selection["pre_fallback_selected_generations"]
+    assert [biopsy["generation"] for biopsy in selection["biopsies"]] == [8, 9]
 
 
 def test_choose_biopsy_generations_marks_small_biopsy_after_max_retries():
-    spec = _spec(generation_count=10, biopsy_level_count=1, biopsy_size_scalable=0.25)
+    spec = _spec(generation_count=10, biopsy_level_count=2, biopsy_size_scalable=0.25)
 
     selection = main_benchmark.choose_biopsy_generations_with_retry(
-        FakeSimulator(4),
+        GenerationSizedFakeSimulator({9: 4}),
         spec,
         max_retries=2,
     )
@@ -201,10 +249,69 @@ def test_choose_biopsy_generations_marks_small_biopsy_after_max_retries():
     assert selection["status"] == "failed"
     assert selection["failure_reason"] == "small_biopsy"
     assert selection["retry_count"] == 2
-    assert selection["selected_generations"] == [9]
+    assert selection["random_attempt_count"] == 2
+    assert selection["selected_generations"] == [8, 9]
     assert selection["total_sampled_biopsy_cells"] == 1
     assert selection["selection_strategy"] == "latest_generations_fallback"
     assert selection["fallback_used"] is True
+
+
+def test_check_biopsy_order_rejects_duplicate_and_mismatched_levels():
+    input_case = {
+        "biopsy_level_count": 2,
+        "biopsy_generations": [2, 2],
+        "biopsies": [
+            {"level": "L1", "generation": 2, "cells": []},
+            {"level": "L2", "generation": 2, "cells": []},
+        ],
+    }
+
+    errors = main_benchmark._check_biopsy_order(input_case, "case/input.json")
+
+    assert any("strictly increasing" in error for error in errors)
+
+    input_case = {
+        "biopsy_level_count": 3,
+        "biopsy_generations": [2, 5],
+        "biopsies": [
+            {"level": "L2", "generation": 5, "cells": [{"node_id": 10, "generation": 2}]},
+            {"level": "L1", "generation": 2, "cells": []},
+        ],
+    }
+
+    errors = main_benchmark._check_biopsy_order(input_case, "case/input.json")
+
+    assert any("expected 'L1'" in error for error in errors)
+    assert any("does not match selected generation 2" in error for error in errors)
+    assert any("cell 10" in error for error in errors)
+    assert any("biopsy_level_count 3" in error for error in errors)
+
+
+def test_choose_biopsy_generations_uses_exactly_100_random_attempts_before_fallback(monkeypatch):
+    spec = _spec(generation_count=10, biopsy_level_count=3, biopsy_size_scalable=0.25)
+    seen_generations = []
+
+    def always_empty_biopsies(_simulator, generations, _biopsy_size_scalable, _seed):
+        seen_generations.append(list(generations))
+        return [
+            {"level": f"L{index}", "generation": generation, "cells": []}
+            for index, generation in enumerate(generations, start=1)
+        ], []
+
+    monkeypatch.setattr(main_benchmark, "perform_biopsies", always_empty_biopsies)
+
+    selection = main_benchmark.choose_biopsy_generations_with_retry(
+        object(),
+        spec,
+        max_retries=100,
+    )
+
+    assert selection["status"] == "failed"
+    assert len(seen_generations) == 101
+    assert seen_generations[-1] == [7, 8, 9]
+    assert selection["random_attempt_count"] == 100
+    assert selection["max_random_attempts"] == 100
+    assert selection["retry_count"] == 100
 
 
 def test_compute_case_distances_deduplicates_repeated_cell_ids_with_l1_matrix():
@@ -330,7 +437,7 @@ def test_reconstruction_result_has_tree_without_evaluating_metrics():
     assert 0.0 <= evaluated["metrics"]["grf"] <= 1.0
 
 
-def _write_tiny_checked_corpus(tmp_path, *, corrupt_grf=False):
+def _write_tiny_checked_corpus(tmp_path, *, corrupt_grf=False, biopsy_level_count=2):
     tree = nx.DiGraph()
     tree.add_node(0, genome=[2, 2], generation=0, cell_id=0)
     tree.add_node(5, genome=[2, 2], generation=1, cell_id=5)
@@ -346,7 +453,7 @@ def _write_tiny_checked_corpus(tmp_path, *, corrupt_grf=False):
         "seed": 7,
         "r_dist": 4,
         "biopsy_size_scalable": 0.5,
-        "biopsy_level_count": 2,
+        "biopsy_level_count": biopsy_level_count,
         "biopsy_generations": [1, 2],
         "GENERAL_EVENT_PROB": 0.01,
         "event_shape_label": "low",
@@ -355,13 +462,16 @@ def _write_tiny_checked_corpus(tmp_path, *, corrupt_grf=False):
         "config_snapshot": {"genome_length": 10},
         "biopsy_selection": {
             "retry_count": 0,
+            "random_attempt_count": 1,
+            "max_random_attempts": 100,
             "total_sampled_biopsy_cells": 2,
             "nonempty_biopsy_levels": 2,
+            "min_total_sampled_biopsy_cells": MIN_TOTAL_BIOPSY_CELLS,
         },
         "true_tree": main_benchmark.node_link_data(tree),
         "biopsies": [
-            {"generation": 1, "cells": [{"node_id": 5, "cell_id": 5, "generation": 1, "genome": [2, 2]}]},
-            {"generation": 2, "cells": [{"node_id": 7, "cell_id": 7, "generation": 2, "genome": [3, 2]}]},
+            {"level": "L1", "generation": 1, "cells": [{"node_id": 5, "cell_id": 5, "generation": 1, "genome": [2, 2]}]},
+            {"level": "L2", "generation": 2, "cells": [{"node_id": 7, "cell_id": 7, "generation": 2, "genome": [3, 2]}]},
         ],
     }
     input_case = main_benchmark.compute_case_distances(input_case, distance_mode="l1")
@@ -408,6 +518,33 @@ def test_check_corpus_reports_stale_metric_values(tmp_path):
     assert any("stored grf" in error for error in summary["errors"])
 
 
+def test_check_corpus_rejects_stale_l1_inputs(tmp_path):
+    root = _write_tiny_checked_corpus(tmp_path, biopsy_level_count=1)
+
+    summary = main_benchmark.check_corpus(
+        root,
+        algorithms=[neighbor_joining_baseline],
+        modes=["full_cnp"],
+        replay_reports=False,
+    )
+
+    assert any("biopsy_level_count 1" in error for error in summary["errors"])
+
+
+def test_curated_main_inputs_use_ordered_distinct_biopsy_generations():
+    corpus_root = PROJECT_ROOT / "test" / "data" / "main" / "gl10" / "g10"
+    input_files = sorted(corpus_root.glob("seed*/gl10_g10_seed*/input.json"))
+    if not input_files:
+        pytest.skip("curated main corpus is not present")
+
+    errors = []
+    for input_file in input_files:
+        input_case = json.loads(input_file.read_text())
+        errors.extend(main_benchmark._check_biopsy_order(input_case, input_file))
+
+    assert errors == []
+
+
 def test_monotonic_summary_reports_passes_and_failures():
     rows = pd.DataFrame([
         {
@@ -417,7 +554,7 @@ def test_monotonic_summary_reports_passes_and_failures():
             "event_shape_label": "low",
             "single_or_multiple_event_prob": 0.01,
             "duplication_multiplicity": 1,
-            "biopsy_level_count": 1,
+            "biopsy_level_count": 2,
             "algorithm": "alg",
             "mode": "full_cnp",
             "seed": seed,

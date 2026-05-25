@@ -6,6 +6,7 @@ import json
 import os
 import random
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 import sys
@@ -50,9 +51,9 @@ from freeze_algorithm_variant_cases import (  # noqa: E402
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "test" / "data" / "main"
 CORPUS_NAME = "main_monotonicity"
 DEFAULT_GENOME_LENGTHS = (10,)
-DEFAULT_GENERATION_COUNTS = (10, 20)
+DEFAULT_GENERATION_COUNTS = (10,)
 DEFAULT_BIOPSY_SIZE_SCALABLES = (0.25, 0.5, 0.75)
-DEFAULT_BIOPSY_LEVEL_COUNTS = (1, 2, 3, 4)
+DEFAULT_BIOPSY_LEVEL_COUNTS = (2, 3, 4)
 DEFAULT_EVENT_PROBS = (0.01, 0.05)
 DEFAULT_EVENT_SHAPES = {
     "low": (0.01, 1),
@@ -76,6 +77,22 @@ METRIC_FIELDS = {
     "adf1": ("metrics", "ancestors_unique_restricted", "F1"),
     "grf": ("metrics", "grf"),
 }
+TIMING_REPORT_COLUMNS = [
+    "stage",
+    "operation",
+    "count",
+    "input_files",
+    "instances",
+    "skipped",
+    "failed",
+    "read_json_seconds",
+    "core_seconds",
+    "write_json_seconds",
+    "total_seconds",
+    "algorithm",
+    "mode",
+    "distance_mode",
+]
 
 
 @dataclass(frozen=True)
@@ -90,6 +107,63 @@ class MainCaseSpec:
     single_or_multiple_event_prob: float
     duplication_multiplicity: int
     r_dist: float = 4.0
+
+
+class TimingRecorder:
+    def __init__(self):
+        self.records = []
+
+    def add(self, stage, operation, **values):
+        record = {column: "" for column in TIMING_REPORT_COLUMNS}
+        record["stage"] = stage
+        record["operation"] = operation
+        for key, value in values.items():
+            if key in record:
+                record[key] = value
+        for key in [
+            "count",
+            "input_files",
+            "instances",
+            "skipped",
+            "failed",
+        ]:
+            if record[key] == "":
+                record[key] = 0
+        for key in [
+            "read_json_seconds",
+            "core_seconds",
+            "write_json_seconds",
+            "total_seconds",
+        ]:
+            if record[key] == "":
+                record[key] = 0.0
+            else:
+                record[key] = float(record[key])
+        self.records.append(record)
+
+    def write(self, output_root):
+        if not self.records:
+            return {}
+        reports_dir = Path(output_root) / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        frame = pd.DataFrame(self.records, columns=TIMING_REPORT_COLUMNS)
+        csv_path = reports_dir / "timing_summary.csv"
+        json_path = reports_dir / "timing_summary.json"
+        frame.to_csv(csv_path, index=False)
+        json_payload = {
+            "columns": TIMING_REPORT_COLUMNS,
+            "records": self.records,
+            "totals_by_stage": (
+                frame.groupby("stage", dropna=False)[
+                    ["count", "instances", "read_json_seconds", "core_seconds", "write_json_seconds", "total_seconds"]
+                ]
+                .sum(numeric_only=True)
+                .reset_index()
+                .to_dict(orient="records")
+            ),
+        }
+        write_json(json_path, json_payload, overwrite=True)
+        return {"csv": csv_path, "json": json_path}
 
 
 def load_json(path):
@@ -223,6 +297,20 @@ def latest_biopsy_generations(available_generations, biopsy_level_count):
     return list(available_generations[-biopsy_level_count:])
 
 
+def empty_distance_matrices():
+    return {
+        "cnp2cnp": {
+            "ids": [],
+            "matrix": [],
+            "distance_mode": None,
+        },
+        "true_tree": {
+            "ids": [],
+            "matrix": [],
+        },
+    }
+
+
 def choose_biopsy_generations_with_retry(
     simulator,
     spec,
@@ -237,6 +325,8 @@ def choose_biopsy_generations_with_retry(
             "failure_reason": "biopsy_level_count_exceeds_available_generations",
             "available_generations": available_generations,
             "retry_count": 0,
+            "random_attempt_count": 0,
+            "max_random_attempts": max_retries,
             "selected_generations": [],
             "total_sampled_biopsy_cells": 0,
             "nonempty_biopsy_levels": 0,
@@ -249,8 +339,10 @@ def choose_biopsy_generations_with_retry(
 
     rng = stable_rng("biopsy-generations", spec.generation_count, spec.seed, spec.biopsy_level_count)
     last = None
-    for retry_count in range(max_retries + 1):
+    random_attempt_count = 0
+    for retry_count in range(max_retries):
         selected_generations = sorted(rng.sample(available_generations, spec.biopsy_level_count))
+        random_attempt_count = retry_count + 1
         biopsies, cell_lists = perform_biopsies(
             simulator,
             selected_generations,
@@ -263,6 +355,8 @@ def choose_biopsy_generations_with_retry(
             "failure_reason": None if total_cells >= min_total_cells else "small_biopsy",
             "available_generations": available_generations,
             "retry_count": retry_count,
+            "random_attempt_count": random_attempt_count,
+            "max_random_attempts": max_retries,
             "selected_generations": selected_generations,
             "total_sampled_biopsy_cells": total_cells,
             "nonempty_biopsy_levels": sum(1 for biopsy in biopsies if biopsy["cells"]),
@@ -291,6 +385,8 @@ def choose_biopsy_generations_with_retry(
         "failure_reason": None if total_cells >= min_total_cells else "small_biopsy",
         "available_generations": available_generations,
         "retry_count": max_retries,
+        "random_attempt_count": random_attempt_count,
+        "max_random_attempts": max_retries,
         "selected_generations": fallback_generations,
         "total_sampled_biopsy_cells": total_cells,
         "nonempty_biopsy_levels": sum(1 for biopsy in biopsies if biopsy["cells"]),
@@ -341,6 +437,8 @@ def input_case_from_simulation(spec, base_config, *, max_retries=100):
             "available_generations": selection["available_generations"],
             "retry_count": selection["retry_count"],
             "max_retries": max_retries,
+            "random_attempt_count": selection["random_attempt_count"],
+            "max_random_attempts": selection["max_random_attempts"],
             "total_sampled_biopsy_cells": selection["total_sampled_biopsy_cells"],
             "nonempty_biopsy_levels": selection["nonempty_biopsy_levels"],
             "min_total_sampled_biopsy_cells": MIN_TOTAL_BIOPSY_CELLS,
@@ -352,7 +450,8 @@ def input_case_from_simulation(spec, base_config, *, max_retries=100):
         "biopsies": selection["biopsies"],
     }
     if selection["status"] != "ok":
-        input_case["distance_matrices"] = {}
+        input_case["distance_matrices"] = empty_distance_matrices()
+        input_case["unique_distance_cell_ids"] = []
     return input_case
 
 
@@ -737,6 +836,63 @@ def _check_distance_matrix(input_case, input_file):
     return errors
 
 
+def _check_biopsy_order(input_case, input_file):
+    errors = []
+    generations = input_case.get("biopsy_generations")
+    if not isinstance(generations, list):
+        errors.append(f"{input_file}: biopsy_generations must be a list")
+        generations = []
+    elif any(left >= right for left, right in zip(generations, generations[1:])):
+        errors.append(
+            f"{input_file}: biopsy_generations must be strictly increasing "
+            f"ordered distinct levels, got {generations}"
+        )
+    biopsy_level_count = input_case.get("biopsy_level_count")
+    if isinstance(biopsy_level_count, int) and len(generations) != biopsy_level_count:
+        errors.append(
+            f"{input_file}: {len(generations)} biopsy_generations do not match "
+            f"biopsy_level_count {biopsy_level_count}"
+        )
+
+    biopsies = input_case.get("biopsies", [])
+    if not isinstance(biopsies, list):
+        errors.append(f"{input_file}: biopsies must be a list")
+        return errors
+
+    if len(biopsies) != len(generations):
+        errors.append(
+            f"{input_file}: {len(biopsies)} biopsies do not match "
+            f"{len(generations)} biopsy_generations"
+        )
+
+    for index, biopsy in enumerate(biopsies):
+        expected_level = f"L{index + 1}"
+        if biopsy.get("level") != expected_level:
+            errors.append(
+                f"{input_file}: biopsy at position {index} has level "
+                f"{biopsy.get('level')!r}, expected {expected_level!r}"
+            )
+
+        expected_generation = generations[index] if index < len(generations) else None
+        biopsy_generation = biopsy.get("generation")
+        if expected_generation is not None and biopsy_generation != expected_generation:
+            errors.append(
+                f"{input_file}: biopsy {expected_level} generation "
+                f"{biopsy_generation!r} does not match selected generation "
+                f"{expected_generation!r}"
+            )
+
+        for cell in biopsy.get("cells", []):
+            if cell.get("generation") != biopsy_generation:
+                errors.append(
+                    f"{input_file}: cell {cell.get('node_id')!r} in "
+                    f"{expected_level} has generation {cell.get('generation')!r}, "
+                    f"expected {biopsy_generation!r}"
+                )
+
+    return errors
+
+
 def _check_result_metrics(input_case, result_file):
     result = load_json(result_file)
     if result.get("status") == "failed":
@@ -782,6 +938,7 @@ def check_corpus(output_root, algorithms=None, modes=None, *, replay_reports=Tru
             "seed",
             "biopsy_size_scalable",
             "biopsy_level_count",
+            "biopsy_generations",
             "GENERAL_EVENT_PROB",
             "GENERAL_SINGLE_OR_MULTIPLE_EVENT_PROB",
             "GENERAL_DUPLICATION_MULTIPLICITY",
@@ -793,8 +950,18 @@ def check_corpus(output_root, algorithms=None, modes=None, *, replay_reports=Tru
         for field in required_fields:
             if field not in input_case:
                 errors.append(f"{input_file}: missing {field}")
+        biopsy_level_count = input_case.get("biopsy_level_count")
+        if biopsy_level_count not in DEFAULT_BIOPSY_LEVEL_COUNTS:
+            errors.append(
+                f"{input_file}: biopsy_level_count {biopsy_level_count!r} "
+                f"is outside active scope {list(DEFAULT_BIOPSY_LEVEL_COUNTS)}"
+            )
+        errors.extend(_check_biopsy_order(input_case, input_file))
         if input_case.get("status") != "ok":
             failed_inputs += 1
+            distance_matrices = input_case.get("distance_matrices")
+            if distance_matrices != empty_distance_matrices():
+                errors.append(f"{input_file}: failed input must record empty distance matrices")
             continue
 
         checked_inputs += 1
