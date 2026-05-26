@@ -19,7 +19,7 @@ spec.loader.exec_module(main_benchmark)
 
 from ctbf_constraints import MIN_BIOPSY_CELLS_FROM_BIOPSY, MIN_TOTAL_BIOPSY_CELLS  # noqa: E402
 from reconstructor_algorithms import neighbor_joining_baseline  # noqa: E402
-from simulator import Genotype  # noqa: E402
+from simulator import CancerCellEvolutionSimulator, Genotype  # noqa: E402
 
 
 def _spec(**overrides):
@@ -53,6 +53,11 @@ def test_case_dir_groups_by_genome_length_generation_and_seed(tmp_path):
     assert main_benchmark.case_dir(tmp_path, spec) == tmp_path / "gl10" / "g20" / "seed295" / cid
     assert main_benchmark.case_dir(tmp_path, cid) == tmp_path / "gl10" / "g20" / "seed295" / cid
     assert main_benchmark.input_path(tmp_path, spec) == tmp_path / "gl10" / "g20" / "seed295" / cid / "input.json"
+    assert main_benchmark.input_truetree_path(tmp_path, spec) == tmp_path / "gl10" / "g20" / "seed295" / cid / "input_truetree.json"
+    assert main_benchmark.input_biopsy_path(tmp_path, spec) == tmp_path / "gl10" / "g20" / "seed295" / cid / "input_biopsy.json"
+    assert main_benchmark.genome_dict_path(tmp_path, spec) == tmp_path / "gl10" / "g20" / "seed295" / cid / "genome_dict.csv"
+    assert main_benchmark.distance_path(tmp_path, spec) == tmp_path / "gl10" / "g20" / "seed295" / cid / "input_dm_cnp.json"
+    assert main_benchmark.case_result_csv_path(tmp_path, spec) == tmp_path / "gl10" / "g20" / "seed295" / cid / "result.csv"
 
 
 def test_iter_case_specs_uses_cartesian_grid_and_event_shape_values():
@@ -314,6 +319,259 @@ def test_choose_biopsy_generations_uses_exactly_100_random_attempts_before_fallb
     assert selection["retry_count"] == 100
 
 
+def test_simulator_canonicalizes_recurrent_genome_cell_ids_for_biopsy_and_tree():
+    tree = nx.DiGraph()
+    tree.add_node(0, genome=[2, 2], generation=0, cell_id=0)
+    tree.add_node(2, genome=[2, 3], generation=1, cell_id=2)
+    tree.add_node(11, genome=[2, 2], generation=2, cell_id=11)
+    tree.add_edge(0, 2, events="duplication(pos=1, copies=1)")
+    tree.add_edge(2, 11, events="loss(pos=1, copies=-1)")
+    simulator = CancerCellEvolutionSimulator.from_tree(tree)
+
+    biopsy = simulator.perform_biopsy(2, biopsy_size_scalable=1.0, seed=1)
+    canonical_tree = simulator.canonicalized_tree_by_genome()
+
+    assert [cell.node_id for cell in biopsy] == [11]
+    assert [cell.cell_id for cell in biopsy] == [0]
+    assert simulator.genotypes[11].cell_id == 11
+    assert tree.nodes[11]["cell_id"] == 11
+    assert canonical_tree.nodes[11]["cell_id"] == 0
+
+
+def test_simulator_collapses_duplicate_canonical_genotypes_within_one_biopsy():
+    tree = nx.DiGraph()
+    tree.add_node(0, genome=[2, 2], generation=0, cell_id=0)
+    tree.add_node(11, genome=[2, 2], generation=2, cell_id=11)
+    tree.add_node(12, genome=[2, 2], generation=2, cell_id=12)
+    tree.add_edge(0, 11, events="duplication(pos=1, copies=1);loss(pos=1, copies=-1)")
+    tree.add_edge(0, 12, events="duplication(pos=1, copies=1);loss(pos=1, copies=-1)")
+    simulator = CancerCellEvolutionSimulator.from_tree(tree)
+
+    biopsy = simulator.perform_biopsy(2, biopsy_size_scalable=1.0, seed=1)
+
+    assert len(biopsy) == 1
+    assert biopsy[0].cell_id == 0
+    assert biopsy[0].node_id in {11, 12}
+
+
+def _unique_genome_input_case(case_id="case"):
+    tree = nx.DiGraph()
+    tree.add_node(0, genome=[2, 2], generation=0, cell_id=0)
+    tree.add_node(5, genome=[3, 2], generation=1, cell_id=5)
+    tree.add_node(7, genome=[3, 3], generation=2, cell_id=7)
+    tree.add_edge(0, 5, events="duplication(pos=0, copies=1)")
+    tree.add_edge(5, 7, events="duplication(pos=1, copies=1)")
+    return {
+        "case_id": case_id,
+        "corpus": main_benchmark.CORPUS_NAME,
+        "status": "ok",
+        "genome_length": 10,
+        "NUMBER_OF_GENERATIONS": 10,
+        "seed": 7,
+        "r_dist": 4,
+        "biopsy_size_scalable": 0.5,
+        "biopsy_level_count": 2,
+        "biopsy_generations": [1, 2],
+        "GENERAL_EVENT_PROB": 0.01,
+        "event_shape_label": "low",
+        "GENERAL_SINGLE_OR_MULTIPLE_EVENT_PROB": 0.01,
+        "GENERAL_DUPLICATION_MULTIPLICITY": 1,
+        "config_snapshot": {"genome_length": 10},
+        "biopsy_selection": {
+            "retry_count": 0,
+            "random_attempt_count": 1,
+            "max_random_attempts": 100,
+            "total_sampled_biopsy_cells": 2,
+            "nonempty_biopsy_levels": 2,
+            "min_total_sampled_biopsy_cells": MIN_TOTAL_BIOPSY_CELLS,
+        },
+        "true_tree": main_benchmark.node_link_data(tree),
+        "biopsies": [
+            {"level": "L1", "generation": 1, "cells": [{"node_id": 5, "cell_id": 5, "generation": 1, "genome": [3, 2]}]},
+            {"level": "L2", "generation": 2, "cells": [{"node_id": 7, "cell_id": 7, "generation": 2, "genome": [3, 3]}]},
+        ],
+    }
+
+
+def test_split_input_layout_removes_inline_genomes_and_hydrates_legacy_shape(tmp_path):
+    input_case = _unique_genome_input_case()
+    case_directory = tmp_path / "case"
+
+    written = main_benchmark.write_input_case(
+        case_directory,
+        input_case,
+        layout="split",
+        overwrite=True,
+    )
+
+    assert [path.name for path in written] == [
+        "input_truetree.json",
+        "input_biopsy.json",
+        "genome_dict.csv",
+    ]
+    assert not (case_directory / "input.json").exists()
+    true_tree_payload = json.loads((case_directory / "input_truetree.json").read_text())
+    biopsy_payload = json.loads((case_directory / "input_biopsy.json").read_text())
+    assert all("genome" not in node for node in true_tree_payload["true_tree"]["nodes"])
+    assert all(
+        "genome" not in cell
+        for biopsy in biopsy_payload["biopsies"]
+        for cell in biopsy["cells"]
+    )
+    genome_dict = pd.read_csv(case_directory / "genome_dict.csv")
+    assert set(genome_dict["cell_id"]) == {0, 5, 7}
+
+    hydrated = main_benchmark.load_input_case(case_directory)
+
+    assert hydrated["input_layout"] == main_benchmark.SPLIT_INPUT_LAYOUT
+    assert hydrated["biopsies"] == input_case["biopsies"]
+    assert main_benchmark.node_link_graph(hydrated["true_tree"]).nodes[5]["genome"] == [3, 2]
+
+
+def test_split_input_layout_reports_hard_cell_id_multiple_genome_invariant_errors():
+    input_case = _unique_genome_input_case()
+    input_case["biopsies"][0]["cells"][0]["genome"] = [9, 9]
+
+    with pytest.raises(ValueError, match="cell_id 5.*multiple genomes"):
+        main_benchmark.build_genome_dictionary(input_case)
+
+
+def test_split_input_layout_canonicalizes_duplicate_genome_cell_ids(tmp_path):
+    input_case = _unique_genome_input_case()
+    tree = main_benchmark.node_link_graph(input_case["true_tree"])
+    tree.add_node(9, genome=[3, 2], generation=2, cell_id=9)
+    tree.add_edge(5, 9, events="loss(pos=1, copies=-1);duplication(pos=1, copies=1)")
+    input_case["true_tree"] = main_benchmark.node_link_data(tree)
+    input_case["biopsies"][1]["cells"].append(
+        {"node_id": 9, "cell_id": 9, "generation": 2, "genome": [3, 2]}
+    )
+
+    written = main_benchmark.write_input_case(
+        tmp_path / "case",
+        input_case,
+        layout="split",
+        overwrite=True,
+    )
+
+    assert [path.name for path in written] == [
+        "input_truetree.json",
+        "input_biopsy.json",
+        "genome_dict.csv",
+    ]
+    genome_dict = pd.read_csv(tmp_path / "case" / "genome_dict.csv")
+    assert set(genome_dict["cell_id"]) == {0, 5, 7}
+
+    true_tree_payload = json.loads((tmp_path / "case" / "input_truetree.json").read_text())
+    node9 = next(node for node in true_tree_payload["true_tree"]["nodes"] if node["id"] == 9)
+    biopsy_payload = json.loads((tmp_path / "case" / "input_biopsy.json").read_text())
+    biopsy9 = next(
+        cell
+        for biopsy in biopsy_payload["biopsies"]
+        for cell in biopsy["cells"]
+        if cell["node_id"] == 9
+    )
+    hydrated = main_benchmark.load_input_case(tmp_path / "case")
+
+    assert node9["cell_id"] == 5
+    assert biopsy9["cell_id"] == 5
+    assert main_benchmark.node_link_graph(hydrated["true_tree"]).nodes[9]["cell_id"] == 5
+    assert main_benchmark.node_link_graph(hydrated["true_tree"]).nodes[9]["genome"] == [3, 2]
+
+
+def test_build_genome_dictionary_uses_min_cell_id_for_duplicate_genomes():
+    input_case = _unique_genome_input_case()
+    for node in input_case["true_tree"]["nodes"]:
+        if node.get("cell_id") == 7:
+            node["genome"] = [3, 2]
+    input_case["biopsies"][1]["cells"][0]["genome"] = [3, 2]
+
+    assert main_benchmark.build_genome_dictionary(input_case) == {
+        0: [2, 2],
+        5: [3, 2],
+    }
+
+
+def test_biopsy_cell_summary_reads_split_inputs_without_legacy_input(tmp_path):
+    spec = _spec(generation_count=10, seed=7, biopsy_size_scalable=0.5, biopsy_level_count=2)
+    input_case = _unique_genome_input_case(main_benchmark.case_id(spec))
+    main_benchmark.write_input_case(
+        main_benchmark.case_dir(tmp_path, spec),
+        input_case,
+        layout="split",
+        overwrite=True,
+    )
+
+    written = main_benchmark.write_biopsy_cell_summary(
+        tmp_path,
+        specs=[spec],
+        label=main_benchmark.biopsy_summary_label([spec]),
+    )
+
+    summary = pd.read_csv(written["csv"])
+    assert len(summary) == 1
+    assert summary.iloc[0]["generation"] == "g10"
+    assert summary.iloc[0]["level"] == "L2"
+    assert summary.iloc[0]["total"] == 2
+
+
+def test_split_input_layout_runs_distance_reconstruct_and_evaluate_stages(tmp_path):
+    spec = _spec(generation_count=10, seed=7, biopsy_size_scalable=0.5, biopsy_level_count=2)
+    input_case = _unique_genome_input_case(main_benchmark.case_id(spec))
+    main_benchmark.write_input_case(
+        main_benchmark.case_dir(tmp_path, spec),
+        input_case,
+        layout="split",
+        overwrite=True,
+    )
+
+    class Args:
+        output_root = tmp_path
+        input_layout = "split"
+        distance_mode = "l1"
+        overwrite = True
+        fail_fast = True
+
+    main_benchmark.run_distance_stage([spec], Args())
+    main_benchmark.run_reconstruct_stage(
+        [spec],
+        Args(),
+        [neighbor_joining_baseline],
+        ["full_cnp"],
+    )
+    main_benchmark.run_evaluate_stage(
+        [spec],
+        Args(),
+        [neighbor_joining_baseline],
+        ["full_cnp"],
+    )
+
+    result_file = main_benchmark.result_path(
+        tmp_path,
+        spec,
+        "full_cnp",
+        "neighbor_joining_baseline",
+    )
+    result = json.loads(result_file.read_text())
+    assert result["status"] == "reconstructed"
+    assert any(
+        "genome" not in node
+        for node in result["reconstructed_tree"]["nodes"]
+        if "cell_id" in node
+    )
+    rows = pd.read_csv(main_benchmark.case_result_csv_path(tmp_path, spec))
+    assert rows.iloc[0]["status"] == "evaluated"
+
+    summary = main_benchmark.check_corpus(
+        tmp_path,
+        algorithms=[neighbor_joining_baseline],
+        modes=["full_cnp"],
+        replay_reports=False,
+    )
+    assert summary["errors"] == []
+    assert summary["checked_inputs"] == 1
+    assert summary["checked_results"] == 1
+
+
 def test_compute_case_distances_deduplicates_repeated_cell_ids_with_l1_matrix():
     tree = nx.DiGraph()
     tree.add_node(0, genome=[2, 2], generation=0, cell_id=0)
@@ -332,14 +590,15 @@ def test_compute_case_distances_deduplicates_repeated_cell_ids_with_l1_matrix():
         ],
     }
 
-    updated = main_benchmark.compute_case_distances(input_case, distance_mode="l1")
+    distance_payload = main_benchmark.compute_case_distances(input_case, distance_mode="l1")
 
-    assert updated["distance_matrices"]["cnp2cnp"]["ids"] == [5, 7]
+    assert "distance_matrices" not in input_case
+    assert distance_payload["distance_matrices"]["cnp2cnp"]["ids"] == [5, 7]
     assert np.array_equal(
-        updated["distance_matrices"]["cnp2cnp"]["matrix"],
+        distance_payload["distance_matrices"]["cnp2cnp"]["matrix"],
         np.array([[0.0, 1.0], [1.0, 0.0]]),
     )
-    assert updated["unique_distance_cell_ids"] == [5, 7]
+    assert distance_payload["unique_distance_cell_ids"] == [5, 7]
 
 
 def test_compute_case_distances_allows_two_raw_cells_with_one_unique_cell_id():
@@ -359,14 +618,14 @@ def test_compute_case_distances_allows_two_raw_cells_with_one_unique_cell_id():
         ],
     }
 
-    updated = main_benchmark.compute_case_distances(input_case, distance_mode="l1")
+    distance_payload = main_benchmark.compute_case_distances(input_case, distance_mode="l1")
 
-    assert updated["distance_matrices"]["cnp2cnp"]["ids"] == [5]
+    assert distance_payload["distance_matrices"]["cnp2cnp"]["ids"] == [5]
     assert np.array_equal(
-        updated["distance_matrices"]["cnp2cnp"]["matrix"],
+        distance_payload["distance_matrices"]["cnp2cnp"]["matrix"],
         np.array([[0.0]]),
     )
-    assert updated["unique_distance_cell_ids"] == [5]
+    assert distance_payload["unique_distance_cell_ids"] == [5]
 
 
 def test_reconstruction_result_handles_two_raw_cells_with_one_unique_cell_id():
@@ -387,10 +646,11 @@ def test_reconstruction_result_handles_two_raw_cells_with_one_unique_cell_id():
             {"generation": 2, "cells": [{"node_id": 50, "cell_id": 5, "generation": 2, "genome": [2, 2]}]},
         ],
     }
-    input_case = main_benchmark.compute_case_distances(input_case, distance_mode="l1")
+    distance_payload = main_benchmark.compute_case_distances(input_case, distance_mode="l1")
 
     result = main_benchmark.reconstruction_result(
         input_case,
+        distance_payload,
         neighbor_joining_baseline,
         "biopsy_guided_top",
     )
@@ -418,6 +678,13 @@ def test_reconstruction_result_has_tree_without_evaluating_metrics():
             {"generation": 1, "cells": [{"node_id": 5, "cell_id": 5, "generation": 1, "genome": [2, 2]}]},
             {"generation": 2, "cells": [{"node_id": 7, "cell_id": 7, "generation": 2, "genome": [3, 2]}]},
         ],
+    }
+    distance_payload = {
+        "case_id": "case",
+        "corpus": main_benchmark.CORPUS_NAME,
+        "status": "ok",
+        "distance_mode": "l1",
+        "unique_distance_cell_ids": [5, 7],
         "distance_matrices": {
             "cnp2cnp": {
                 "ids": [5, 7],
@@ -426,7 +693,7 @@ def test_reconstruction_result_has_tree_without_evaluating_metrics():
         },
     }
 
-    result = main_benchmark.reconstruction_result(input_case, neighbor_joining_baseline, "full_cnp")
+    result = main_benchmark.reconstruction_result(input_case, distance_payload, neighbor_joining_baseline, "full_cnp")
     evaluated = main_benchmark.evaluate_result(input_case, result)
 
     assert result["status"] == "reconstructed"
@@ -474,19 +741,32 @@ def _write_tiny_checked_corpus(tmp_path, *, corrupt_grf=False, biopsy_level_coun
             {"level": "L2", "generation": 2, "cells": [{"node_id": 7, "cell_id": 7, "generation": 2, "genome": [3, 2]}]},
         ],
     }
-    input_case = main_benchmark.compute_case_distances(input_case, distance_mode="l1")
-    result = main_benchmark.reconstruction_result(input_case, neighbor_joining_baseline, "full_cnp")
-    result = main_benchmark.evaluate_result(input_case, result)
+    distance_payload = main_benchmark.compute_case_distances(input_case, distance_mode="l1")
+    result = main_benchmark.reconstruction_result(
+        input_case,
+        distance_payload,
+        neighbor_joining_baseline,
+        "full_cnp",
+    )
+    evaluated = main_benchmark.evaluate_result(input_case, result)
+    result_file = tmp_path / "tiny_case" / "full_cnp" / "neighbor_joining_baseline.json"
+    records = [main_benchmark.case_result_record(
+        input_case,
+        result_file,
+        evaluated,
+    )]
     if corrupt_grf:
-        result["metrics"]["grf"] = 0.0 if result["metrics"]["grf"] != 0.0 else 1.0
+        records[0]["grf"] = 0.0 if records[0]["grf"] != 0.0 else 1.0
 
     case_dir = tmp_path / "tiny_case"
     main_benchmark.write_json(case_dir / "input.json", input_case, overwrite=True)
+    main_benchmark.write_json(case_dir / "input_dm_cnp.json", distance_payload, overwrite=True)
     main_benchmark.write_json(
         case_dir / "full_cnp" / "neighbor_joining_baseline.json",
         result,
         overwrite=True,
     )
+    main_benchmark.write_case_result_file(case_dir, records, overwrite=True)
     return tmp_path
 
 
@@ -503,6 +783,110 @@ def test_check_corpus_replays_metrics_and_writes_reports(tmp_path):
     assert summary["checked_inputs"] == 1
     assert summary["checked_results"] == 1
     assert (root / "reports" / "result_rows.csv").exists()
+
+
+def test_run_evaluate_stage_writes_case_results_without_mutating_reconstruction_json(tmp_path):
+    spec = _spec(generation_count=10, seed=7, biopsy_size_scalable=0.5, biopsy_level_count=2)
+    tree = nx.DiGraph()
+    tree.add_node(0, genome=[2, 2], generation=0, cell_id=0)
+    tree.add_node(5, genome=[2, 2], generation=1, cell_id=5)
+    tree.add_node(7, genome=[3, 2], generation=2, cell_id=7)
+    tree.add_edge(0, 5, events="")
+    tree.add_edge(5, 7, events="duplication(pos=0, copies=1)")
+    input_case = {
+        "case_id": main_benchmark.case_id(spec),
+        "corpus": main_benchmark.CORPUS_NAME,
+        "status": "ok",
+        "genome_length": spec.genome_length,
+        "NUMBER_OF_GENERATIONS": spec.generation_count,
+        "seed": spec.seed,
+        "r_dist": spec.r_dist,
+        "biopsy_size_scalable": spec.biopsy_size_scalable,
+        "biopsy_level_count": spec.biopsy_level_count,
+        "biopsy_generations": [1, 2],
+        "GENERAL_EVENT_PROB": spec.general_event_prob,
+        "event_shape_label": spec.event_shape_label,
+        "GENERAL_SINGLE_OR_MULTIPLE_EVENT_PROB": spec.single_or_multiple_event_prob,
+        "GENERAL_DUPLICATION_MULTIPLICITY": spec.duplication_multiplicity,
+        "config_snapshot": {"genome_length": spec.genome_length},
+        "biopsy_selection": {"total_sampled_biopsy_cells": 2},
+        "true_tree": main_benchmark.node_link_data(tree),
+        "biopsies": [
+            {"level": "L1", "generation": 1, "cells": [{"node_id": 5, "cell_id": 5, "generation": 1, "genome": [2, 2]}]},
+            {"level": "L2", "generation": 2, "cells": [{"node_id": 7, "cell_id": 7, "generation": 2, "genome": [3, 2]}]},
+        ],
+    }
+    distance_payload = main_benchmark.compute_case_distances(input_case, distance_mode="l1")
+    result = main_benchmark.reconstruction_result(
+        input_case,
+        distance_payload,
+        neighbor_joining_baseline,
+        "full_cnp",
+    )
+    input_file = main_benchmark.input_path(tmp_path, spec)
+    result_file = main_benchmark.result_path(
+        tmp_path,
+        spec,
+        "full_cnp",
+        "neighbor_joining_baseline",
+    )
+    main_benchmark.write_json(input_file, input_case, overwrite=True)
+    main_benchmark.write_json(result_file, result, overwrite=True)
+    stored_reconstruction = json.loads(result_file.read_text())
+
+    class Args:
+        output_root = tmp_path
+        overwrite = True
+        fail_fast = True
+
+    main_benchmark.run_evaluate_stage(
+        [spec],
+        Args(),
+        [neighbor_joining_baseline],
+        ["full_cnp"],
+    )
+
+    assert json.loads(result_file.read_text()) == stored_reconstruction
+    assert "metrics" not in json.loads(result_file.read_text())
+    result_rows = pd.read_csv(main_benchmark.case_result_csv_path(tmp_path, spec))
+    assert len(result_rows) == 1
+    assert result_rows.iloc[0]["status"] == "evaluated"
+    assert result_rows.iloc[0]["mode"] == "full_cnp"
+    assert not (main_benchmark.case_dir(tmp_path, spec) / "result.json").exists()
+
+
+def test_collect_result_rows_reads_case_result_csv(tmp_path):
+    spec = _spec(generation_count=10, seed=8, biopsy_size_scalable=0.5, biopsy_level_count=2)
+    case_directory = main_benchmark.case_dir(tmp_path, spec)
+    row = {
+        **main_benchmark.case_parameters({
+            "case_id": main_benchmark.case_id(spec),
+            "genome_length": spec.genome_length,
+            "NUMBER_OF_GENERATIONS": spec.generation_count,
+            "seed": spec.seed,
+            "biopsy_size_scalable": spec.biopsy_size_scalable,
+            "biopsy_level_count": spec.biopsy_level_count,
+            "GENERAL_EVENT_PROB": spec.general_event_prob,
+            "event_shape_label": spec.event_shape_label,
+            "GENERAL_SINGLE_OR_MULTIPLE_EVENT_PROB": spec.single_or_multiple_event_prob,
+            "GENERAL_DUPLICATION_MULTIPLICITY": spec.duplication_multiplicity,
+        }),
+        "mode": "full_cnp",
+        "algorithm": "neighbor_joining_baseline",
+        "status": "evaluated",
+        "adf1": 0.5,
+        "grf": 0.75,
+        "result_file": "full_cnp/neighbor_joining_baseline.json",
+        "error": "",
+    }
+    main_benchmark.write_case_result_file(case_directory, [row], overwrite=True)
+
+    rows = main_benchmark.collect_result_rows(tmp_path)
+
+    assert len(rows) == 1
+    assert rows.iloc[0]["algorithm"] == "neighbor_joining_baseline"
+    assert rows.iloc[0]["adf1"] == pytest.approx(0.5)
+    assert not (case_directory / "result.json").exists()
 
 
 def test_check_corpus_reports_stale_metric_values(tmp_path):
@@ -594,6 +978,160 @@ def test_monotonic_summary_reports_passes_and_failures():
     assert adf1["monotonic_failures"] == 1
     assert grf["monotonic_passes"] == 2
     assert set(violations["metric"]) == {"adf1"}
+
+
+def test_write_reports_writes_biopsy_cell_summary_from_inputs(tmp_path):
+    for seed, cell_count in [(1, 2), (2, 4)]:
+        spec = _spec(generation_count=10, seed=seed, biopsy_size_scalable=0.25, biopsy_level_count=2)
+        cells = [
+            {"node_id": index, "cell_id": index, "generation": 1, "genome": [2, 2]}
+            for index in range(cell_count)
+        ]
+        input_case = {
+            "case_id": main_benchmark.case_id(spec),
+            "corpus": main_benchmark.CORPUS_NAME,
+            "status": "ok",
+            "genome_length": 10,
+            "NUMBER_OF_GENERATIONS": 10,
+            "seed": seed,
+            "r_dist": 4,
+            "biopsy_size_scalable": 0.25,
+            "biopsy_level_count": 2,
+            "biopsy_generations": [1, 2],
+            "GENERAL_EVENT_PROB": 0.01,
+            "event_shape_label": "low",
+            "GENERAL_SINGLE_OR_MULTIPLE_EVENT_PROB": 0.01,
+            "GENERAL_DUPLICATION_MULTIPLICITY": 1,
+            "config_snapshot": {"genome_length": 10},
+            "biopsy_selection": {"total_sampled_biopsy_cells": cell_count},
+            "true_tree": {"directed": True, "multigraph": False, "graph": {}, "nodes": [], "links": []},
+            "biopsies": [
+                {"level": "L1", "generation": 1, "cells": cells[:1]},
+                {"level": "L2", "generation": 2, "cells": cells[1:]},
+            ],
+        }
+        main_benchmark.write_json(main_benchmark.input_path(tmp_path, spec), input_case, overwrite=True)
+
+    written = main_benchmark.write_reports(tmp_path)
+
+    summary = pd.read_csv(written["biopsy_summary"]["csv"])
+    row = summary.iloc[0]
+    assert row["generation"] == "g10"
+    assert row["bss"] == 0.25
+    assert row["level"] == "L2"
+    assert row["n"] == 2
+    assert row["min"] == 2
+    assert row["max"] == 4
+    assert row["avg"] == pytest.approx(3.0)
+    assert row["total"] == 6
+    assert (tmp_path / "reports" / "biopsy_cell_summary.md").exists()
+
+
+def test_write_biopsy_cell_summary_can_scope_to_selected_generation(tmp_path):
+    for generation_count, seed, cell_count in [(10, 1, 2), (12, 2, 5)]:
+        spec = _spec(
+            generation_count=generation_count,
+            seed=seed,
+            biopsy_size_scalable=0.25,
+            biopsy_level_count=2,
+        )
+        cells = [
+            {"node_id": index, "cell_id": index, "generation": 1, "genome": [2, 2]}
+            for index in range(cell_count)
+        ]
+        input_case = {
+            "case_id": main_benchmark.case_id(spec),
+            "corpus": main_benchmark.CORPUS_NAME,
+            "status": "ok",
+            "genome_length": 10,
+            "NUMBER_OF_GENERATIONS": generation_count,
+            "seed": seed,
+            "r_dist": 4,
+            "biopsy_size_scalable": 0.25,
+            "biopsy_level_count": 2,
+            "biopsy_generations": [1, 2],
+            "GENERAL_EVENT_PROB": 0.01,
+            "event_shape_label": "low",
+            "GENERAL_SINGLE_OR_MULTIPLE_EVENT_PROB": 0.01,
+            "GENERAL_DUPLICATION_MULTIPLICITY": 1,
+            "config_snapshot": {"genome_length": 10},
+            "biopsy_selection": {"total_sampled_biopsy_cells": cell_count},
+            "true_tree": {"directed": True, "multigraph": False, "graph": {}, "nodes": [], "links": []},
+            "biopsies": [
+                {"level": "L1", "generation": 1, "cells": cells[:1]},
+                {"level": "L2", "generation": 2, "cells": cells[1:]},
+            ],
+        }
+        main_benchmark.write_json(main_benchmark.input_path(tmp_path, spec), input_case, overwrite=True)
+
+    g12_spec = _spec(generation_count=12, seed=2, biopsy_size_scalable=0.25, biopsy_level_count=2)
+    written = main_benchmark.write_biopsy_cell_summary(
+        tmp_path,
+        specs=[g12_spec],
+        label=main_benchmark.biopsy_summary_label([g12_spec]),
+    )
+
+    summary = pd.read_csv(written["csv"])
+    assert written["csv"].name == "biopsy_cell_summary_g12.csv"
+    assert written["markdown"].name == "biopsy_cell_summary_g12.md"
+    assert list(summary["generation"]) == ["g12"]
+    assert summary.iloc[0]["total"] == 5
+
+
+def test_timing_recorder_writes_stage_totals_without_double_counting_algorithm_rows(tmp_path):
+    recorder = main_benchmark.TimingRecorder()
+    recorder.add(
+        "distance",
+        "distance_case",
+        count=2,
+        input_files=3,
+        instances=2,
+        skipped=1,
+        read_json_seconds=0.1,
+        core_seconds=0.2,
+        write_json_seconds=0.3,
+        total_seconds=0.7,
+        distance_mode="l1",
+    )
+    recorder.add(
+        "reconstruct",
+        "reconstruct_result",
+        count=4,
+        input_files=2,
+        instances=4,
+        read_json_seconds=0.4,
+        core_seconds=1.0,
+        write_json_seconds=0.5,
+        total_seconds=2.0,
+    )
+    recorder.add(
+        "reconstruct",
+        "reconstruct_result_by_algorithm_mode",
+        scope="algorithm_mode",
+        count=4,
+        instances=4,
+        core_seconds=1.0,
+        write_json_seconds=0.5,
+        total_seconds=1.5,
+        algorithm="neighbor_joining_baseline",
+        mode="full_cnp",
+    )
+
+    written = recorder.write(tmp_path)
+
+    frame = pd.read_csv(written["csv"])
+    assert list(frame.columns) == main_benchmark.TIMING_REPORT_COLUMNS
+    assert set(frame["scope"]) == {"stage_total", "algorithm_mode"}
+
+    payload = json.loads(Path(written["json"]).read_text())
+    totals = {row["stage"]: row for row in payload["totals_by_stage"]}
+    assert totals["distance"]["count"] == 2
+    assert totals["distance"]["instances"] == 2
+    assert totals["distance"]["core_seconds"] == pytest.approx(0.2)
+    assert totals["reconstruct"]["count"] == 4
+    assert totals["reconstruct"]["instances"] == 4
+    assert totals["reconstruct"]["core_seconds"] == pytest.approx(1.0)
+    assert totals["reconstruct"]["total_seconds"] == pytest.approx(2.0)
 
 
 def test_selected_algorithms_defaults_to_core_rows():

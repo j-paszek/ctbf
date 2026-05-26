@@ -125,13 +125,54 @@ If `MODEL_TELOMERIC_REGIONS` is enabled:
 
 | Mode | Current behavior |
 | --- | --- |
-| `representative` | Within one spawning step, repeated child genomes are collapsed using genome equality. |
+| `representative` | Within one generation spawning step, repeated child genomes are collapsed using genome equality across all parents in that generation. |
 | `full` | All children are retained, even if they have identical genomes. |
+
+## Canonical Cell IDs for Recurrent Genomes
+
+`node_id` and `cell_id` have different meanings:
+
+- `node_id` is graph identity. It identifies a specific node in the simulated
+  tree.
+- `cell_id` is genotype identity. It is the label used by biopsy, distance, and
+  reconstruction components.
+
+If no copy-number event occurs on an edge, the child reuses the parent
+`cell_id`. If an event occurs, the raw simulator assigns a new `cell_id`.
+However, later copy-number events can reverse earlier changes. For example, a
+lineage can duplicate one locus and a later descendant can lose that same copy,
+returning to an already observed genome.
+
+In that recurrent-genome case, the raw tree can contain two different
+`cell_id` values with the same genome. Biopsy and export views canonicalize
+that situation by choosing the smallest observed `cell_id` for each genome.
+This is not treated as a new distinct observed genotype.
+
+The motivation is observational: downstream components receive only the biopsy
+sample and its CNP/genotype values. They do not receive extra hidden lineage
+information that would prove that one sampled cell mutated away and later
+mutated back. If two cells in one biopsy have the same genotype, the observable
+interpretation is another sample from the same line, not two distinguishable
+biopsy genotypes.
+
+The simulator therefore exposes:
+
+- `canonical_cell_id_by_genome()`: maps each observed genome to the minimum
+  `cell_id` seen with that genome;
+- `canonicalized_tree_by_genome()`: returns a copy of the tree with node
+  `cell_id` values canonicalized by genome;
+- biopsy sampling returns canonicalized genotype copies, leaving the raw
+  simulator tree unchanged.
+
+The inverse invariant remains strict: one `cell_id` must not map to multiple
+genomes. If that is encountered while building the canonical map, the simulator
+raises an error.
 
 ## Biopsy Sampling
 
 `CancerCellEvolutionSimulator.perform_biopsy` samples unique genotype
-representatives from the requested generation.
+representatives from the requested generation, then canonicalizes sampled
+`cell_id` values by genome.
 
 The simulator does not currently store an explicit population size or abundance
 weight for each genotype representative. A genotype node should therefore be
@@ -144,24 +185,43 @@ non-empty selected generation contributes at least one representative.
 
 The method supports two sizing modes:
 
-- `biopsy_size`: fixed number of cells, capped at the number available in the
-  requested generation.
+- `biopsy_size`: fixed raw sample size, capped at the number available in the
+  requested generation before canonical duplicate collapse.
 - `biopsy_size_scalable`: fraction of the requested generation. For non-empty
   generations this mode samples at least one cell, even when
-  `int(biopsy_size_scalable * generation_size)` would be `0`. Empty generations
-  still return an empty biopsy.
+  `int(biopsy_size_scalable * generation_size)` would be `0`. The computed
+  value is the raw sample size before canonical duplicate collapse. Empty
+  generations still return an empty biopsy.
 
-If both sizing modes are provided, `biopsy_size_scalable` controls the final
-sample size.
+If both sizing modes are provided, `biopsy_size_scalable` controls the raw
+sample size before canonical duplicate collapse.
+
+After the raw sample is drawn, sampled cells with the same canonical `cell_id`
+are collapsed within that single biopsy. This means the returned biopsy can be
+smaller than the requested fixed size or the size computed from
+`biopsy_size_scalable`. This collapse is intentional and allowed in the rare
+case where the raw simulator sampled multiple nodes that are observationally the
+same genotype after recurrent-genome canonicalization.
+
+The minimum-one rule for non-empty generations applies before this collapse: a
+non-empty generation still contributes at least one raw sampled representative,
+and after collapsing identical canonical genotypes it still contributes at least
+one returned genotype. Repeated `cell_id` observations in different biopsy
+levels are not collapsed by `perform_biopsy`, because each call represents one
+generation snapshot.
 
 ## Output Helpers
 
-The simulator currently exposes two helper exporters:
+The simulator currently exposes these helper/export methods:
 
 | Method | Output |
 | --- | --- |
 | `get_parameters_csv(file)` | Writes a flat per-locus table of the simulator state after initialization. |
 | `create_bed_csv(file)` | Writes a minimal BED-like CSV with `ChromosomeNumber,Start,End,Parameters`, but currently outputs placeholder `Start=0`, `End=0`, and only `CN=...`. |
+| `canonicalized_tree_by_genome()` | Returns a copy of the current tree with repeated-genome `cell_id` values canonicalized to the minimum observed `cell_id`. |
+| `tree_without_CNPs()` | Returns a copy of the current tree with node `genome` values replaced by `None`. |
+| `to_distance_matrix(output_filename, node_list=None)` | Writes a PHYLIP-like distance matrix using event-count distance along undirected tree paths and `cell_id` row labels. |
+| `plot_tree(...)` | Renders the current tree with optional biopsy and node highlighting. |
 
 ## Differences From the Old Manual
 

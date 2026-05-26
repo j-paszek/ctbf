@@ -196,6 +196,7 @@ class CancerCellEvolutionSimulator:
         # Add founder node to the graph
         self.tree.add_node(0, genome=founder_genome.tolist(), generation=0, cell_id=0)
         self.node_counter = 1
+        self._canonical_cell_id_by_genome = None
 
     @classmethod
     def from_tree(cls, input_tree: nx.DiGraph):
@@ -218,6 +219,7 @@ class CancerCellEvolutionSimulator:
         # Directly assign the tree
         self.tree = input_tree
         self.genotypes = {}
+        self._canonical_cell_id_by_genome = None
 
         # Fill genotypes dict from nodes
         for node_id, data in input_tree.nodes(data=True):
@@ -236,6 +238,69 @@ class CancerCellEvolutionSimulator:
         self.node_counter = max(self.genotypes.keys()) + 1
 
         return self
+
+    @staticmethod
+    def _genome_key(genome):
+        return tuple(int(value) for value in np.asarray(genome).tolist())
+
+    def canonical_cell_id_by_genome(self):
+        """
+        Return the canonical cell_id for each observed genome.
+
+        Copy-number events can return a lineage to an already observed genome.
+        In that case the raw simulation tree can contain multiple cell_id values
+        for the same genome. Biopsy/export consumers use the smallest observed
+        cell_id as the canonical biological genotype id for that genome.
+        """
+        if self._canonical_cell_id_by_genome is None:
+            canonical = {}
+            by_cell_id = {}
+            for genotype in self.genotypes.values():
+                genome_key = self._genome_key(genotype.genome)
+                cell_id = int(genotype.cell_id)
+                if cell_id in by_cell_id and by_cell_id[cell_id] != genome_key:
+                    raise ValueError(
+                        f"cell_id {cell_id!r} maps to multiple genomes; "
+                        "this is a hard simulator invariant error"
+                    )
+                by_cell_id[cell_id] = genome_key
+                canonical[genome_key] = min(canonical.get(genome_key, cell_id), cell_id)
+            self._canonical_cell_id_by_genome = canonical
+        return self._canonical_cell_id_by_genome
+
+    def canonical_cell_id_for_genome(self, genome):
+        return self.canonical_cell_id_by_genome()[self._genome_key(genome)]
+
+    def canonicalize_genotype_cell_id(self, genotype):
+        canonical_cell_id = self.canonical_cell_id_for_genome(genotype.genome)
+        if canonical_cell_id == genotype.cell_id:
+            return genotype
+        return Genotype(
+            genome=genotype.genome.copy(),
+            node_id=genotype.node_id,
+            generation=genotype.generation,
+            cell_id=canonical_cell_id,
+        )
+
+    def canonicalize_biopsy_genotypes(self, genotypes):
+        canonicalized = []
+        seen_cell_ids = set()
+        for genotype in genotypes:
+            canonical_genotype = self.canonicalize_genotype_cell_id(genotype)
+            if canonical_genotype.cell_id in seen_cell_ids:
+                continue
+            seen_cell_ids.add(canonical_genotype.cell_id)
+            canonicalized.append(canonical_genotype)
+        return canonicalized
+
+    def canonicalized_tree_by_genome(self):
+        tree_copy = self.tree.copy()
+        canonical = self.canonical_cell_id_by_genome()
+        for _, data in tree_copy.nodes(data=True):
+            if "genome" not in data:
+                continue
+            data["cell_id"] = canonical[self._genome_key(data["genome"])]
+        return tree_copy
 
     def get_parameters_csv(self, file):
         """Outputs a CSV file containing CN values, event probabilities, and crucial_for_survival status."""
@@ -475,6 +540,8 @@ class CancerCellEvolutionSimulator:
         # Add newly created genotypes to the dictionary
         for parent_id, child, event_summary in new_genotypes:
             self.genotypes[child.node_id] = child
+        if new_genotypes:
+            self._canonical_cell_id_by_genome = None
 
 
     def perform_biopsy(self, generation, biopsy_size=0, biopsy_size_scalable=None, seed=None):
@@ -506,7 +573,7 @@ class CancerCellEvolutionSimulator:
         # Randomly sample unique genotypes
         sampled_genotypes = np.random.choice(genotypes_from_generation, size=biopsy_size, replace=False)
 
-        return list(sampled_genotypes)
+        return self.canonicalize_biopsy_genotypes(list(sampled_genotypes))
 
     def tree_without_CNPs(self):
         """Return a copy of the tree where each node's genome is replaced with None to free memory."""

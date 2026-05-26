@@ -43,7 +43,6 @@ from freeze_algorithm_variant_cases import (  # noqa: E402
     json_ready,
     metric_summary,
     node_link_data,
-    true_tree_distance_matrix,
     unique_cells_by_cell_id,
 )
 
@@ -77,13 +76,52 @@ METRIC_FIELDS = {
     "adf1": ("metrics", "ancestors_unique_restricted", "F1"),
     "grf": ("metrics", "grf"),
 }
+LEGACY_INPUT_FILE_NAME = "input.json"
+TRUE_TREE_INPUT_FILE_NAME = "input_truetree.json"
+BIOPSY_INPUT_FILE_NAME = "input_biopsy.json"
+GENOME_DICT_FILE_NAME = "genome_dict.csv"
+INPUT_LAYOUTS = ("legacy", "split")
+SPLIT_INPUT_LAYOUT = "split_v1"
+DISTANCE_FILE_NAME = "input_dm_cnp.json"
+CASE_RESULT_CSV_NAME = "result.csv"
+RESULT_ROW_COLUMNS = [
+    "case_id",
+    "genome_length",
+    "generation_count",
+    "seed",
+    "biopsy_size_scalable",
+    "biopsy_level_count",
+    "general_event_prob",
+    "event_shape_label",
+    "single_or_multiple_event_prob",
+    "duplication_multiplicity",
+    "mode",
+    "algorithm",
+    "status",
+    "adf1",
+    "grf",
+    "result_file",
+    "error",
+]
+BIOPSY_CELL_SUMMARY_COLUMNS = [
+    "generation",
+    "bss",
+    "level",
+    "n",
+    "min",
+    "max",
+    "avg",
+    "total",
+]
 TIMING_REPORT_COLUMNS = [
     "stage",
     "operation",
+    "scope",
     "count",
     "input_files",
     "instances",
     "skipped",
+    "missing",
     "failed",
     "read_json_seconds",
     "core_seconds",
@@ -117,6 +155,7 @@ class TimingRecorder:
         record = {column: "" for column in TIMING_REPORT_COLUMNS}
         record["stage"] = stage
         record["operation"] = operation
+        record["scope"] = "stage_total"
         for key, value in values.items():
             if key in record:
                 record[key] = value
@@ -125,6 +164,7 @@ class TimingRecorder:
             "input_files",
             "instances",
             "skipped",
+            "missing",
             "failed",
         ]:
             if record[key] == "":
@@ -150,17 +190,32 @@ class TimingRecorder:
         csv_path = reports_dir / "timing_summary.csv"
         json_path = reports_dir / "timing_summary.json"
         frame.to_csv(csv_path, index=False)
-        json_payload = {
-            "columns": TIMING_REPORT_COLUMNS,
-            "records": self.records,
-            "totals_by_stage": (
-                frame.groupby("stage", dropna=False)[
-                    ["count", "instances", "read_json_seconds", "core_seconds", "write_json_seconds", "total_seconds"]
+        total_frame = frame[frame["scope"] == "stage_total"]
+        if total_frame.empty:
+            totals_by_stage = []
+        else:
+            totals_by_stage = (
+                total_frame.groupby("stage", dropna=False)[
+                    [
+                        "count",
+                        "instances",
+                        "skipped",
+                        "missing",
+                        "failed",
+                        "read_json_seconds",
+                        "core_seconds",
+                        "write_json_seconds",
+                        "total_seconds",
+                    ]
                 ]
                 .sum(numeric_only=True)
                 .reset_index()
                 .to_dict(orient="records")
-            ),
+            )
+        json_payload = {
+            "columns": TIMING_REPORT_COLUMNS,
+            "records": self.records,
+            "totals_by_stage": totals_by_stage,
         }
         write_json(json_path, json_payload, overwrite=True)
         return {"csv": csv_path, "json": json_path}
@@ -232,11 +287,31 @@ def case_dir(output_root, spec_or_case_id):
 
 
 def input_path(output_root, spec_or_case_id):
-    return case_dir(output_root, spec_or_case_id) / "input.json"
+    return case_dir(output_root, spec_or_case_id) / LEGACY_INPUT_FILE_NAME
+
+
+def input_truetree_path(output_root, spec_or_case_id):
+    return case_dir(output_root, spec_or_case_id) / TRUE_TREE_INPUT_FILE_NAME
+
+
+def input_biopsy_path(output_root, spec_or_case_id):
+    return case_dir(output_root, spec_or_case_id) / BIOPSY_INPUT_FILE_NAME
+
+
+def genome_dict_path(output_root, spec_or_case_id):
+    return case_dir(output_root, spec_or_case_id) / GENOME_DICT_FILE_NAME
+
+
+def distance_path(output_root, spec_or_case_id):
+    return case_dir(output_root, spec_or_case_id) / DISTANCE_FILE_NAME
 
 
 def result_path(output_root, spec_or_case_id, mode, algorithm_name):
     return case_dir(output_root, spec_or_case_id) / mode / f"{algorithm_name}.json"
+
+
+def case_result_csv_path(output_root, spec_or_case_id):
+    return case_dir(output_root, spec_or_case_id) / CASE_RESULT_CSV_NAME
 
 
 def stable_rng(*parts):
@@ -297,16 +372,21 @@ def latest_biopsy_generations(available_generations, biopsy_level_count):
     return list(available_generations[-biopsy_level_count:])
 
 
-def empty_distance_matrices():
+def empty_distance_payload(input_case=None, *, distance_mode=None):
+    input_case = input_case or {}
     return {
-        "cnp2cnp": {
-            "ids": [],
-            "matrix": [],
-            "distance_mode": None,
-        },
-        "true_tree": {
-            "ids": [],
-            "matrix": [],
+        "case_id": input_case.get("case_id"),
+        "corpus": input_case.get("corpus", CORPUS_NAME),
+        "status": input_case.get("status", "failed"),
+        "failure_reason": input_case.get("failure_reason"),
+        "distance_mode": distance_mode,
+        "unique_distance_cell_ids": [],
+        "distance_matrices": {
+            "cnp2cnp": {
+                "ids": [],
+                "matrix": [],
+                "distance_mode": distance_mode,
+            },
         },
     }
 
@@ -409,6 +489,11 @@ def input_case_from_simulation(spec, base_config, *, max_retries=100):
         max_retries=max_retries,
     )
     cid = case_id(spec)
+    true_tree = (
+        simulator.canonicalized_tree_by_genome()
+        if hasattr(simulator, "canonicalized_tree_by_genome")
+        else simulator.tree
+    )
     input_case = {
         "case_id": cid,
         "corpus": CORPUS_NAME,
@@ -446,13 +531,372 @@ def input_case_from_simulation(spec, base_config, *, max_retries=100):
             "fallback_used": selection["fallback_used"],
             "pre_fallback_selected_generations": selection["pre_fallback_selected_generations"],
         },
-        "true_tree": node_link_data(simulator.tree),
+        "true_tree": node_link_data(true_tree),
         "biopsies": selection["biopsies"],
     }
-    if selection["status"] != "ok":
-        input_case["distance_matrices"] = empty_distance_matrices()
-        input_case["unique_distance_cell_ids"] = []
     return input_case
+
+
+def genome_to_key(genome):
+    return tuple(json_ready(genome))
+
+
+def genome_to_csv_value(genome):
+    return json.dumps(list(genome_to_key(genome)), separators=(",", ":"))
+
+
+def collect_genome_records(input_case):
+    records = []
+    for node in input_case.get("true_tree", {}).get("nodes", []):
+        if "genome" in node:
+            records.append({
+                "source": "true_tree",
+                "node_id": node.get("id"),
+                "cell_id": node.get("cell_id"),
+                "genome": node["genome"],
+            })
+    for biopsy in input_case.get("biopsies", []):
+        for cell in biopsy.get("cells", []):
+            if "genome" in cell:
+                records.append({
+                    "source": f"biopsy:{biopsy.get('level')}",
+                    "node_id": cell.get("node_id"),
+                    "cell_id": cell.get("cell_id"),
+                    "genome": cell["genome"],
+                })
+    return records
+
+
+def canonical_cell_id_by_genome_from_input(input_case):
+    case = input_case.get("case_id", "<unknown>")
+    by_cell_id = {}
+    by_genome = {}
+    for record in collect_genome_records(input_case):
+        cell_id = record.get("cell_id")
+        if cell_id is None:
+            raise ValueError(
+                f"{case}: {record['source']} node {record.get('node_id')!r} "
+                "has genome but no cell_id"
+            )
+        genome_key = genome_to_key(record["genome"])
+        if cell_id in by_cell_id and by_cell_id[cell_id] != genome_key:
+            raise ValueError(
+                f"{case}: cell_id {cell_id!r} maps to multiple genomes; "
+                "this is a hard corpus/system invariant error"
+            )
+        by_cell_id[cell_id] = genome_key
+        if genome_key not in by_genome or cell_id < by_genome[genome_key]:
+            by_genome[genome_key] = cell_id
+    return by_genome
+
+
+def canonicalize_input_case_cell_ids_by_genome(input_case):
+    canonical = canonical_cell_id_by_genome_from_input(input_case)
+    normalized = copy.deepcopy(input_case)
+    for node in normalized.get("true_tree", {}).get("nodes", []):
+        if "genome" in node:
+            node["cell_id"] = canonical[genome_to_key(node["genome"])]
+    for biopsy in normalized.get("biopsies", []):
+        for cell in biopsy.get("cells", []):
+            if "genome" in cell:
+                cell["cell_id"] = canonical[genome_to_key(cell["genome"])]
+    return normalized
+
+
+def build_genome_dictionary(input_case):
+    by_genome = canonical_cell_id_by_genome_from_input(input_case)
+    by_cell_id = {}
+    for genome_key, cell_id in by_genome.items():
+        by_cell_id[cell_id] = genome_key
+    return {
+        cell_id: list(genome)
+        for cell_id, genome in sorted(by_cell_id.items(), key=lambda item: item[0])
+    }
+
+
+def write_genome_dict(path, genome_dict, *, overwrite=False):
+    path = Path(path)
+    if path.exists() and not overwrite:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {"cell_id": cell_id, "genome": genome_to_csv_value(genome)}
+        for cell_id, genome in genome_dict.items()
+    ]
+    pd.DataFrame(rows, columns=["cell_id", "genome"]).to_csv(path, index=False)
+    return True
+
+
+def read_genome_dict(path):
+    frame = pd.read_csv(path)
+    genome_dict = {}
+    genome_to_cell_id = {}
+    for row in frame.to_dict(orient="records"):
+        cell_id = int(row["cell_id"])
+        genome = json.loads(row["genome"])
+        genome_key = genome_to_key(genome)
+        if cell_id in genome_dict and genome_to_key(genome_dict[cell_id]) != genome_key:
+            raise ValueError(f"{path}: cell_id {cell_id!r} maps to multiple genomes")
+        if genome_key in genome_to_cell_id and genome_to_cell_id[genome_key] != cell_id:
+            raise ValueError(
+                f"{path}: genome {list(genome_key)!r} appears under multiple "
+                f"cell_id values ({genome_to_cell_id[genome_key]!r}, {cell_id!r})"
+            )
+        genome_dict[cell_id] = genome
+        genome_to_cell_id[genome_key] = cell_id
+    return genome_dict
+
+
+def strip_genomes_from_tree_payload(tree_payload, genome_dict, *, require_all=True):
+    stripped = copy.deepcopy(tree_payload)
+    for node in stripped.get("nodes", []):
+        if "genome" not in node:
+            continue
+        cell_id = node.get("cell_id")
+        if cell_id is None:
+            if require_all:
+                raise ValueError(f"tree node {node.get('id')!r} has genome but no cell_id")
+            continue
+        if cell_id not in genome_dict:
+            if require_all:
+                raise ValueError(
+                    f"tree node {node.get('id')!r} has cell_id {cell_id!r} "
+                    "missing from genome dictionary"
+                )
+            continue
+        if genome_to_key(node["genome"]) != genome_to_key(genome_dict[cell_id]):
+            raise ValueError(
+                f"tree node {node.get('id')!r} genome does not match "
+                f"genome dictionary entry for cell_id {cell_id!r}"
+            )
+        del node["genome"]
+    return stripped
+
+
+def hydrate_tree_payload(tree_payload, genome_dict, *, require_all=True):
+    hydrated = copy.deepcopy(tree_payload)
+    for node in hydrated.get("nodes", []):
+        if "genome" in node:
+            continue
+        cell_id = node.get("cell_id")
+        if cell_id is None:
+            if require_all:
+                raise ValueError(f"tree node {node.get('id')!r} has no genome and no cell_id")
+            continue
+        if cell_id not in genome_dict:
+            if require_all:
+                raise ValueError(
+                    f"tree node {node.get('id')!r} has cell_id {cell_id!r} "
+                    "missing from genome dictionary"
+                )
+            continue
+        node["genome"] = copy.deepcopy(genome_dict[cell_id])
+    return hydrated
+
+
+def strip_genomes_from_biopsies(biopsies, genome_dict):
+    stripped = copy.deepcopy(biopsies)
+    for biopsy in stripped:
+        for cell in biopsy.get("cells", []):
+            if "genome" not in cell:
+                continue
+            cell_id = cell.get("cell_id")
+            if cell_id is None:
+                raise ValueError(
+                    f"biopsy {biopsy.get('level')!r} cell {cell.get('node_id')!r} "
+                    "has genome but no cell_id"
+                )
+            if cell_id not in genome_dict:
+                raise ValueError(
+                    f"biopsy {biopsy.get('level')!r} cell {cell.get('node_id')!r} "
+                    f"has cell_id {cell_id!r} missing from genome dictionary"
+                )
+            if genome_to_key(cell["genome"]) != genome_to_key(genome_dict[cell_id]):
+                raise ValueError(
+                    f"biopsy {biopsy.get('level')!r} cell {cell.get('node_id')!r} "
+                    f"genome does not match genome dictionary entry for cell_id {cell_id!r}"
+                )
+            del cell["genome"]
+    return stripped
+
+
+def hydrate_biopsies(biopsies, genome_dict):
+    hydrated = copy.deepcopy(biopsies)
+    for biopsy in hydrated:
+        for cell in biopsy.get("cells", []):
+            if "genome" in cell:
+                continue
+            cell_id = cell.get("cell_id")
+            if cell_id is None:
+                raise ValueError(
+                    f"biopsy {biopsy.get('level')!r} cell {cell.get('node_id')!r} "
+                    "has no genome and no cell_id"
+                )
+            if cell_id not in genome_dict:
+                raise ValueError(
+                    f"biopsy {biopsy.get('level')!r} cell {cell.get('node_id')!r} "
+                    f"has cell_id {cell_id!r} missing from genome dictionary"
+                )
+            cell["genome"] = copy.deepcopy(genome_dict[cell_id])
+    return hydrated
+
+
+def split_input_payloads(input_case):
+    input_case = canonicalize_input_case_cell_ids_by_genome(input_case)
+    genome_dict = build_genome_dictionary(input_case)
+    biopsy_payload = {
+        key: copy.deepcopy(value)
+        for key, value in input_case.items()
+        if key not in {"true_tree", "biopsies"}
+    }
+    biopsy_payload.update({
+        "input_layout": SPLIT_INPUT_LAYOUT,
+        "true_tree_file": TRUE_TREE_INPUT_FILE_NAME,
+        "genome_dict_file": GENOME_DICT_FILE_NAME,
+        "biopsies": strip_genomes_from_biopsies(input_case.get("biopsies", []), genome_dict),
+    })
+    true_tree_payload = {
+        "case_id": input_case.get("case_id"),
+        "corpus": input_case.get("corpus", CORPUS_NAME),
+        "input_layout": SPLIT_INPUT_LAYOUT,
+        "genome_dict_file": GENOME_DICT_FILE_NAME,
+        "true_tree": strip_genomes_from_tree_payload(input_case["true_tree"], genome_dict),
+    }
+    return true_tree_payload, biopsy_payload, genome_dict
+
+
+def split_input_exists(case_directory):
+    case_directory = Path(case_directory)
+    return (
+        (case_directory / TRUE_TREE_INPUT_FILE_NAME).exists()
+        and (case_directory / BIOPSY_INPUT_FILE_NAME).exists()
+        and (case_directory / GENOME_DICT_FILE_NAME).exists()
+    )
+
+
+def input_artifact_exists(case_directory, layout=None):
+    case_directory = Path(case_directory)
+    if layout == "legacy":
+        return (case_directory / LEGACY_INPUT_FILE_NAME).exists()
+    if layout == "split":
+        return split_input_exists(case_directory)
+    return (case_directory / LEGACY_INPUT_FILE_NAME).exists() or split_input_exists(case_directory)
+
+
+def input_reference_path(case_directory, preferred_layout=None):
+    case_directory = Path(case_directory)
+    legacy_path = case_directory / LEGACY_INPUT_FILE_NAME
+    split_path = case_directory / BIOPSY_INPUT_FILE_NAME
+    if preferred_layout == "split" and split_input_exists(case_directory):
+        return split_path
+    if preferred_layout == "legacy" and legacy_path.exists():
+        return legacy_path
+    if legacy_path.exists():
+        return legacy_path
+    if split_input_exists(case_directory):
+        return split_path
+    return legacy_path
+
+
+def write_input_case(case_directory, input_case, *, layout="legacy", overwrite=False):
+    case_directory = Path(case_directory)
+    if layout == "legacy":
+        path = case_directory / LEGACY_INPUT_FILE_NAME
+        write_json(path, input_case, overwrite=overwrite)
+        return [path]
+    if layout != "split":
+        raise ValueError(f"Unsupported input layout: {layout}")
+    true_tree_payload, biopsy_payload, genome_dict = split_input_payloads(input_case)
+    paths = [
+        case_directory / TRUE_TREE_INPUT_FILE_NAME,
+        case_directory / BIOPSY_INPUT_FILE_NAME,
+        case_directory / GENOME_DICT_FILE_NAME,
+    ]
+    if not overwrite and any(path.exists() for path in paths):
+        return []
+    write_json(paths[0], true_tree_payload, overwrite=True)
+    write_json(paths[1], biopsy_payload, overwrite=True)
+    write_genome_dict(paths[2], genome_dict, overwrite=True)
+    return paths
+
+
+def load_split_input_case(case_directory):
+    case_directory = Path(case_directory)
+    biopsy_payload = load_json(case_directory / BIOPSY_INPUT_FILE_NAME)
+    true_tree_payload = load_json(case_directory / TRUE_TREE_INPUT_FILE_NAME)
+    genome_dict = read_genome_dict(case_directory / GENOME_DICT_FILE_NAME)
+    input_case = {
+        key: copy.deepcopy(value)
+        for key, value in biopsy_payload.items()
+        if key not in {"true_tree_file", "genome_dict_file"}
+    }
+    input_case["true_tree"] = hydrate_tree_payload(
+        true_tree_payload["true_tree"],
+        genome_dict,
+        require_all=True,
+    )
+    input_case["biopsies"] = hydrate_biopsies(
+        biopsy_payload.get("biopsies", []),
+        genome_dict,
+    )
+    input_case["input_layout"] = SPLIT_INPUT_LAYOUT
+    return input_case
+
+
+def load_input_case(case_directory_or_path, *, preferred_layout=None, hydrate=True):
+    path = Path(case_directory_or_path)
+    case_directory = path if path.is_dir() else path.parent
+    legacy_path = case_directory / LEGACY_INPUT_FILE_NAME
+    if preferred_layout == "split" and split_input_exists(case_directory):
+        return load_split_input_case(case_directory) if hydrate else load_json(case_directory / BIOPSY_INPUT_FILE_NAME)
+    if legacy_path.exists():
+        return load_json(legacy_path)
+    if split_input_exists(case_directory):
+        return load_split_input_case(case_directory) if hydrate else load_json(case_directory / BIOPSY_INPUT_FILE_NAME)
+    raise FileNotFoundError(f"No input artifact found in {case_directory}")
+
+
+def load_input_case_by_spec(output_root, spec, *, preferred_layout=None, hydrate=True):
+    return load_input_case(
+        case_dir(output_root, spec),
+        preferred_layout=preferred_layout,
+        hydrate=hydrate,
+    )
+
+
+def input_case_directories(output_root, specs=None):
+    output_root = Path(output_root)
+    if specs is not None:
+        return [
+            case_dir(output_root, spec)
+            for spec in specs
+            if input_artifact_exists(case_dir(output_root, spec))
+        ]
+    directories = {path.parent for path in output_root.glob(f"**/{LEGACY_INPUT_FILE_NAME}")}
+    directories.update(
+        path.parent
+        for path in output_root.glob(f"**/{BIOPSY_INPUT_FILE_NAME}")
+        if split_input_exists(path.parent)
+    )
+    return sorted(directories)
+
+
+def genome_dict_from_input_case(input_case):
+    return build_genome_dictionary(input_case)
+
+
+def strip_reconstructed_result_genomes(result, input_case):
+    result = copy.deepcopy(result)
+    if result.get("status") == "failed" or "reconstructed_tree" not in result:
+        return result
+    genome_dict = genome_dict_from_input_case(input_case)
+    result["reconstructed_tree"] = strip_genomes_from_tree_payload(
+        result["reconstructed_tree"],
+        genome_dict,
+        require_all=False,
+    )
+    result["genome_dict_file"] = GENOME_DICT_FILE_NAME
+    return result
 
 
 def cell_lists_from_input(input_case):
@@ -482,7 +926,7 @@ def l1_distance_matrix(cells):
 
 def compute_case_distances(input_case, *, distance_mode="cnp2cnp"):
     if input_case.get("status") != "ok":
-        return input_case
+        return empty_distance_payload(input_case, distance_mode=distance_mode)
     cell_lists = cell_lists_from_input(input_case)
     unique_cells = unique_cells_by_cell_id(cell_lists)
     if distance_mode == "cnp2cnp":
@@ -491,20 +935,23 @@ def compute_case_distances(input_case, *, distance_mode="cnp2cnp"):
         cnp_ids, cnp_matrix = l1_distance_matrix(unique_cells)
     else:
         raise ValueError(f"Unsupported distance mode: {distance_mode}")
-    true_ids, true_matrix = true_tree_distance_matrix(true_tree_from_input(input_case), cnp_ids)
-    input_case["distance_matrices"] = {
-        "cnp2cnp": {
-            "ids": cnp_ids,
-            "matrix": cnp_matrix,
-            "distance_mode": distance_mode,
-        },
-        "true_tree": {
-            "ids": true_ids,
-            "matrix": true_matrix,
+    return {
+        "case_id": input_case["case_id"],
+        "corpus": input_case.get("corpus", CORPUS_NAME),
+        "status": "ok",
+        "failure_reason": None,
+        "distance_mode": distance_mode,
+        "biopsy_cell_count": sum(len(level) for level in cell_lists),
+        "unique_biopsy_cell_count": len(cnp_ids),
+        "unique_distance_cell_ids": cnp_ids,
+        "distance_matrices": {
+            "cnp2cnp": {
+                "ids": cnp_ids,
+                "matrix": cnp_matrix,
+                "distance_mode": distance_mode,
+            },
         },
     }
-    input_case["unique_distance_cell_ids"] = cnp_ids
-    return input_case
 
 
 def actual_root(tree):
@@ -514,10 +961,10 @@ def actual_root(tree):
     return roots[0]
 
 
-def reconstruction_result(input_case, algorithm, mode):
+def reconstruction_result(input_case, distance_payload, algorithm, mode):
     cell_lists = cell_lists_from_input(input_case)
     all_in_one_sample = [[copy.deepcopy(cell) for level in cell_lists for cell in level]]
-    matrix = input_case["distance_matrices"]["cnp2cnp"]
+    matrix = distance_payload["distance_matrices"]["cnp2cnp"]
     build_kwargs = {
         "r": input_case["r_dist"],
         "seed": input_case["seed"],
@@ -556,7 +1003,18 @@ def evaluate_result(input_case, result):
     if result.get("status") == "failed":
         return result
     true_tree = true_tree_from_input(input_case)
-    reconstructed_tree = node_link_graph(result["reconstructed_tree"])
+    try:
+        genome_dict = genome_dict_from_input_case(input_case)
+    except ValueError:
+        genome_dict = None
+    reconstructed_payload = result["reconstructed_tree"]
+    if genome_dict is not None:
+        reconstructed_payload = hydrate_tree_payload(
+            reconstructed_payload,
+            genome_dict,
+            require_all=False,
+        )
+    reconstructed_tree = node_link_graph(reconstructed_payload)
     result = copy.deepcopy(result)
     result["metrics"] = metric_summary(true_tree, reconstructed_tree)
     result["status"] = "evaluated"
@@ -585,33 +1043,78 @@ def case_parameters(input_case):
     }
 
 
+def case_result_record(input_case, result_file, evaluated_result):
+    row = {
+        **case_parameters(input_case),
+        "mode": evaluated_result.get("mode"),
+        "algorithm": evaluated_result.get("algorithm", Path(result_file).stem),
+        "status": evaluated_result.get("status"),
+        "adf1": "",
+        "grf": "",
+        "result_file": str(Path(result_file).relative_to(Path(result_file).parent.parent)),
+        "error": evaluated_result.get("error", ""),
+    }
+    if evaluated_result.get("status") == "evaluated" and "metrics" in evaluated_result:
+        row["adf1"] = metric_value(evaluated_result, "adf1")
+        row["grf"] = metric_value(evaluated_result, "grf")
+    return row
+
+
+def write_case_result_file(case_directory, records, *, overwrite=True):
+    case_directory = Path(case_directory)
+    rows = [{column: record.get(column, "") for column in RESULT_ROW_COLUMNS} for record in records]
+    csv_path = case_directory / CASE_RESULT_CSV_NAME
+    if csv_path.exists() and not overwrite:
+        return csv_path
+    case_directory.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows, columns=RESULT_ROW_COLUMNS).to_csv(csv_path, index=False)
+    return csv_path
+
+
+def load_case_result_rows(case_directory):
+    case_directory = Path(case_directory)
+    csv_path = case_directory / CASE_RESULT_CSV_NAME
+    if csv_path.exists():
+        frame = pd.read_csv(csv_path)
+        return frame.to_dict(orient="records")
+    return []
+
+
 def collect_result_rows(output_root):
     rows = []
     output_root = Path(output_root)
     if not output_root.exists():
         return pd.DataFrame()
-    for input_file in sorted(output_root.glob("**/input.json")):
-        input_case = load_json(input_file)
-        if input_case.get("status") != "ok":
+    for result_csv in sorted(output_root.glob(f"**/{CASE_RESULT_CSV_NAME}")):
+        if result_csv.parent.name == "reports":
             continue
-        params = case_parameters(input_case)
-        for mode in MODES:
-            mode_dir = input_file.parent / mode
-            if not mode_dir.exists():
+        frame = pd.read_csv(result_csv)
+        for row in frame.to_dict(orient="records"):
+            if row.get("status") != "evaluated" or pd.isna(row.get("adf1")) or pd.isna(row.get("grf")):
                 continue
-            for result_file in sorted(mode_dir.glob("*.json")):
-                result = load_json(result_file)
-                if "metrics" not in result:
-                    continue
-                row = {
-                    **params,
-                    "mode": mode,
-                    "algorithm": result_file.stem,
-                    "adf1": metric_value(result, "adf1"),
-                    "grf": metric_value(result, "grf"),
-                }
-                rows.append(row)
-    return pd.DataFrame(rows)
+            rows.append(row)
+    if not rows:
+        return pd.DataFrame(columns=RESULT_ROW_COLUMNS)
+    frame = pd.DataFrame(rows)
+    for column in [
+        "genome_length",
+        "generation_count",
+        "seed",
+        "biopsy_level_count",
+        "duplication_multiplicity",
+    ]:
+        if column in frame:
+            frame[column] = frame[column].astype(int)
+    for column in [
+        "biopsy_size_scalable",
+        "general_event_prob",
+        "single_or_multiple_event_prob",
+        "adf1",
+        "grf",
+    ]:
+        if column in frame:
+            frame[column] = frame[column].astype(float)
+    return frame
 
 
 def _wilcoxon_greater(after, before):
@@ -726,15 +1229,112 @@ def write_metric_heatmaps(rows, reports_dir):
     return written
 
 
+def selected_biopsy_cell_count(input_case):
+    return sum(len(biopsy.get("cells", [])) for biopsy in input_case.get("biopsies", []))
+
+
+def input_files_for_specs(output_root, specs=None):
+    return [input_reference_path(directory) for directory in input_case_directories(output_root, specs)]
+
+
+def biopsy_summary_label(specs):
+    if not specs:
+        return None
+    generation_counts = sorted({spec.generation_count for spec in specs})
+    if len(generation_counts) == 1:
+        return f"g{generation_counts[0]}"
+    return "selected"
+
+
+def biopsy_cell_summary(output_root, specs=None):
+    rows = []
+    for case_directory in input_case_directories(output_root, specs):
+        input_case = load_input_case(case_directory, hydrate=False)
+        if input_case.get("corpus") != CORPUS_NAME:
+            continue
+        rows.append({
+            "generation": f"g{input_case['NUMBER_OF_GENERATIONS']}",
+            "bss": input_case["biopsy_size_scalable"],
+            "level": f"L{input_case['biopsy_level_count']}",
+            "selected_cells": selected_biopsy_cell_count(input_case),
+        })
+    if not rows:
+        return pd.DataFrame(columns=BIOPSY_CELL_SUMMARY_COLUMNS)
+    frame = pd.DataFrame(rows)
+    summaries = []
+    for key, group in frame.groupby(["generation", "bss", "level"], dropna=False):
+        generation, bss, level = key
+        values = group["selected_cells"].astype(int)
+        summaries.append({
+            "generation": generation,
+            "bss": float(bss),
+            "level": level,
+            "n": int(len(values)),
+            "min": int(values.min()),
+            "max": int(values.max()),
+            "avg": float(values.mean()),
+            "total": int(values.sum()),
+        })
+    summary = pd.DataFrame(summaries, columns=BIOPSY_CELL_SUMMARY_COLUMNS)
+    summary["_generation_sort"] = summary["generation"].str.replace("^g", "", regex=True).astype(int)
+    summary["_bss_sort"] = summary["bss"].astype(float)
+    summary["_level_sort"] = summary["level"].str.replace("^L", "", regex=True).astype(int)
+    summary = summary.sort_values(["_generation_sort", "_bss_sort", "_level_sort"])
+    return summary.drop(columns=["_generation_sort", "_bss_sort", "_level_sort"]).reset_index(drop=True)
+
+
+def format_biopsy_cell_summary_markdown(summary):
+    lines = []
+    if summary.empty:
+        return "No input cases found.\n"
+    for generation, group in summary.groupby("generation", sort=False):
+        lines.append(f"## {generation}")
+        lines.append("")
+        lines.append("| bss | L | n | min | max | avg | total |")
+        lines.append("|---:|---:|---:|---:|---:|---:|---:|")
+        for row in group.to_dict(orient="records"):
+            lines.append(
+                "| "
+                f"{row['bss']:g} | "
+                f"{row['level']} | "
+                f"{int(row['n']):,} | "
+                f"{int(row['min']):,} | "
+                f"{int(row['max']):,} | "
+                f"{float(row['avg']):,.2f} | "
+                f"{int(row['total']):,} |"
+            )
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_biopsy_cell_summary(output_root, specs=None, label=None):
+    reports_dir = Path(output_root) / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    summary = biopsy_cell_summary(output_root, specs=specs)
+    suffix = f"_{label}" if label else ""
+    csv_path = reports_dir / f"biopsy_cell_summary{suffix}.csv"
+    md_path = reports_dir / f"biopsy_cell_summary{suffix}.md"
+    summary.to_csv(csv_path, index=False)
+    md_path.write_text(format_biopsy_cell_summary_markdown(summary))
+    return {"csv": csv_path, "markdown": md_path}
+
+
 def write_reports(output_root):
     reports_dir = Path(output_root) / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     rows = collect_result_rows(output_root)
     rows_path = reports_dir / "result_rows.csv"
     rows.to_csv(rows_path, index=False)
+    biopsy_summary_paths = write_biopsy_cell_summary(output_root)
 
     if rows.empty:
-        return {"rows": rows_path, "summaries": [], "violations": [], "heatmaps": []}
+        return {
+            "rows": rows_path,
+            "summaries": [],
+            "violations": [],
+            "heatmaps": [],
+            "biopsy_summary": biopsy_summary_paths,
+        }
 
     biopsy_size_fixed = [
         "genome_length",
@@ -792,6 +1392,7 @@ def write_reports(output_root):
         "summaries": summary_paths,
         "violations": violation_paths,
         "heatmaps": heatmaps,
+        "biopsy_summary": biopsy_summary_paths,
     }
 
 
@@ -802,13 +1403,16 @@ def _metric_from_metrics_dict(metrics, metric):
     return float(value)
 
 
-def _check_distance_matrix(input_case, input_file):
+def _check_distance_matrix(input_case, distance_payload, distance_file):
     errors = []
-    distance_matrices = input_case.get("distance_matrices", {})
+    if distance_payload.get("case_id") != input_case.get("case_id"):
+        errors.append(
+            f"{distance_file}: case_id {distance_payload.get('case_id')!r} "
+            f"does not match input {input_case.get('case_id')!r}"
+        )
+    distance_matrices = distance_payload.get("distance_matrices", {})
     if "cnp2cnp" not in distance_matrices:
-        return [f"{input_file}: missing distance_matrices.cnp2cnp"]
-    if "true_tree" not in distance_matrices:
-        errors.append(f"{input_file}: missing distance_matrices.true_tree")
+        return [f"{distance_file}: missing distance_matrices.cnp2cnp"]
 
     cell_lists = cell_lists_from_input(input_case)
     expected_ids = [cell.get_id() for cell in unique_cells_by_cell_id(cell_lists)]
@@ -816,23 +1420,14 @@ def _check_distance_matrix(input_case, input_file):
     ids = matrix_payload.get("ids")
     matrix = np.array(matrix_payload.get("matrix", []), dtype=float)
     if ids != expected_ids:
-        errors.append(f"{input_file}: cnp2cnp ids {ids} do not match unique biopsy cell ids {expected_ids}")
+        errors.append(f"{distance_file}: cnp2cnp ids {ids} do not match unique biopsy cell ids {expected_ids}")
     if matrix.shape != (len(ids), len(ids)):
-        errors.append(f"{input_file}: cnp2cnp matrix shape {matrix.shape} does not match ids length {len(ids)}")
+        errors.append(f"{distance_file}: cnp2cnp matrix shape {matrix.shape} does not match ids length {len(ids)}")
     elif len(ids) > 0:
         if not np.allclose(np.diag(matrix), 0.0):
-            errors.append(f"{input_file}: cnp2cnp matrix diagonal is not zero")
+            errors.append(f"{distance_file}: cnp2cnp matrix diagonal is not zero")
         if not np.allclose(matrix, matrix.T):
-            errors.append(f"{input_file}: cnp2cnp matrix is not symmetric")
-
-    true_payload = distance_matrices.get("true_tree")
-    if true_payload:
-        true_ids = true_payload.get("ids")
-        true_matrix = np.array(true_payload.get("matrix", []), dtype=float)
-        if true_ids != ids:
-            errors.append(f"{input_file}: true_tree ids {true_ids} do not match cnp2cnp ids {ids}")
-        if true_matrix.shape != (len(ids), len(ids)):
-            errors.append(f"{input_file}: true_tree matrix shape {true_matrix.shape} does not match ids length {len(ids)}")
+            errors.append(f"{distance_file}: cnp2cnp matrix is not symmetric")
     return errors
 
 
@@ -893,23 +1488,33 @@ def _check_biopsy_order(input_case, input_file):
     return errors
 
 
-def _check_result_metrics(input_case, result_file):
+def _check_result_metrics(input_case, result_file, result_row):
     result = load_json(result_file)
     if result.get("status") == "failed":
         return [f"{result_file}: reconstructed result status is failed"]
     if "reconstructed_tree" not in result:
         return [f"{result_file}: missing reconstructed_tree"]
-    if "metrics" not in result:
-        return [f"{result_file}: missing metrics"]
 
     errors = []
     recomputed = evaluate_result(input_case, result)
+    if result_row is None:
+        return [f"{result_file}: missing evaluated row in {CASE_RESULT_CSV_NAME}"]
+    if result_row.get("status") != "evaluated":
+        errors.append(
+            f"{result_file}: evaluated row status is {result_row.get('status')!r}, "
+            "expected 'evaluated'"
+        )
     for metric in METRICS:
-        stored = metric_value(result, metric)
+        stored_value = result_row.get(metric)
+        if stored_value in ("", None) or pd.isna(stored_value):
+            errors.append(f"{result_file}: missing {metric} in {CASE_RESULT_CSV_NAME}")
+            continue
+        stored = float(stored_value)
         current = metric_value(recomputed, metric)
         if abs(stored - current) > CHECK_TOLERANCE:
             errors.append(
-                f"{result_file}: stored {metric}={stored} does not match recomputed {current}"
+                f"{result_file}: stored {metric}={stored} in {CASE_RESULT_CSV_NAME} "
+                f"does not match recomputed {current}"
             )
     return errors
 
@@ -921,14 +1526,19 @@ def check_corpus(output_root, algorithms=None, modes=None, *, replay_reports=Tru
     if algorithms is not None:
         algorithm_names = [getattr(algorithm, "__name__", str(algorithm)) for algorithm in algorithms]
 
-    input_files = sorted(output_root.glob("**/input.json"))
+    case_directories = input_case_directories(output_root)
     errors = []
     checked_inputs = 0
     failed_inputs = 0
     checked_results = 0
     missing_results = 0
-    for input_file in input_files:
-        input_case = load_json(input_file)
+    for case_directory in case_directories:
+        input_file = input_reference_path(case_directory)
+        try:
+            input_case = load_input_case(case_directory)
+        except Exception as exc:
+            errors.append(f"{input_file}: failed to load input artifact: {exc}")
+            continue
         if input_case.get("corpus") != CORPUS_NAME:
             errors.append(f"{input_file}: corpus is {input_case.get('corpus')!r}, expected {CORPUS_NAME!r}")
         required_fields = [
@@ -950,6 +1560,11 @@ def check_corpus(output_root, algorithms=None, modes=None, *, replay_reports=Tru
         for field in required_fields:
             if field not in input_case:
                 errors.append(f"{input_file}: missing {field}")
+        if "distance_matrices" in input_case or "unique_distance_cell_ids" in input_case:
+            errors.append(
+                f"{input_file}: distance data must be stored in {DISTANCE_FILE_NAME}, "
+                "not input.json"
+            )
         biopsy_level_count = input_case.get("biopsy_level_count")
         if biopsy_level_count not in DEFAULT_BIOPSY_LEVEL_COUNTS:
             errors.append(
@@ -959,15 +1574,20 @@ def check_corpus(output_root, algorithms=None, modes=None, *, replay_reports=Tru
         errors.extend(_check_biopsy_order(input_case, input_file))
         if input_case.get("status") != "ok":
             failed_inputs += 1
-            distance_matrices = input_case.get("distance_matrices")
-            if distance_matrices != empty_distance_matrices():
-                errors.append(f"{input_file}: failed input must record empty distance matrices")
             continue
 
         checked_inputs += 1
-        errors.extend(_check_distance_matrix(input_case, input_file))
+        distance_file = case_directory / DISTANCE_FILE_NAME
+        if not distance_file.exists():
+            errors.append(f"{input_file}: missing {DISTANCE_FILE_NAME}")
+        else:
+            errors.extend(_check_distance_matrix(input_case, load_json(distance_file), distance_file))
+        evaluated_rows = {
+            (str(row.get("mode")), str(row.get("algorithm"))): row
+            for row in load_case_result_rows(case_directory)
+        }
         for mode in modes:
-            mode_dir = input_file.parent / mode
+            mode_dir = case_directory / mode
             names = algorithm_names
             if names is None:
                 names = sorted(path.stem for path in mode_dir.glob("*.json")) if mode_dir.exists() else []
@@ -978,19 +1598,26 @@ def check_corpus(output_root, algorithms=None, modes=None, *, replay_reports=Tru
                     errors.append(f"{input_file}: missing result {mode}/{algorithm_name}.json")
                     continue
                 checked_results += 1
-                errors.extend(_check_result_metrics(input_case, result_file))
+                result_row = evaluated_rows.get((mode, algorithm_name))
+                errors.extend(_check_result_metrics(input_case, result_file, result_row))
 
     report_paths = []
     if replay_reports:
         written = write_reports(output_root)
-        for value in [written["rows"], *written["summaries"], *written["violations"], *written["heatmaps"]]:
+        for value in [
+            written["rows"],
+            *written["summaries"],
+            *written["violations"],
+            *written["heatmaps"],
+            *written["biopsy_summary"].values(),
+        ]:
             path = Path(value)
             report_paths.append(path)
             if not path.exists():
                 errors.append(f"{path}: expected report file was not written")
 
     return {
-        "input_files": len(input_files),
+        "input_files": len(case_directories),
         "checked_inputs": checked_inputs,
         "failed_inputs": failed_inputs,
         "checked_results": checked_results,
@@ -1075,59 +1702,176 @@ def selected_case_specs(args):
     return specs
 
 
-def run_simulate_stage(specs, args, base_config):
+def run_simulate_stage(specs, args, base_config, timing=None):
+    stage_start = time.perf_counter()
+    core_seconds = 0.0
+    write_seconds = 0.0
+    completed = 0
+    skipped = 0
+    failed = 0
+    input_layout = getattr(args, "input_layout", "legacy")
     for spec in specs:
-        path = input_path(args.output_root, spec)
-        if path.exists() and not args.overwrite:
-            print(f"exists input {path}")
+        directory = case_dir(args.output_root, spec)
+        if input_artifact_exists(directory, layout=input_layout) and not args.overwrite:
+            print(f"exists input {input_reference_path(directory, preferred_layout=input_layout)}")
+            skipped += 1
             continue
-        input_case = input_case_from_simulation(
-            spec,
-            base_config,
-            max_retries=args.max_biopsy_generation_retries,
+        try:
+            core_start = time.perf_counter()
+            input_case = input_case_from_simulation(
+                spec,
+                base_config,
+                max_retries=args.max_biopsy_generation_retries,
+            )
+            core_seconds += time.perf_counter() - core_start
+        except Exception:
+            failed += 1
+            raise
+        write_start = time.perf_counter()
+        written = write_input_case(
+            directory,
+            input_case,
+            layout=input_layout,
+            overwrite=True,
         )
-        write_json(path, input_case, overwrite=True)
-        print(f"wrote input {path}")
+        write_seconds += time.perf_counter() - write_start
+        completed += 1
+        print(f"wrote input {written[0] if written else directory}")
+    if timing is not None:
+        timing.add(
+            "simulate",
+            "simulate_case",
+            count=completed,
+            input_files=len(specs),
+            instances=completed,
+            skipped=skipped,
+            failed=failed,
+            core_seconds=core_seconds,
+            write_json_seconds=write_seconds,
+            total_seconds=time.perf_counter() - stage_start,
+        )
 
 
-def run_distance_stage(specs, args):
+def run_distance_stage(specs, args, timing=None):
+    stage_start = time.perf_counter()
+    read_seconds = 0.0
+    core_seconds = 0.0
+    write_seconds = 0.0
+    completed = 0
+    skipped = 0
+    failed = 0
+    missing = 0
+    input_layout = getattr(args, "input_layout", "legacy")
     for spec in specs:
-        path = input_path(args.output_root, spec)
-        if not path.exists():
-            print(f"missing input {path}")
+        directory = case_dir(args.output_root, spec)
+        output_file = distance_path(args.output_root, spec)
+        if not input_artifact_exists(directory):
+            print(f"missing input {input_reference_path(directory)}")
+            missing += 1
             continue
-        input_case = load_json(path)
+        read_start = time.perf_counter()
+        input_case = load_input_case(
+            directory,
+            preferred_layout=input_layout,
+        )
+        read_seconds += time.perf_counter() - read_start
         if input_case.get("status") != "ok":
-            print(f"skip failed input {path}")
+            print(f"skip failed input {input_reference_path(directory, preferred_layout=input_layout)}")
+            skipped += 1
             continue
-        if input_case.get("distance_matrices") and not args.overwrite:
-            print(f"exists distances {path}")
+        if output_file.exists() and not args.overwrite:
+            print(f"exists distances {output_file}")
+            skipped += 1
             continue
-        input_case = compute_case_distances(input_case, distance_mode=args.distance_mode)
-        write_json(path, input_case, overwrite=True)
-        print(f"wrote distances {path}")
+        try:
+            core_start = time.perf_counter()
+            distance_payload = compute_case_distances(input_case, distance_mode=args.distance_mode)
+            core_seconds += time.perf_counter() - core_start
+        except Exception:
+            failed += 1
+            raise
+        write_start = time.perf_counter()
+        write_json(output_file, distance_payload, overwrite=True)
+        write_seconds += time.perf_counter() - write_start
+        completed += 1
+        print(f"wrote distances {output_file}")
+    if timing is not None:
+        timing.add(
+            "distance",
+            "distance_case",
+            count=completed,
+            input_files=len(specs),
+            instances=completed,
+            skipped=skipped,
+            missing=missing,
+            failed=failed,
+            read_json_seconds=read_seconds,
+            core_seconds=core_seconds,
+            write_json_seconds=write_seconds,
+            total_seconds=time.perf_counter() - stage_start,
+            distance_mode=args.distance_mode,
+        )
 
 
-def run_reconstruct_stage(specs, args, algorithms, modes):
+def run_reconstruct_stage(specs, args, algorithms, modes, timing=None):
+    stage_start = time.perf_counter()
+    read_seconds = 0.0
+    core_seconds = 0.0
+    write_seconds = 0.0
+    completed = 0
+    skipped = 0
+    failed = 0
+    missing = 0
+    by_algorithm_mode = {}
+    input_layout = getattr(args, "input_layout", "legacy")
     for spec in specs:
-        input_file = input_path(args.output_root, spec)
-        if not input_file.exists():
+        directory = case_dir(args.output_root, spec)
+        input_file = input_reference_path(directory, preferred_layout=input_layout)
+        distance_file = distance_path(args.output_root, spec)
+        if not input_artifact_exists(directory):
             print(f"missing input {input_file}")
+            missing += 1
             continue
-        input_case = load_json(input_file)
-        if input_case.get("status") != "ok" or "cnp2cnp" not in input_case.get("distance_matrices", {}):
+        if not distance_file.exists():
+            print(f"missing distances {distance_file}")
+            missing += 1
+            continue
+        read_start = time.perf_counter()
+        input_case = load_input_case(
+            directory,
+            preferred_layout=input_layout,
+        )
+        distance_payload = load_json(distance_file)
+        read_seconds += time.perf_counter() - read_start
+        if input_case.get("status") != "ok" or "cnp2cnp" not in distance_payload.get("distance_matrices", {}):
             print(f"skip input without distances {input_file}")
+            skipped += 1
             continue
         for algorithm in algorithms:
             algorithm_name = getattr(algorithm, "__name__", str(algorithm))
             for mode in modes:
+                timing_key = (algorithm_name, mode)
+                by_algorithm_mode.setdefault(timing_key, {
+                    "count": 0,
+                    "core_seconds": 0.0,
+                    "write_json_seconds": 0.0,
+                    "failed": 0,
+                    "skipped": 0,
+                })
                 output_file = result_path(args.output_root, spec, mode, algorithm_name)
                 if output_file.exists() and not args.overwrite:
                     print(f"exists result {output_file}")
+                    skipped += 1
+                    by_algorithm_mode[timing_key]["skipped"] += 1
                     continue
+                core_start = time.perf_counter()
                 try:
-                    result = reconstruction_result(input_case, algorithm, mode)
+                    result = reconstruction_result(input_case, distance_payload, algorithm, mode)
+                    if input_case.get("input_layout") == SPLIT_INPUT_LAYOUT:
+                        result = strip_reconstructed_result_genomes(result, input_case)
                 except Exception as exc:
+                    failed += 1
+                    by_algorithm_mode[timing_key]["failed"] += 1
                     result = {
                         "case_id": input_case["case_id"],
                         "corpus": CORPUS_NAME,
@@ -1138,38 +1882,171 @@ def run_reconstruct_stage(specs, args, algorithms, modes):
                     }
                     if args.fail_fast:
                         raise
+                core_elapsed = time.perf_counter() - core_start
+                core_seconds += core_elapsed
+                by_algorithm_mode[timing_key]["core_seconds"] += core_elapsed
+                write_start = time.perf_counter()
                 write_json(output_file, result, overwrite=True)
+                write_elapsed = time.perf_counter() - write_start
+                write_seconds += write_elapsed
+                by_algorithm_mode[timing_key]["write_json_seconds"] += write_elapsed
+                completed += 1
+                by_algorithm_mode[timing_key]["count"] += 1
                 print(f"wrote result {output_file}")
+    if timing is not None:
+        total_seconds = time.perf_counter() - stage_start
+        timing.add(
+            "reconstruct",
+            "reconstruct_result",
+            count=completed,
+            input_files=len(specs),
+            instances=completed,
+            skipped=skipped,
+            missing=missing,
+            failed=failed,
+            read_json_seconds=read_seconds,
+            core_seconds=core_seconds,
+            write_json_seconds=write_seconds,
+            total_seconds=total_seconds,
+        )
+        for (algorithm_name, mode), values in sorted(by_algorithm_mode.items()):
+            timing.add(
+                "reconstruct",
+                "reconstruct_result_by_algorithm_mode",
+                scope="algorithm_mode",
+                count=values["count"],
+                instances=values["count"],
+                skipped=values["skipped"],
+                failed=values["failed"],
+                core_seconds=values["core_seconds"],
+                write_json_seconds=values["write_json_seconds"],
+                total_seconds=values["core_seconds"] + values["write_json_seconds"],
+                algorithm=algorithm_name,
+                mode=mode,
+            )
 
 
-def run_evaluate_stage(specs, args, algorithms, modes):
+def run_evaluate_stage(specs, args, algorithms, modes, timing=None):
+    stage_start = time.perf_counter()
+    read_seconds = 0.0
+    core_seconds = 0.0
+    write_seconds = 0.0
+    completed = 0
+    skipped = 0
+    failed = 0
+    missing = 0
+    by_algorithm_mode = {}
+    input_layout = getattr(args, "input_layout", "legacy")
     for spec in specs:
-        input_file = input_path(args.output_root, spec)
-        if not input_file.exists():
+        case_directory = case_dir(args.output_root, spec)
+        input_file = input_reference_path(case_directory, preferred_layout=input_layout)
+        case_result_csv = case_result_csv_path(args.output_root, spec)
+        if not input_artifact_exists(case_directory):
             print(f"missing input {input_file}")
+            missing += 1
             continue
-        input_case = load_json(input_file)
+        if case_result_csv.exists() and not args.overwrite:
+            print(f"exists evaluated results {case_result_csv}")
+            skipped += 1
+            continue
+        read_start = time.perf_counter()
+        input_case = load_input_case(
+            case_directory,
+            preferred_layout=input_layout,
+        )
+        read_seconds += time.perf_counter() - read_start
         if input_case.get("status") != "ok":
+            skipped += 1
             continue
+        case_records = []
         for algorithm in algorithms:
             algorithm_name = getattr(algorithm, "__name__", str(algorithm))
             for mode in modes:
+                timing_key = (algorithm_name, mode)
+                by_algorithm_mode.setdefault(timing_key, {
+                    "count": 0,
+                    "core_seconds": 0.0,
+                    "read_json_seconds": 0.0,
+                    "write_json_seconds": 0.0,
+                    "failed": 0,
+                    "skipped": 0,
+                    "missing": 0,
+                })
                 output_file = result_path(args.output_root, spec, mode, algorithm_name)
                 if not output_file.exists():
+                    missing += 1
+                    by_algorithm_mode[timing_key]["missing"] += 1
                     continue
+                read_start = time.perf_counter()
                 result = load_json(output_file)
-                if "metrics" in result and not args.overwrite:
-                    print(f"exists metrics {output_file}")
-                    continue
+                read_elapsed = time.perf_counter() - read_start
+                read_seconds += read_elapsed
+                by_algorithm_mode[timing_key]["read_json_seconds"] += read_elapsed
+                core_start = time.perf_counter()
                 try:
-                    result = evaluate_result(input_case, result)
+                    evaluated = evaluate_result(input_case, result)
                 except Exception as exc:
-                    result["status"] = "failed"
-                    result["error"] = str(exc)
+                    failed += 1
+                    by_algorithm_mode[timing_key]["failed"] += 1
+                    evaluated = copy.deepcopy(result)
+                    evaluated["status"] = "failed"
+                    evaluated["error"] = str(exc)
                     if args.fail_fast:
                         raise
-                write_json(output_file, result, overwrite=True)
-                print(f"wrote metrics {output_file}")
+                core_elapsed = time.perf_counter() - core_start
+                core_seconds += core_elapsed
+                by_algorithm_mode[timing_key]["core_seconds"] += core_elapsed
+                case_records.append(case_result_record(input_case, output_file, evaluated))
+                completed += 1
+                by_algorithm_mode[timing_key]["count"] += 1
+        if case_records:
+            write_start = time.perf_counter()
+            written = write_case_result_file(case_directory, case_records, overwrite=True)
+            write_elapsed = time.perf_counter() - write_start
+            write_seconds += write_elapsed
+            for record in case_records:
+                timing_key = (record["algorithm"], record["mode"])
+                by_algorithm_mode[timing_key]["write_json_seconds"] += (
+                    write_elapsed / len(case_records)
+                )
+            print(f"wrote evaluated results {written}")
+    if timing is not None:
+        total_seconds = time.perf_counter() - stage_start
+        timing.add(
+            "evaluate",
+            "evaluate_result",
+            count=completed,
+            input_files=len(specs),
+            instances=completed,
+            skipped=skipped,
+            missing=missing,
+            failed=failed,
+            read_json_seconds=read_seconds,
+            core_seconds=core_seconds,
+            write_json_seconds=write_seconds,
+            total_seconds=total_seconds,
+        )
+        for (algorithm_name, mode), values in sorted(by_algorithm_mode.items()):
+            timing.add(
+                "evaluate",
+                "evaluate_result_by_algorithm_mode",
+                scope="algorithm_mode",
+                count=values["count"],
+                instances=values["count"],
+                skipped=values["skipped"],
+                missing=values["missing"],
+                failed=values["failed"],
+                read_json_seconds=values["read_json_seconds"],
+                core_seconds=values["core_seconds"],
+                write_json_seconds=values["write_json_seconds"],
+                total_seconds=(
+                    values["read_json_seconds"]
+                    + values["core_seconds"]
+                    + values["write_json_seconds"]
+                ),
+                algorithm=algorithm_name,
+                mode=mode,
+            )
 
 
 def run_check_stage(args, algorithms, modes):
@@ -1181,12 +2058,43 @@ def run_check_stage(args, algorithms, modes):
         raise AssertionError(f"main monotonicity corpus check failed with {len(summary['errors'])} error(s)")
 
 
+def run_biopsy_summary_stage(specs, args, timing=None):
+    stage_start = time.perf_counter()
+    core_start = time.perf_counter()
+    written = write_biopsy_cell_summary(
+        args.output_root,
+        specs=specs,
+        label=biopsy_summary_label(specs),
+    )
+    core_seconds = time.perf_counter() - core_start
+    if timing is not None:
+        timing.add(
+            "biopsy_summary",
+            "write_biopsy_cell_summary",
+            count=1,
+            input_files=len(input_files_for_specs(args.output_root, specs)),
+            instances=1,
+            core_seconds=core_seconds,
+            total_seconds=time.perf_counter() - stage_start,
+        )
+    print("Wrote biopsy-cell summary:", written)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Build and report the main sampling-monotonicity benchmark corpus.")
     parser.add_argument(
         "--stage",
         action="append",
-        choices=["simulate", "distance", "reconstruct", "evaluate", "report", "check", "all"],
+        choices=[
+            "simulate",
+            "distance",
+            "reconstruct",
+            "evaluate",
+            "biopsy-summary",
+            "report",
+            "check",
+            "all",
+        ],
         help="Stage to run. Can be passed multiple times. Defaults to all.",
     )
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
@@ -1204,6 +2112,7 @@ def parse_args():
     parser.add_argument("--algorithm-name", action="append", default=None)
     parser.add_argument("--mode", action="append", choices=MODES, default=None)
     parser.add_argument("--distance-mode", choices=["cnp2cnp", "l1"], default="cnp2cnp")
+    parser.add_argument("--input-layout", choices=INPUT_LAYOUTS, default="legacy")
     parser.add_argument("--max-biopsy-generation-retries", type=int, default=100)
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--limit", type=int, default=None)
@@ -1237,18 +2146,33 @@ def main():
     with open(args.config, "r") as f:
         base_config = json.load(f)
 
+    timing = TimingRecorder()
+    exit_code = 0
     for stage in stages:
         try:
             if stage == "simulate":
-                run_simulate_stage(specs, args, base_config)
+                run_simulate_stage(specs, args, base_config, timing=timing)
             elif stage == "distance":
-                run_distance_stage(specs, args)
+                run_distance_stage(specs, args, timing=timing)
             elif stage == "reconstruct":
-                run_reconstruct_stage(specs, args, algorithms, modes)
+                run_reconstruct_stage(specs, args, algorithms, modes, timing=timing)
             elif stage == "evaluate":
-                run_evaluate_stage(specs, args, algorithms, modes)
+                run_evaluate_stage(specs, args, algorithms, modes, timing=timing)
+            elif stage == "biopsy-summary":
+                run_biopsy_summary_stage(specs, args, timing=timing)
             elif stage == "report":
+                stage_start = time.perf_counter()
+                core_start = time.perf_counter()
                 written = write_reports(args.output_root)
+                core_seconds = time.perf_counter() - core_start
+                timing.add(
+                    "report",
+                    "write_reports",
+                    count=1,
+                    instances=1,
+                    core_seconds=core_seconds,
+                    total_seconds=time.perf_counter() - stage_start,
+                )
                 print("Wrote reports:", written)
             elif stage == "check":
                 run_check_stage(args, algorithms, modes)
@@ -1256,8 +2180,12 @@ def main():
             traceback.print_exc()
             if args.fail_fast:
                 raise
-            return 1
-    return 0
+            exit_code = 1
+            break
+    timing_written = timing.write(args.output_root)
+    if timing_written:
+        print("Wrote timing reports:", timing_written)
+    return exit_code
 
 
 if __name__ == "__main__":
