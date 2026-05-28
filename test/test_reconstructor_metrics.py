@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from reconstructor_engine import initialize_reconstruction_state
 from reconstructor_metrics import (
@@ -24,6 +25,22 @@ def _matrix():
         ],
         dtype=float,
     )
+
+
+def _nj_q_matrix_loop_reference(D):
+    n = D.shape[0]
+    Q = np.full((n, n), np.inf, dtype=float)
+    if n <= 2:
+        return Q
+
+    total = sum_distance_centrality(D)
+    factor = n - 2
+    for i in range(n):
+        for j in range(i + 1, n):
+            q_val = factor * D[i, j] - total[i] - total[j]
+            Q[i, j] = q_val
+            Q[j, i] = q_val
+    return Q
 
 
 def test_upper_triangle_pairs_excludes_diagonal():
@@ -68,6 +85,15 @@ def test_nj_q_matrix_and_distance_asymmetry_score():
             ]
         ),
     )
+
+
+@pytest.mark.parametrize("n", [1, 2, 3, 7])
+def test_nj_q_matrix_matches_loop_reference(n):
+    rng = np.random.default_rng(123)
+    D = rng.random((n, n))
+    np.fill_diagonal(D, 0.0)
+
+    np.testing.assert_allclose(nj_q_matrix(D), _nj_q_matrix_loop_reference(D), rtol=0.0, atol=0.0)
 
 
 def test_adaptive_and_anticentral_metric_helpers():

@@ -24,7 +24,7 @@ def _upper_triangle_pairs(n):
     return upper_triangle_pairs(n)
 
 
-def _best_pair_from_score_matrix(score, minimize=True):
+def _best_pair_from_score_matrix_loop(score, minimize=True):
     best_pair = None
     best_score = None
 
@@ -44,6 +44,32 @@ def _best_pair_from_score_matrix(score, minimize=True):
         raise ValueError("No upper-triangle pairs available in score matrix.")
 
     return best_pair[0], best_pair[1], best_score
+
+
+def _best_pair_from_score_matrix(score, minimize=True):
+    tri_i, tri_j = np.triu_indices(score.shape[0], k=1)
+    if len(tri_i) == 0:
+        raise ValueError("No upper-triangle pairs available in score matrix.")
+
+    values = score[tri_i, tri_j]
+    if (
+        not np.issubdtype(values.dtype, np.number)
+        or np.issubdtype(values.dtype, np.complexfloating)
+    ):
+        return _best_pair_from_score_matrix_loop(score, minimize)
+
+    if np.issubdtype(values.dtype, np.inexact) and np.isnan(values[0]):
+        return int(tri_i[0]), int(tri_j[0]), values[0]
+
+    comparable_values = values
+    if np.issubdtype(values.dtype, np.inexact):
+        nan_mask = np.isnan(values)
+        if np.any(nan_mask):
+            comparable_values = values.copy()
+            comparable_values[nan_mask] = np.inf if minimize else -np.inf
+
+    best_offset = int(np.argmin(comparable_values) if minimize else np.argmax(comparable_values))
+    return int(tri_i[best_offset]), int(tri_j[best_offset]), values[best_offset]
 
 
 def _ordered_pairs_by_score_matrix(score, minimize=True):
@@ -112,16 +138,24 @@ def make_hybrid_opt_pair_selector(
         centrality = hybrid_opt_centrality(state, epsilon, k, tau, reverse_centrality)
         Q = nj_q_matrix(D) if use_q_as_secondary and n > 2 else None
 
+        tri_i, tri_j = np.triu_indices(n, k=1)
+        d_values = D[tri_i, tri_j]
+        asym_values = np.abs(centrality[tri_i] - centrality[tri_j])
+        score_values = alpha * d_values - beta * asym_values
+        q_values = None
+        if Q is not None:
+            q_values = Q[tri_i, tri_j]
+            score_values = score_values - gamma * q_values
+
         best_score = np.inf
         best_candidates = []
-        for i, j in _upper_triangle_pairs(n):
-            d_ij = D[i, j]
-            asym = abs(centrality[i] - centrality[j])
-            score = alpha * d_ij - beta * asym
-            if Q is not None:
-                score -= gamma * Q[i, j]
-
-            candidate = (i, j, d_ij, asym, Q[i, j] if Q is not None else None)
+        for pair_index, score in enumerate(score_values):
+            i = int(tri_i[pair_index])
+            j = int(tri_j[pair_index])
+            d_ij = d_values[pair_index]
+            asym = asym_values[pair_index]
+            q_ij = q_values[pair_index] if q_values is not None else None
+            candidate = (i, j, d_ij, asym, q_ij)
             if score < best_score - 1e-12:
                 best_score = score
                 best_candidates = [candidate]

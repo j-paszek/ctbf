@@ -31,11 +31,10 @@ def nj_q_matrix(D):
 
     total = sum_distance_centrality(D)
     factor = n - 2
-    for i in range(n):
-        for j in range(i + 1, n):
-            q_val = factor * D[i, j] - total[i] - total[j]
-            Q[i, j] = q_val
-            Q[j, i] = q_val
+    tri_i, tri_j = np.triu_indices(n, k=1)
+    q_values = factor * D[tri_i, tri_j] - total[tri_i] - total[tri_j]
+    Q[tri_i, tri_j] = q_values
+    Q[tri_j, tri_i] = q_values
     return Q
 
 

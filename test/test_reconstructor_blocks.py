@@ -24,7 +24,9 @@ from reconstructor_pair_selection import (
     _anticentral_adaptive_v3_score_matrix,
     _best_pair_from_score_matrix,
     _ordered_pairs_by_score_matrix,
+    make_hybrid_opt_pair_selector,
 )
+from reconstructor_metrics import hybrid_opt_centrality, nj_q_matrix
 from simulator import Genotype
 
 
@@ -60,6 +62,77 @@ def _anticentral_adaptive_v3_score_matrix_loop_reference(D, c, rng, alpha=1.0, b
     return score
 
 
+def _hybrid_opt_pair_selector_loop_reference(
+    alpha=1.0,
+    beta=0.7,
+    gamma=0.2,
+    epsilon=1e-9,
+    k=10.0,
+    tau=0.5,
+    reverse_centrality=False,
+    use_q_as_secondary=True,
+):
+    def select_pair(state):
+        D = state.D
+        n = len(D)
+        centrality = hybrid_opt_centrality(state, epsilon, k, tau, reverse_centrality)
+        Q = nj_q_matrix(D) if use_q_as_secondary and n > 2 else None
+
+        best_score = np.inf
+        best_candidates = []
+        for i, j in [(i, j) for i in range(n) for j in range(i + 1, n)]:
+            d_ij = D[i, j]
+            asym = abs(centrality[i] - centrality[j])
+            score = alpha * d_ij - beta * asym
+            if Q is not None:
+                score -= gamma * Q[i, j]
+
+            candidate = (i, j, d_ij, asym, Q[i, j] if Q is not None else None)
+            if score < best_score - 1e-12:
+                best_score = score
+                best_candidates = [candidate]
+            elif abs(score - best_score) <= 1e-12:
+                best_candidates.append(candidate)
+
+        if len(best_candidates) > 1:
+            best_candidates.sort(key=lambda x: (x[2], -x[3], x[4] if x[4] is not None else 0.0))
+
+        i, j, _, _, _ = best_candidates[0]
+        return PairChoice(i, j, score=best_score, metadata={"centrality": centrality, "Q": Q})
+
+    return select_pair
+
+
+def _best_pair_from_score_matrix_loop_reference(score, minimize=True):
+    best_pair = None
+    best_score = None
+
+    for i, j in [(i, j) for i in range(score.shape[0]) for j in range(i + 1, score.shape[0])]:
+        current_score = score[i, j]
+        if best_score is None:
+            best_pair = (i, j)
+            best_score = current_score
+        elif minimize and current_score < best_score:
+            best_pair = (i, j)
+            best_score = current_score
+        elif not minimize and current_score > best_score:
+            best_pair = (i, j)
+            best_score = current_score
+
+    if best_pair is None:
+        raise ValueError("No upper-triangle pairs available in score matrix.")
+
+    return best_pair[0], best_pair[1], best_score
+
+
+def _assert_pair_choice_matches(actual, expected):
+    assert actual[:2] == expected[:2]
+    if np.isnan(expected[2]):
+        assert np.isnan(actual[2])
+    else:
+        assert actual[2] == expected[2]
+
+
 def test_score_matrix_pair_helpers_choose_and_order_pairs():
     score = np.array(
         [
@@ -72,6 +145,87 @@ def test_score_matrix_pair_helpers_choose_and_order_pairs():
     assert _best_pair_from_score_matrix(score) == (0, 2, 1.0)
     assert _best_pair_from_score_matrix(score, minimize=False) == (0, 1, 4.0)
     assert _ordered_pairs_by_score_matrix(score) == [(0, 2), (1, 2), (0, 1)]
+
+
+@pytest.mark.parametrize(
+    "score,minimize",
+    [
+        (
+            np.array(
+                [
+                    [np.inf, 2.0, 1.0],
+                    [0.0, np.inf, 1.0],
+                    [np.inf, np.inf, np.inf],
+                ]
+            ),
+            True,
+        ),
+        (
+            np.array(
+                [
+                    [np.inf, 2.0, 4.0],
+                    [10.0, np.inf, 4.0],
+                    [np.inf, np.inf, np.inf],
+                ]
+            ),
+            False,
+        ),
+        (np.full((3, 3), np.inf), True),
+        (np.full((3, 3), np.inf), False),
+        (np.full((3, 3), -np.inf), True),
+        (np.full((3, 3), -np.inf), False),
+        (
+            np.array(
+                [
+                    [np.inf, np.nan, 1.0],
+                    [np.inf, np.inf, 2.0],
+                    [np.inf, np.inf, np.inf],
+                ]
+            ),
+            True,
+        ),
+        (
+            np.array(
+                [
+                    [np.inf, np.nan, 1.0],
+                    [np.inf, np.inf, 2.0],
+                    [np.inf, np.inf, np.inf],
+                ]
+            ),
+            False,
+        ),
+        (
+            np.array(
+                [
+                    [np.inf, 2.0, np.nan],
+                    [np.inf, np.inf, 1.0],
+                    [np.inf, np.inf, np.inf],
+                ]
+            ),
+            True,
+        ),
+        (
+            np.array(
+                [
+                    [np.inf, 2.0, np.nan],
+                    [np.inf, np.inf, 3.0],
+                    [np.inf, np.inf, np.inf],
+                ]
+            ),
+            False,
+        ),
+    ],
+)
+def test_best_pair_from_score_matrix_matches_loop_reference_for_edge_values(score, minimize):
+    expected = _best_pair_from_score_matrix_loop_reference(score, minimize=minimize)
+    actual = _best_pair_from_score_matrix(score, minimize=minimize)
+
+    _assert_pair_choice_matches(actual, expected)
+
+
+def test_best_pair_from_score_matrix_raises_without_upper_triangle_pairs():
+    with pytest.raises(ValueError):
+        _best_pair_from_score_matrix(np.full((1, 1), np.inf))
 
 
 @pytest.mark.parametrize("n", [1, 2, 8, 30])
@@ -122,6 +276,48 @@ def test_anticentral_adaptive_v3_score_matrix_matches_loop_reference_with_zero_s
 
     np.testing.assert_allclose(actual, expected, rtol=0.0, atol=0.0)
     assert actual_rng.random() == expected_rng.random()
+
+
+@pytest.mark.parametrize(
+    "use_q_as_secondary, reverse_centrality",
+    [
+        (True, False),
+        (False, False),
+        (True, True),
+    ],
+)
+def test_hybrid_opt_pair_selector_matches_loop_reference(use_q_as_secondary, reverse_centrality):
+    D = np.array(
+        [
+            [0.0, 4.0, 4.5, 7.0],
+            [4.0, 0.0, 2.0, 6.0],
+            [4.5, 2.0, 0.0, 3.0],
+            [7.0, 6.0, 3.0, 0.0],
+        ],
+        dtype=float,
+    )
+    state = initialize_reconstruction_state(D, _cells(4), max_id=4, seed=7)
+    kwargs = {
+        "alpha": 1.1,
+        "beta": 0.6,
+        "gamma": 0.25,
+        "epsilon": 1e-8,
+        "k": 8.0,
+        "tau": 0.45,
+        "reverse_centrality": reverse_centrality,
+        "use_q_as_secondary": use_q_as_secondary,
+    }
+
+    expected = _hybrid_opt_pair_selector_loop_reference(**kwargs)(state)
+    actual = make_hybrid_opt_pair_selector(**kwargs)(state)
+
+    assert (actual.i, actual.j) == (expected.i, expected.j)
+    assert actual.score == expected.score
+    np.testing.assert_allclose(actual.metadata["centrality"], expected.metadata["centrality"])
+    if expected.metadata["Q"] is None:
+        assert actual.metadata["Q"] is None
+    else:
+        np.testing.assert_allclose(actual.metadata["Q"], expected.metadata["Q"])
 
 
 def test_parent_selectors_use_pair_metadata_metrics():
