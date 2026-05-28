@@ -1,5 +1,6 @@
 import random
 from functools import partial
+from inspect import signature
 
 import networkx as nx
 import numpy as np
@@ -35,11 +36,9 @@ def _select_min_distance_pair(state):
 
 
 def _select_sum_distance_parent(state, pair):
-    n = len(state.D)
     i, j = pair.i, pair.j
-    others = [k for k in range(n) if k != i and k != j]
-    sum_i = state.D[i, others].sum() if others else 0
-    sum_j = state.D[j, others].sum() if others else 0
+    sum_i = state.D[i].sum() - state.D[i, i] - state.D[i, j]
+    sum_j = state.D[j].sum() - state.D[j, j] - state.D[j, i]
 
     if sum_i < sum_j:
         parent_idx, child_idx = i, j
@@ -52,9 +51,29 @@ def _select_sum_distance_parent(state, pair):
 
 
 def _legacy_pair_selector(select_pair_func):
+    try:
+        supports_metadata = "return_metadata" in signature(select_pair_func).parameters
+    except (TypeError, ValueError):
+        supports_metadata = False
+
     def select_pair(state):
-        i, j = select_pair_func(state.D, state.node_list, state.rng, minimize=True)
-        return PairChoice(i, j)
+        if supports_metadata:
+            result = select_pair_func(
+                state.D,
+                state.node_list,
+                state.rng,
+                minimize=True,
+                return_metadata=True,
+            )
+        else:
+            result = select_pair_func(state.D, state.node_list, state.rng, minimize=True)
+
+        if len(result) == 3 and isinstance(result[2], dict):
+            i, j, metadata = result
+        else:
+            i, j = result
+            metadata = {}
+        return PairChoice(i, j, metadata=metadata)
 
     return select_pair
 
@@ -85,6 +104,7 @@ def _legacy_parent_selector(select_ancestor_func, full_information):
                 state.rng,
                 select_ancestor_func,
                 full_information=full_information,
+                pair_metadata=pair.metadata,
             )
 
         return Orientation(parent_idx, child_idx)
@@ -125,14 +145,17 @@ def neighbor_joining_standard(dist_matrix, cells, max_id, seed=7, existing_tree=
         tree.add_edge(new_cell.node_id, id_j.node_id, weight=limb_len_j)
         new_nodes[new_cell] = (id_i, id_j)
 
-        new_row = [(D[i][k] + D[j][k] - D[i][j]) / 2 for k in range(n) if k != i and k != j]
-        D = np.delete(D, [i, j], axis=0)
-        D = np.delete(D, [i, j], axis=1)
-        D = np.vstack([D, new_row])
-        new_col = np.append(new_row, [0])[:, None]
-        D = np.hstack([D, new_col])
+        keep_mask = np.ones(n, dtype=bool)
+        keep_mask[[i, j]] = False
+        new_row = (D[i, keep_mask] + D[j, keep_mask] - D[i, j]) / 2
+        next_D = np.empty((n - 1, n - 1), dtype=np.result_type(D, float))
+        next_D[:-1, :-1] = D[keep_mask][:, keep_mask]
+        next_D[-1, :-1] = new_row
+        next_D[:-1, -1] = new_row
+        next_D[-1, -1] = 0.0
+        D = next_D
 
-        keys = [id_map[k] for k in range(n) if k != i and k != j]
+        keys = [id_map[k] for k in np.flatnonzero(keep_mask)]
         id_map = {k: v for k, v in enumerate(keys)}
         id_map[len(id_map)] = new_cell
 

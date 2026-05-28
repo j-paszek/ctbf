@@ -4,9 +4,15 @@ import numpy as np
 ANTICENTRAL_V3_CONTEXT_KEY = "anticentral_v3_centrality"
 
 
+def _indices_without_index(n, removed_idx):
+    mask = np.ones(n, dtype=bool)
+    mask[removed_idx] = False
+    return np.flatnonzero(mask)
+
+
 def drop_child_keep_parent_update(state, orientation, internal_node):
     n = len(state.D)
-    keep_indices = [k for k in range(n) if k != orientation.child_idx]
+    keep_indices = _indices_without_index(n, orientation.child_idx)
     state.D = state.D[np.ix_(keep_indices, keep_indices)]
     state.node_list[orientation.parent_idx] = internal_node
     state.node_list.pop(orientation.child_idx)
@@ -15,7 +21,7 @@ def drop_child_keep_parent_update(state, orientation, internal_node):
 def anticentral_v3_distance_update(state, orientation, internal_node):
     n = len(state.D)
     c = state.context[ANTICENTRAL_V3_CONTEXT_KEY]
-    keep_indices = [k for k in range(n) if k != orientation.child_idx]
+    keep_indices = _indices_without_index(n, orientation.child_idx)
 
     state.D = state.D[np.ix_(keep_indices, keep_indices)]
     state.node_list[orientation.parent_idx] = internal_node

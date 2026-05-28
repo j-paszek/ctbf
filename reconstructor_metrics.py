@@ -1,8 +1,18 @@
+from functools import lru_cache
+
 import numpy as np
 
 
+@lru_cache(maxsize=None)
+def upper_triangle_indices(n):
+    indices = np.triu_indices(n, k=1)
+    for index_array in indices:
+        index_array.flags.writeable = False
+    return indices
+
+
 def upper_triangle_pairs(n):
-    return zip(*np.triu_indices(n, k=1))
+    return zip(*upper_triangle_indices(n))
 
 
 def sum_distance_centrality(D):
@@ -31,7 +41,7 @@ def nj_q_matrix(D):
 
     total = sum_distance_centrality(D)
     factor = n - 2
-    tri_i, tri_j = np.triu_indices(n, k=1)
+    tri_i, tri_j = upper_triangle_indices(n)
     q_values = factor * D[tri_i, tri_j] - total[tri_i] - total[tri_j]
     Q[tri_i, tri_j] = q_values
     Q[tri_j, tri_i] = q_values
@@ -42,7 +52,7 @@ def score_distance_minus_asymmetry(D, centrality, alpha, beta):
     n = len(D)
     centrality = np.asarray(centrality)
     score = np.full((n, n), np.inf)
-    tri_i, tri_j = np.triu_indices(n, k=1)
+    tri_i, tri_j = upper_triangle_indices(n)
     score[tri_i, tri_j] = (
         alpha * D[tri_i, tri_j]
         - beta * np.abs(centrality[tri_i] - centrality[tri_j])
@@ -111,5 +121,6 @@ __all__ = [
     "score_distance_minus_asymmetry",
     "sigmoid_blended_centrality",
     "sum_distance_centrality",
+    "upper_triangle_indices",
     "upper_triangle_pairs",
 ]

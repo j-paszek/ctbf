@@ -11,6 +11,7 @@ from reconstructor_metrics import (
     row_sum_anticentrality,
     score_distance_minus_asymmetry,
     sum_distance_centrality,
+    upper_triangle_indices,
     upper_triangle_pairs,
 )
 from simulator import Genotype
@@ -53,6 +54,20 @@ def _score_distance_minus_asymmetry_loop_reference(D, centrality, alpha, beta):
 
 def test_upper_triangle_pairs_excludes_diagonal():
     assert list(upper_triangle_pairs(3)) == [(0, 1), (0, 2), (1, 2)]
+
+
+def test_upper_triangle_indices_are_cached_read_only_and_ordered():
+    tri_i, tri_j = upper_triangle_indices(4)
+    expected_i, expected_j = np.triu_indices(4, k=1)
+
+    assert upper_triangle_indices(4)[0] is tri_i
+    assert upper_triangle_indices(4)[1] is tri_j
+    assert not tri_i.flags.writeable
+    assert not tri_j.flags.writeable
+    np.testing.assert_array_equal(tri_i, expected_i)
+    np.testing.assert_array_equal(tri_j, expected_j)
+    with pytest.raises(ValueError):
+        tri_i[0] = 99
 
 
 def test_distance_centrality_metrics_are_stable():

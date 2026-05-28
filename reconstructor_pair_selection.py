@@ -16,6 +16,7 @@ from reconstructor_metrics import (
     score_distance_minus_asymmetry,
     sigmoid_blended_centrality,
     sum_distance_centrality,
+    upper_triangle_indices,
     upper_triangle_pairs,
 )
 
@@ -47,7 +48,7 @@ def _best_pair_from_score_matrix_loop(score, minimize=True):
 
 
 def _best_pair_from_score_matrix(score, minimize=True):
-    tri_i, tri_j = np.triu_indices(score.shape[0], k=1)
+    tri_i, tri_j = upper_triangle_indices(score.shape[0])
     if len(tri_i) == 0:
         raise ValueError("No upper-triangle pairs available in score matrix.")
 
@@ -72,23 +73,166 @@ def _best_pair_from_score_matrix(score, minimize=True):
     return int(tri_i[best_offset]), int(tri_j[best_offset]), values[best_offset]
 
 
-def _ordered_pairs_by_score_matrix(score, minimize=True):
+def _iter_ordered_pairs_by_score_matrix(score, minimize=True):
     n = score.shape[0]
-    tri_i, tri_j = np.triu_indices(n, k=1)
+    tri_i, tri_j = upper_triangle_indices(n)
     values = score[tri_i, tri_j]
     if (
         not np.issubdtype(values.dtype, np.number)
         or np.issubdtype(values.dtype, np.complexfloating)
         or (np.issubdtype(values.dtype, np.inexact) and np.any(np.isnan(values)))
     ):
-        return sorted(
+        return iter(sorted(
             [(i, j) for i in range(n) for j in range(i + 1, n)],
             key=lambda pair: score[pair[0], pair[1]],
             reverse=not minimize,
-        )
+        ))
 
     order = np.argsort(-values if not minimize else values, kind="stable")
-    return [(int(tri_i[index]), int(tri_j[index])) for index in order]
+    return ((int(tri_i[index]), int(tri_j[index])) for index in order)
+
+
+def _ordered_pairs_by_score_matrix(score, minimize=True):
+    return list(_iter_ordered_pairs_by_score_matrix(score, minimize=minimize))
+
+
+def _biological_pair_plausibility_mask(node_list, tri_i, tri_j):
+    if len(tri_i) == 0:
+        return np.array([], dtype=bool)
+
+    try:
+        genomes = np.asarray([node.genome for node in node_list])
+        if genomes.ndim < 2:
+            raise ValueError("genomes are not a rectangular matrix")
+        can_i_parent_j = ~np.any(
+            (genomes[tri_i] == 0) & (genomes[tri_j] > 0),
+            axis=1,
+        )
+        can_j_parent_i = ~np.any(
+            (genomes[tri_j] == 0) & (genomes[tri_i] > 0),
+            axis=1,
+        )
+        return can_i_parent_j | can_j_parent_i
+    except (TypeError, ValueError):
+        return np.fromiter(
+            (
+                is_biologically_plausible_pair(node_list[int(i)], node_list[int(j)])
+                for i, j in zip(tri_i, tri_j)
+            ),
+            dtype=bool,
+            count=len(tri_i),
+        )
+
+
+def _best_pairs_from_numeric_values(values, tri_i, tri_j, minimize=True, candidate_mask=None):
+    if candidate_mask is None:
+        offsets = np.arange(len(values))
+    else:
+        offsets = np.flatnonzero(candidate_mask)
+
+    if len(offsets) == 0:
+        return []
+
+    selected_values = values[offsets]
+    if np.issubdtype(selected_values.dtype, np.inexact) and np.isnan(selected_values[0]):
+        first_offset = offsets[0]
+        return [(int(tri_i[first_offset]), int(tri_j[first_offset]))]
+
+    comparable_values = selected_values
+    if np.issubdtype(selected_values.dtype, np.inexact):
+        nan_mask = np.isnan(selected_values)
+        if np.any(nan_mask):
+            comparable_values = selected_values.copy()
+            comparable_values[nan_mask] = np.inf if minimize else -np.inf
+
+    best_value = np.min(comparable_values) if minimize else np.max(comparable_values)
+    best_offsets = offsets[selected_values == best_value]
+    return [(int(tri_i[offset]), int(tri_j[offset])) for offset in best_offsets]
+
+
+def _best_pairs_from_score_sequence(scores, tri_i, tri_j, minimize=True, candidate_mask=None):
+    best_score = None
+    best_pairs = []
+
+    if candidate_mask is None:
+        offsets = range(len(scores))
+    else:
+        offsets = np.flatnonzero(candidate_mask)
+
+    for offset in offsets:
+        score = scores[int(offset)]
+        pair = (int(tri_i[offset]), int(tri_j[offset]))
+        if best_score is None:
+            best_score = score
+            best_pairs = [pair]
+        elif minimize and score < best_score:
+            best_score = score
+            best_pairs = [pair]
+        elif not minimize and score > best_score:
+            best_score = score
+            best_pairs = [pair]
+        elif score == best_score:
+            best_pairs.append(pair)
+
+    return best_pairs
+
+
+def _select_pair_from_numeric_scores(
+    values,
+    tri_i,
+    tri_j,
+    node_list,
+    rng,
+    minimize=True,
+    apply_plausibility=True,
+):
+    best_pairs_all = _best_pairs_from_numeric_values(values, tri_i, tri_j, minimize=minimize)
+
+    if apply_plausibility:
+        plausibility_mask = _biological_pair_plausibility_mask(node_list, tri_i, tri_j)
+        best_pairs_plaus = _best_pairs_from_numeric_values(
+            values,
+            tri_i,
+            tri_j,
+            minimize=minimize,
+            candidate_mask=plausibility_mask,
+        )
+        if best_pairs_plaus:
+            return _resolve_pair_ties(best_pairs_plaus, node_list, rng)
+
+        print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+        print("@@@@@@@@@@@@@@@@@@@ not plausible @@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+
+    return _resolve_pair_ties(best_pairs_all, node_list, rng)
+
+
+def _select_pair_from_score_sequence(
+    scores,
+    tri_i,
+    tri_j,
+    node_list,
+    rng,
+    minimize=True,
+    apply_plausibility=True,
+):
+    best_pairs_all = _best_pairs_from_score_sequence(scores, tri_i, tri_j, minimize=minimize)
+
+    if apply_plausibility:
+        plausibility_mask = _biological_pair_plausibility_mask(node_list, tri_i, tri_j)
+        best_pairs_plaus = _best_pairs_from_score_sequence(
+            scores,
+            tri_i,
+            tri_j,
+            minimize=minimize,
+            candidate_mask=plausibility_mask,
+        )
+        if best_pairs_plaus:
+            return _resolve_pair_ties(best_pairs_plaus, node_list, rng)
+
+        print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+        print("@@@@@@@@@@@@@@@@@@@ not plausible @@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+
+    return _resolve_pair_ties(best_pairs_all, node_list, rng)
 
 
 def make_adaptive_centrality_pair_selector(alpha=1.0, beta=0.5, epsilon=1e-6):
@@ -122,9 +266,11 @@ def make_adaptive_centrality_reversed_pair_selector(epsilon=1e-9):
         centrality = reversed_adaptive_centrality(state, epsilon)
         n = len(state.D)
         score = np.full((n, n), np.inf)
-        for i, j in _upper_triangle_pairs(n):
-            asym = abs(centrality[i] - centrality[j])
-            score[i, j] = state.D[i, j] * (1.0 - 0.25 * asym)
+        tri_i, tri_j = upper_triangle_indices(n)
+        score[tri_i, tri_j] = (
+            state.D[tri_i, tri_j]
+            * (1.0 - 0.25 * np.abs(centrality[tri_i] - centrality[tri_j]))
+        )
 
         i, j, _ = _best_pair_from_score_matrix(score)
         return PairChoice(i, j, score=score[i, j], metadata={"centrality": centrality})
@@ -148,7 +294,7 @@ def make_hybrid_opt_pair_selector(
         centrality = hybrid_opt_centrality(state, epsilon, k, tau, reverse_centrality)
         Q = nj_q_matrix(D) if use_q_as_secondary and n > 2 else None
 
-        tri_i, tri_j = np.triu_indices(n, k=1)
+        tri_i, tri_j = upper_triangle_indices(n)
         d_values = D[tri_i, tri_j]
         asym_values = np.abs(centrality[tri_i] - centrality[tri_j])
         score_values = alpha * d_values - beta * asym_values
@@ -217,7 +363,7 @@ def make_hybrid_opt_refined_pair_selector(alpha=1.0, beta=1.0, gamma=1.0):
         D = state.D
         n = len(D)
         centrality = sum_distance_centrality(D)
-        tri_i, tri_j = np.triu_indices(n, 1)
+        tri_i, tri_j = upper_triangle_indices(n)
         mean_D = D[tri_i, tri_j].mean()
         mean_c = np.mean(centrality)
 
@@ -235,7 +381,7 @@ def make_hybrid_opt_refined_pair_selector(alpha=1.0, beta=1.0, gamma=1.0):
 def _anticentral_adaptive_v3_score_matrix(D, c, rng, alpha=1.0, beta=1.0, gamma=0.5):
     n = len(D)
     score = np.full((n, n), np.inf)
-    tri_i, tri_j = np.triu_indices(n, k=1)
+    tri_i, tri_j = upper_triangle_indices(n)
     if len(tri_i) == 0:
         return score
 
@@ -274,9 +420,12 @@ def make_anticentral_adaptive_v3_skip_unplausible_pair_selector(alpha=1.0, beta=
     def select_pair(state):
         c = state.context[ANTICENTRAL_V3_CONTEXT_KEY]
         score = _anticentral_adaptive_v3_score_matrix(state.D, c, state.rng, alpha, beta, gamma)
-        pair_order = _ordered_pairs_by_score_matrix(score)
+        pair_order = _iter_ordered_pairs_by_score_matrix(score)
+        fallback_pair = None
 
         for i, j in pair_order:
+            if fallback_pair is None:
+                fallback_pair = (i, j)
             a = state.node_list[i]
             b = state.node_list[j]
             can_i_parent_j = is_biologically_plausible_ancestor(a, b)
@@ -296,7 +445,9 @@ def make_anticentral_adaptive_v3_skip_unplausible_pair_selector(alpha=1.0, beta=
                     metadata={"orientation": Orientation(parent_idx, child_idx)},
                 )
 
-        i, j = pair_order[0]
+        if fallback_pair is None:
+            raise ValueError("No upper-triangle pairs available in score matrix.")
+        i, j = fallback_pair
         parent_idx, child_idx = (i, j) if c[i] > c[j] else (j, i)
         return PairChoice(
             i,
@@ -314,7 +465,7 @@ def make_anticentral_hybrid_opt_pair_selector(alpha=1.0, beta=1.0, lam=1.0, epsi
         c_mix = mixed_direct_inverse_centrality(state.D, epsilon, lam)
 
         score = np.full((n, n), -np.inf)
-        tri_i, tri_j = np.triu_indices(n, k=1)
+        tri_i, tri_j = upper_triangle_indices(n)
         d_ij = state.D[tri_i, tri_j]
         finite_mask = np.isfinite(d_ij)
         if np.any(finite_mask):
@@ -348,7 +499,7 @@ def make_anticentral_adaptive_v2_pair_selector(
         c_mix = mixed_direct_inverse_centrality(state.D, epsilon, lam)
 
         score = np.full((n, n), -np.inf)
-        tri_i, tri_j = np.triu_indices(n, k=1)
+        tri_i, tri_j = upper_triangle_indices(n)
         d_ij = state.D[tri_i, tri_j]
         finite_mask = np.isfinite(d_ij)
         if np.any(finite_mask):
@@ -478,74 +629,95 @@ def _select_pair_core(D, node_list, rng, pair_score_func, minimize=True, apply_p
 # ============================================================
 
 # --- Full NJ: score(i,j) = D[i,j]
-def _select_pair_full(D, node_list, rng, minimize=True):
-    return _select_pair_core(
-        D=D,
-        node_list=node_list,
-        rng=rng,
-        pair_score_func=lambda i, j: D[i, j],
+def _select_pair_full(D, node_list, rng, minimize=True, return_metadata=False):
+    tri_i, tri_j = upper_triangle_indices(len(D))
+    values = D[tri_i, tri_j]
+    pair = _select_pair_from_numeric_scores(
+        values,
+        tri_i,
+        tri_j,
+        node_list,
+        rng,
         minimize=minimize,
-        apply_plausibility=True
+        apply_plausibility=True,
     )
+    if return_metadata:
+        return pair[0], pair[1], {}
+    return pair
 
 
 # --- CPS NJ selector
-def _select_pair_cps(D, node_list, rng, minimize=True):
+def _select_pair_cps(D, node_list, rng, minimize=True, return_metadata=False):
     centrality = sum_distance_centrality(D)
-
-    def cps_score(i, j):
-        c_i, c_j = centrality[i], centrality[j]
-        return (D[i, j], min(c_i, c_j), -max(c_i, c_j))
-
-    return _select_pair_core(
-        D=D,
-        node_list=node_list,
-        rng=rng,
-        pair_score_func=cps_score,
-        minimize=minimize,
-        apply_plausibility=True
+    tri_i, tri_j = upper_triangle_indices(len(D))
+    scores = tuple(
+        zip(
+            D[tri_i, tri_j],
+            np.minimum(centrality[tri_i], centrality[tri_j]),
+            -np.maximum(centrality[tri_i], centrality[tri_j]),
+        )
     )
+
+    pair = _select_pair_from_score_sequence(
+        scores,
+        tri_i,
+        tri_j,
+        node_list,
+        rng,
+        minimize=minimize,
+        apply_plausibility=True,
+    )
+    if return_metadata:
+        return pair[0], pair[1], {"sum_distance_centrality": centrality}
+    return pair
 
 
 # --- Hybrid NJ selector
-def _select_pair_hybrid(D, node_list, rng, minimize=True, alpha=1.0, beta=0.5):
+def _select_pair_hybrid(D, node_list, rng, minimize=True, alpha=1.0, beta=0.5, return_metadata=False):
     centrality = sum_distance_centrality(D)
+    tri_i, tri_j = upper_triangle_indices(len(D))
+    values = alpha * D[tri_i, tri_j] - beta * np.abs(centrality[tri_i] - centrality[tri_j])
 
-    def hybrid_score(i, j):
-        return alpha * D[i, j] - beta * abs(centrality[i] - centrality[j])
-
-    return _select_pair_core(
-        D=D,
-        node_list=node_list,
-        rng=rng,
-        pair_score_func=hybrid_score,
+    pair = _select_pair_from_numeric_scores(
+        values,
+        tri_i,
+        tri_j,
+        node_list,
+        rng,
         minimize=minimize,
-        apply_plausibility=True
+        apply_plausibility=True,
     )
+    if return_metadata:
+        return pair[0], pair[1], {"sum_distance_centrality": centrality}
+    return pair
 
 
 def _select_pair_hybrid_inv_centrality(D, node_list, rng,
                                        minimize=True,
                                        alpha=1.0, beta=0.5,
-                                       epsilon=1e-6):
+                                       epsilon=1e-6,
+                                       return_metadata=False):
     """
     Hybrid NJ with inverse-distance weighted centrality:
         score = alpha * D[i,j] - beta * abs(c'[i] - c'[j])
     where    c'[i] = sum_k 1/(D[i,k] + eps)
     """
     centrality = inverse_distance_centrality(D, epsilon)
+    tri_i, tri_j = upper_triangle_indices(len(D))
+    values = alpha * D[tri_i, tri_j] - beta * np.abs(centrality[tri_i] - centrality[tri_j])
 
-    def hybrid_inv_score(i, j):
-        return alpha * D[i, j] - beta * abs(centrality[i] - centrality[j])
-
-    return _select_pair_core(
-        D=D,
-        node_list=node_list,
-        rng=rng,
-        pair_score_func=hybrid_inv_score,
+    pair = _select_pair_from_numeric_scores(
+        values,
+        tri_i,
+        tri_j,
+        node_list,
+        rng,
         minimize=True,
-        apply_plausibility=True
+        apply_plausibility=True,
     )
+    if return_metadata:
+        return pair[0], pair[1], {"inverse_distance_centrality": centrality}
+    return pair
 
 
 __all__ = [

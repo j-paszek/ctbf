@@ -1,3 +1,5 @@
+from functools import partial
+
 from reconstructor_distance_update import ANTICENTRAL_V3_CONTEXT_KEY
 from reconstructor_engine import Orientation
 from reconstructor_metrics import inverse_distance_centrality, sum_distance_centrality
@@ -5,6 +7,9 @@ from reconstructor_plausibility import (
     is_biologically_plausible_ancestor,
     is_biologically_plausible_pair,
 )
+
+
+PARSIMONY_BASELINE_DEVIATION_CONTEXT_KEY = "parsimony_baseline_deviation"
 
 
 # ============================================================
@@ -138,6 +143,14 @@ def _total_deviation_from_baseline(genome, baseline_cn):
     return float(np.sum(np.abs(g - baseline_cn)))
 
 
+def _cached_total_deviation_from_baseline(state, node, baseline_cn):
+    cache_key = (PARSIMONY_BASELINE_DEVIATION_CONTEXT_KEY, baseline_cn)
+    cache = state.context.setdefault(cache_key, {})
+    if node not in cache:
+        cache[node] = _total_deviation_from_baseline(node.genome, baseline_cn)
+    return cache[node]
+
+
 def _anticentral_centrality_orientation(state, i, j):
     c = state.context[ANTICENTRAL_V3_CONTEXT_KEY]
     parent_idx, child_idx = _choose_parent_by_larger_metric(c, i, j, state.rng)
@@ -180,8 +193,8 @@ def make_plausible_parsimony_parent_selector(baseline_cn=2):
             return Orientation(j, i)
 
         if can_a_parent_b and can_b_parent_a:
-            dev_a = _total_deviation_from_baseline(a.genome, baseline_cn)
-            dev_b = _total_deviation_from_baseline(b.genome, baseline_cn)
+            dev_a = _cached_total_deviation_from_baseline(state, a, baseline_cn)
+            dev_b = _cached_total_deviation_from_baseline(state, b, baseline_cn)
 
             if dev_a < dev_b:
                 return Orientation(i, j)
@@ -209,6 +222,39 @@ def _choose_parent_hybrid_inv_centrality(D, i, j, rng, larger_is_more_central=Fa
 
     # tie
     return (i, j) if rng.random() < 0.5 else (j, i)
+
+
+def _base_callable(func):
+    while isinstance(func, partial):
+        func = func.func
+    return func
+
+
+def _choose_parent_from_pair_metadata(pair_metadata, select_ancestor_func, i, j, rng):
+    if not pair_metadata:
+        return None
+
+    base_func = _base_callable(select_ancestor_func)
+    if base_func is _choose_parent_full_nj and "sum_distance_centrality" in pair_metadata:
+        return _choose_parent_by_smaller_metric(
+            pair_metadata["sum_distance_centrality"],
+            i,
+            j,
+            rng,
+        )
+
+    if (
+        base_func is _choose_parent_hybrid_inv_centrality
+        and "inverse_distance_centrality" in pair_metadata
+    ):
+        return _choose_parent_by_larger_metric(
+            pair_metadata["inverse_distance_centrality"],
+            i,
+            j,
+            rng,
+        )
+
+    return None
 
 
 def _choose_parent_with_full_matrix(
@@ -246,6 +292,7 @@ def _choose_parent_with_plausibility_fallback(
     rng,
     select_ancestor_func,
     full_information=False,
+    pair_metadata=None,
 ):
     """
     Orient a selected pair using biological plausibility when it decides.
@@ -271,6 +318,16 @@ def _choose_parent_with_plausibility_fallback(
         return _choose_parent_with_full_matrix(
             D_full, origin_index, node_list, i, j, rng, select_ancestor_func
         )
+
+    metadata_choice = _choose_parent_from_pair_metadata(
+        pair_metadata,
+        select_ancestor_func,
+        i,
+        j,
+        rng,
+    )
+    if metadata_choice is not None:
+        return metadata_choice
 
     return select_ancestor_func(D, i, j, rng, larger_is_more_central=False)
 

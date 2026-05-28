@@ -20,17 +20,30 @@ from reconstructor_merge import (
     copy_parent_internal_node,
     copy_parent_without_new_node_record,
 )
-from reconstructor_nj import _select_min_distance_pair
+from reconstructor_nj import _select_min_distance_pair, _select_sum_distance_parent
 from reconstructor_pair_selection import (
     _anticentral_adaptive_v3_score_matrix,
     _best_pair_from_score_matrix,
     _ordered_pairs_by_score_matrix,
+    _select_pair_core,
+    _select_pair_cps,
+    _select_pair_full,
+    _select_pair_hybrid,
+    _select_pair_hybrid_inv_centrality,
     make_anticentral_adaptive_v2_pair_selector,
     make_anticentral_hybrid_opt_pair_selector,
+    make_adaptive_centrality_reversed_pair_selector,
     make_hybrid_opt_pair_selector,
     make_hybrid_opt_refined_pair_selector,
 )
-from reconstructor_metrics import mixed_direct_inverse_centrality, hybrid_opt_centrality, nj_q_matrix, sum_distance_centrality
+from reconstructor_metrics import (
+    hybrid_opt_centrality,
+    inverse_distance_centrality,
+    mixed_direct_inverse_centrality,
+    nj_q_matrix,
+    reversed_adaptive_centrality,
+    sum_distance_centrality,
+)
 from simulator import Genotype
 
 
@@ -151,6 +164,22 @@ def _hybrid_opt_refined_pair_selector_loop_reference(alpha=1.0, beta=1.0, gamma=
             d_ij = D[i, j] / mean_D
             asym = abs(centrality[i] - centrality[j]) / mean_c
             score[i, j] = alpha * d_ij - beta * (asym ** gamma)
+
+        i, j, _ = _best_pair_from_score_matrix_loop_reference(score)
+        return PairChoice(i, j, score=score[i, j], metadata={"centrality": centrality})
+
+    return select_pair
+
+
+def _adaptive_centrality_reversed_pair_selector_loop_reference(epsilon=1e-9):
+    def select_pair(state):
+        centrality = reversed_adaptive_centrality(state, epsilon)
+        n = len(state.D)
+        score = np.full((n, n), np.inf)
+        for i in range(n):
+            for j in range(i + 1, n):
+                asym = abs(centrality[i] - centrality[j])
+                score[i, j] = state.D[i, j] * (1.0 - 0.25 * asym)
 
         i, j, _ = _best_pair_from_score_matrix_loop_reference(score)
         return PairChoice(i, j, score=score[i, j], metadata={"centrality": centrality})
@@ -363,6 +392,19 @@ def test_standard_min_distance_pair_selector_matches_score_helper():
     assert (pair.i, pair.j, pair.score) == _best_pair_from_score_matrix(D)
 
 
+def test_sum_distance_parent_selector_excludes_pair_and_diagonal_entries():
+    D = np.array(
+        [
+            [10.0, 3.0, 10.0],
+            [3.0, 20.0, 1.0],
+            [10.0, 1.0, 30.0],
+        ]
+    )
+    state = initialize_reconstruction_state(D, _cells(3), max_id=3, seed=7)
+
+    assert _select_sum_distance_parent(state, PairChoice(0, 1)) == Orientation(1, 0)
+
+
 @pytest.mark.parametrize("n", [1, 2, 8, 30])
 def test_anticentral_adaptive_v3_score_matrix_matches_loop_reference(n):
     rng = np.random.default_rng(123)
@@ -475,6 +517,25 @@ def test_hybrid_opt_refined_pair_selector_matches_loop_reference():
     np.testing.assert_allclose(actual.metadata["centrality"], expected.metadata["centrality"])
 
 
+def test_adaptive_centrality_reversed_pair_selector_matches_loop_reference():
+    D = np.array(
+        [
+            [0.0, 4.0, 4.5, 7.0],
+            [4.0, 0.0, 2.0, 6.0],
+            [4.5, 2.0, 0.0, 3.0],
+            [7.0, 6.0, 3.0, 0.0],
+        ],
+        dtype=float,
+    )
+    state = initialize_reconstruction_state(D, _cells(4), max_id=4, seed=7)
+
+    expected = _adaptive_centrality_reversed_pair_selector_loop_reference()(state)
+    actual = make_adaptive_centrality_reversed_pair_selector()(state)
+
+    _assert_pair_choice_object_matches(actual, expected)
+    np.testing.assert_allclose(actual.metadata["centrality"], expected.metadata["centrality"])
+
+
 @pytest.mark.parametrize(
     "selector_factory, reference_factory",
     [
@@ -500,6 +561,73 @@ def test_anticentral_score_selectors_match_loop_reference(selector_factory, refe
 
     _assert_pair_choice_object_matches(actual, expected)
     np.testing.assert_allclose(actual.metadata["c_mix"], expected.metadata["c_mix"])
+
+
+def test_legacy_pair_selectors_match_core_reference_and_return_metadata():
+    D = np.array(
+        [
+            [0.0, 4.0, 4.5, 7.0],
+            [4.0, 0.0, 2.0, 6.0],
+            [4.5, 2.0, 0.0, 3.0],
+            [7.0, 6.0, 3.0, 0.0],
+        ],
+        dtype=float,
+    )
+    cells = _cells(4)
+
+    full = _select_pair_full(D, cells, random.Random(7), return_metadata=True)
+    assert full[:2] == _select_pair_core(
+        D,
+        cells,
+        random.Random(7),
+        lambda i, j: D[i, j],
+        minimize=True,
+        apply_plausibility=True,
+    )
+    assert full[2] == {}
+
+    centrality = sum_distance_centrality(D)
+    cps = _select_pair_cps(D, cells, random.Random(7), return_metadata=True)
+    assert cps[:2] == _select_pair_core(
+        D,
+        cells,
+        random.Random(7),
+        lambda i, j: (D[i, j], min(centrality[i], centrality[j]), -max(centrality[i], centrality[j])),
+        minimize=True,
+        apply_plausibility=True,
+    )
+    np.testing.assert_allclose(cps[2]["sum_distance_centrality"], centrality)
+
+    hybrid = _select_pair_hybrid(D, cells, random.Random(7), alpha=1.2, beta=0.4, return_metadata=True)
+    assert hybrid[:2] == _select_pair_core(
+        D,
+        cells,
+        random.Random(7),
+        lambda i, j: 1.2 * D[i, j] - 0.4 * abs(centrality[i] - centrality[j]),
+        minimize=True,
+        apply_plausibility=True,
+    )
+    np.testing.assert_allclose(hybrid[2]["sum_distance_centrality"], centrality)
+
+    inverse_centrality = inverse_distance_centrality(D, epsilon=1e-5)
+    hybrid_inv = _select_pair_hybrid_inv_centrality(
+        D,
+        cells,
+        random.Random(7),
+        alpha=1.2,
+        beta=0.4,
+        epsilon=1e-5,
+        return_metadata=True,
+    )
+    assert hybrid_inv[:2] == _select_pair_core(
+        D,
+        cells,
+        random.Random(7),
+        lambda i, j: 1.2 * D[i, j] - 0.4 * abs(inverse_centrality[i] - inverse_centrality[j]),
+        minimize=True,
+        apply_plausibility=True,
+    )
+    np.testing.assert_allclose(hybrid_inv[2]["inverse_distance_centrality"], inverse_centrality)
 
 
 def test_parent_selectors_use_pair_metadata_metrics():
@@ -559,6 +687,7 @@ def test_drop_child_keep_parent_update_replaces_parent_and_removes_child():
     drop_child_keep_parent_update(state, orientation, internal_node)
 
     assert state.D.shape == (2, 2)
+    assert state.D.flags.c_contiguous
     assert state.node_list[0] is internal_node
     assert [node.node_id for node in state.node_list] == [4, 3]
 
@@ -572,5 +701,6 @@ def test_anticentral_v3_distance_update_keeps_context_aligned():
     anticentral_v3_distance_update(state, orientation, internal_node)
 
     assert state.D.shape == (2, 2)
+    assert state.D.flags.c_contiguous
     assert state.node_list[0] is internal_node
     assert np.allclose(state.context[ANTICENTRAL_V3_CONTEXT_KEY], np.array([0.5, 0.4]))

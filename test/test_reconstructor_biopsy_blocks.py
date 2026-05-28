@@ -403,6 +403,33 @@ def test_reconstruct_biopsy_layers_uses_configured_candidate_selector():
     assert tree.edges[parent_b.node_id, child.node_id]["weight"] == 2.0
 
 
+def test_reconstruct_biopsy_layers_reuses_missing_parent_added_within_level():
+    child_a = Genotype([2, 2], 1)
+    child_a.node_id = 10
+    child_b = Genotype([2, 2], 1)
+    child_b.node_id = 11
+    cell_lists = [[], [child_a, child_b]]
+    distances = np.array([[0.0]])
+    id_to_index = make_id_to_index([1])
+    tree = nx.DiGraph()
+    for cell in [child_a, child_b]:
+        tree.add_node(cell.node_id, genome=cell.genome, cell_id=cell.cell_id)
+
+    reconstruct_biopsy_layers(
+        cell_lists,
+        tree,
+        defaultdict(lambda: None),
+        distances,
+        id_to_index,
+        radius=0,
+        unique_node_counter=itertools.count(start=20),
+    )
+
+    assert [cell.node_id for cell in cell_lists[0]] == [20]
+    assert tree.has_edge(20, child_a.node_id)
+    assert tree.has_edge(20, child_b.node_id)
+
+
 def test_biopsy_guided_config_can_use_anticentral_candidate_tie_breaker():
     central = Genotype([2, 2], 1)
     central.node_id = 1

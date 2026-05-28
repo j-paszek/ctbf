@@ -175,18 +175,37 @@ def distance_between(full_dist_matrix, id_to_index, a, b):
     return full_dist_matrix[id_to_index[a.cell_id], id_to_index[b.cell_id]]
 
 
-def find_radius_candidates(y, upper_cells, full_dist_matrix, id_to_index, radius):
-    if not upper_cells:
-        return []
+def _cell_indices(cells, id_to_index):
+    return np.fromiter(
+        (id_to_index[cell.cell_id] for cell in cells),
+        dtype=int,
+        count=len(cells),
+    )
 
+
+def _find_radius_candidates_from_indices(y, upper_cells, upper_indices, full_dist_matrix, id_to_index, radius):
     y_idx = id_to_index[y.cell_id]
-    upper_indices = np.array([id_to_index[x.cell_id] for x in upper_cells], dtype=int)
     in_radius = full_dist_matrix[y_idx, upper_indices] <= radius
     return [
         x
         for x, is_candidate in zip(upper_cells, in_radius)
         if is_candidate
     ]
+
+
+def find_radius_candidates(y, upper_cells, full_dist_matrix, id_to_index, radius):
+    if not upper_cells:
+        return []
+
+    upper_indices = _cell_indices(upper_cells, id_to_index)
+    return _find_radius_candidates_from_indices(
+        y,
+        upper_cells,
+        upper_indices,
+        full_dist_matrix,
+        id_to_index,
+        radius,
+    )
 
 
 def select_same_id_candidate(candidates, y):
@@ -205,18 +224,30 @@ def select_first_candidate(candidates, y, full_dist_matrix, id_to_index):
 
 
 def select_anticentral_candidate(candidates, y, full_dist_matrix, id_to_index):
-    candidate_indices = np.array([id_to_index[x.cell_id] for x in candidates], dtype=int)
     row_sums = full_dist_matrix.sum(axis=1)
+    candidate_indices = _cell_indices(candidates, id_to_index)
+    return _select_anticentral_candidate_from_indices(candidates, candidate_indices, row_sums)
+
+
+def _select_anticentral_candidate_from_indices(candidates, candidate_indices, row_sums):
     return candidates[int(np.argmax(row_sums[candidate_indices]))]
 
 
-def select_closest_candidate(candidates, y, full_dist_matrix, id_to_index, tie_breaker=None):
+def _select_closest_candidate_from_indices(
+    candidates,
+    candidate_indices,
+    y,
+    full_dist_matrix,
+    id_to_index,
+    tie_breaker=None,
+    row_sums=None,
+):
     tie_breaker = tie_breaker or select_first_candidate
     y_idx = id_to_index[y.cell_id]
-    candidate_indices = np.array([id_to_index[x.cell_id] for x in candidates], dtype=int)
     distances = full_dist_matrix[y_idx, candidate_indices]
     if np.issubdtype(distances.dtype, np.inexact) and np.isnan(distances[0]):
         tied_candidates = []
+        tied_indices = candidate_indices[:0]
     else:
         comparable_distances = distances
         if np.issubdtype(distances.dtype, np.inexact):
@@ -225,15 +256,31 @@ def select_closest_candidate(candidates, y, full_dist_matrix, id_to_index, tie_b
                 comparable_distances = distances.copy()
                 comparable_distances[nan_mask] = np.inf
         min_distance = np.min(comparable_distances)
+        tied_mask = distances == min_distance
         tied_candidates = [
             x
-            for x, distance in zip(candidates, distances)
-            if distance == min_distance
+            for x, is_tied in zip(candidates, tied_mask)
+            if is_tied
         ]
+        tied_indices = candidate_indices[tied_mask]
 
     if len(tied_candidates) == 1:
         return tied_candidates[0]
+    if tie_breaker is select_anticentral_candidate and row_sums is not None:
+        return _select_anticentral_candidate_from_indices(tied_candidates, tied_indices, row_sums)
     return tie_breaker(tied_candidates, y, full_dist_matrix, id_to_index)
+
+
+def select_closest_candidate(candidates, y, full_dist_matrix, id_to_index, tie_breaker=None):
+    candidate_indices = _cell_indices(candidates, id_to_index)
+    return _select_closest_candidate_from_indices(
+        candidates,
+        candidate_indices,
+        y,
+        full_dist_matrix,
+        id_to_index,
+        tie_breaker=tie_breaker,
+    )
 
 
 def add_biopsy_attachment(tree, parent, child, full_dist_matrix, id_to_index):
@@ -309,6 +356,47 @@ def select_biopsy_parent(
     return None
 
 
+def _select_biopsy_parent_from_indices(
+    y,
+    upper_cells,
+    upper_indices,
+    full_dist_matrix,
+    id_to_index,
+    radius,
+    tie_breaker=None,
+    row_sums=None,
+):
+    candidates = _find_radius_candidates_from_indices(
+        y,
+        upper_cells,
+        upper_indices,
+        full_dist_matrix,
+        id_to_index,
+        radius,
+    )
+
+    same_id_candidate = select_same_id_candidate(candidates, y)
+    if same_id_candidate is not None:
+        return same_id_candidate
+
+    plausible_candidates = filter_plausible_ancestor_candidates(candidates, y)
+    if len(plausible_candidates) == 1:
+        return plausible_candidates[0]
+    if len(plausible_candidates) > 1:
+        plausible_indices = _cell_indices(plausible_candidates, id_to_index)
+        return _select_closest_candidate_from_indices(
+            plausible_candidates,
+            plausible_indices,
+            y,
+            full_dist_matrix,
+            id_to_index,
+            tie_breaker=tie_breaker,
+            row_sums=row_sums,
+        )
+
+    return None
+
+
 def make_biopsy_parent_selector(tie_breaker=None):
     def select_parent(y, upper_cells, full_dist_matrix, id_to_index, radius):
         return select_biopsy_parent(
@@ -320,7 +408,17 @@ def make_biopsy_parent_selector(tie_breaker=None):
             tie_breaker=tie_breaker,
         )
 
+    select_parent._ctbf_default_biopsy_parent_selector = True
+    select_parent._ctbf_tie_breaker = tie_breaker
     return select_parent
+
+
+def _default_biopsy_parent_tie_breaker(candidate_selector):
+    if candidate_selector is select_biopsy_parent:
+        return True, None
+    if getattr(candidate_selector, "_ctbf_default_biopsy_parent_selector", False):
+        return True, getattr(candidate_selector, "_ctbf_tie_breaker", None)
+    return False, None
 
 
 def _minimum_distance_pair_selector(state):
@@ -443,16 +541,36 @@ def reconstruct_biopsy_layers(
     config=None,
 ):
     config = normalize_biopsy_guided_config(config)
+    row_sums = full_dist_matrix.sum(axis=1)
+    use_default_candidate_selector, default_tie_breaker = _default_biopsy_parent_tie_breaker(
+        config.candidate_selector
+    )
+
     for level_index in reversed(range(1, len(cell_lists))):
         upper_cells = cell_lists[level_index - 1]
         bottom_cells = cell_lists[level_index]
         children_by_parent = defaultdict(list)
+        upper_indices = _cell_indices(upper_cells, id_to_index)
         for y in bottom_cells:
-            parent = config.candidate_selector(y, upper_cells, full_dist_matrix, id_to_index, radius)
+            if use_default_candidate_selector:
+                parent = _select_biopsy_parent_from_indices(
+                    y,
+                    upper_cells,
+                    upper_indices,
+                    full_dist_matrix,
+                    id_to_index,
+                    radius,
+                    tie_breaker=default_tie_breaker,
+                    row_sums=row_sums,
+                )
+            else:
+                parent = config.candidate_selector(y, upper_cells, full_dist_matrix, id_to_index, radius)
+
             if parent is not None:
                 children_by_parent[parent].append(y)
                 continue
 
+            upper_len_before = len(upper_cells)
             config.missing_parent_strategy(
                 y,
                 upper_cells,
@@ -461,6 +579,8 @@ def reconstruct_biopsy_layers(
                 unique_node_counter,
                 copied_level=len(cell_lists) - level_index,
             )
+            if use_default_candidate_selector and len(upper_cells) != upper_len_before:
+                upper_indices = _cell_indices(upper_cells, id_to_index)
 
         child_level = len(cell_lists) - level_index - 1
         for parent, children in children_by_parent.items():
