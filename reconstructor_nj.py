@@ -11,6 +11,7 @@ from reconstructor_ancestor_selection import (
     _final_parent_choice_full_matrix,
 )
 from reconstructor_pair_selection import (
+    _best_pair_from_score_matrix,
     _select_pair_cps,
     _select_pair_full,
     _select_pair_hybrid,
@@ -29,18 +30,8 @@ NJ_REC_TR_ROOT_ID = -1
 
 
 def _select_min_distance_pair(state):
-    n = len(state.D)
-    min_val = None
-    best_pair = (0, 1)
-
-    tri_i, tri_j = np.triu_indices(n, k=1)
-    for i, j in zip(tri_i, tri_j):
-        d = state.D[i, j]
-        if min_val is None or d < min_val:
-            min_val = d
-            best_pair = (i, j)
-
-    return PairChoice(*best_pair, score=min_val)
+    i, j, distance = _best_pair_from_score_matrix(state.D)
+    return PairChoice(i, j, score=distance)
 
 
 def _select_sum_distance_parent(state, pair):
@@ -114,11 +105,8 @@ def neighbor_joining_standard(dist_matrix, cells, max_id, seed=7, existing_tree=
     while len(D) > 2:
         n = len(D)
         total_dist = sum_distance_centrality(D)
-        Q = np.zeros((n, n))
-        for i in range(n):
-            for j in range(n):
-                if i != j:
-                    Q[i][j] = (n - 2) * D[i][j] - total_dist[i] - total_dist[j]
+        Q = ((n - 2) * D - total_dist[:, None] - total_dist[None, :]).astype(float, copy=False)
+        np.fill_diagonal(Q, 0.0)
 
         i, j = divmod(np.argmin(Q), n)
         if j < i:

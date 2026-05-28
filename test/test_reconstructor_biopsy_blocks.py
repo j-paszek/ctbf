@@ -7,6 +7,7 @@ import numpy as np
 from reconstructor_biopsy_blocks import (
     BiopsyGuidedConfig,
     BiopsySubtreeConfig,
+    _minimum_distance_pair_selector,
     assign_compatible_node_ids,
     build_final_distance_matrix,
     copy_missing_parent_to_upper,
@@ -33,6 +34,7 @@ from reconstructor_ancestor_selection import (
     more_central_parent_selector_left_tie,
 )
 from reconstructor_anticentral import configure_anticentral_v3_state
+from reconstructor_engine import initialize_reconstruction_state
 from reconstructor_pair_selection import (
     make_anticentral_adaptive_v3_pair_selector,
     make_hybrid_opt_v2_pair_selector,
@@ -139,6 +141,25 @@ def test_biopsy_parent_selection_filters_plausibility_then_chooses_closest():
     assert select_biopsy_parent(other_child, [plausible, implausible, closer_plausible], distances, id_to_index, 3) is closer_plausible
 
 
+def test_radius_candidates_preserve_upper_cell_order():
+    first = Genotype([2, 2], 1)
+    second = Genotype([2, 2], 2)
+    third = Genotype([2, 2], 3)
+    child = Genotype([2, 2], 4)
+    ids = [1, 2, 3, 4]
+    id_to_index = make_id_to_index(ids)
+    distances = np.array(
+        [
+            [0.0, 9.0, 9.0, 1.0],
+            [9.0, 0.0, 9.0, 3.0],
+            [9.0, 9.0, 0.0, 1.0],
+            [1.0, 3.0, 1.0, 0.0],
+        ]
+    )
+
+    assert find_radius_candidates(child, [first, second, third], distances, id_to_index, 1) == [first, third]
+
+
 def test_closest_candidate_uses_first_candidate_as_default_tie_breaker():
     first = Genotype([2, 2], 1)
     second = Genotype([2, 2], 2)
@@ -154,6 +175,31 @@ def test_closest_candidate_uses_first_candidate_as_default_tie_breaker():
     )
 
     assert select_closest_candidate([first, second], child, distances, id_to_index) is first
+
+
+def test_closest_candidate_preserves_tie_breaker_order():
+    first = Genotype([2, 2], 1)
+    second = Genotype([2, 2], 2)
+    third = Genotype([2, 2], 3)
+    child = Genotype([2, 2], 4)
+    ids = [1, 2, 3, 4]
+    id_to_index = make_id_to_index(ids)
+    distances = np.array(
+        [
+            [0.0, 9.0, 9.0, 1.0],
+            [9.0, 0.0, 9.0, 1.0],
+            [9.0, 9.0, 0.0, 2.0],
+            [1.0, 1.0, 2.0, 0.0],
+        ]
+    )
+    seen = []
+
+    def record_candidates(candidates, _child, _distances, _id_to_index):
+        seen.extend(candidates)
+        return candidates[-1]
+
+    assert select_closest_candidate([first, second, third], child, distances, id_to_index, record_candidates) is second
+    assert seen == [first, second]
 
 
 def test_anticentral_candidate_tie_breaker_prefers_larger_distance_sum():
@@ -269,6 +315,23 @@ def test_build_final_distance_matrix_uses_cell_ids_not_node_ids():
         build_final_distance_matrix([a, b], full, make_id_to_index(ids)),
         full,
     )
+    assert build_final_distance_matrix([a, b], full.astype(int), make_id_to_index(ids)).dtype == float
+
+
+def test_biopsy_minimum_distance_pair_selector_uses_first_minimum_pair():
+    cells = [Genotype([2], i + 1) for i in range(3)]
+    distances = np.array(
+        [
+            [0.0, 1.0, 1.0],
+            [1.0, 0.0, 2.0],
+            [1.0, 2.0, 0.0],
+        ]
+    )
+    state = initialize_reconstruction_state(distances, cells, max_id=3, seed=7)
+
+    pair = _minimum_distance_pair_selector(state)
+
+    assert (pair.i, pair.j, pair.score) == (0, 1, 1.0)
 
 
 def test_biopsy_guided_config_fills_unspecified_strategies_with_defaults():

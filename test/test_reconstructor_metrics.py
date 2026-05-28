@@ -43,6 +43,14 @@ def _nj_q_matrix_loop_reference(D):
     return Q
 
 
+def _score_distance_minus_asymmetry_loop_reference(D, centrality, alpha, beta):
+    n = len(D)
+    score = np.full((n, n), np.inf)
+    for i, j in upper_triangle_pairs(n):
+        score[i, j] = alpha * D[i, j] - beta * abs(centrality[i] - centrality[j])
+    return score
+
+
 def test_upper_triangle_pairs_excludes_diagonal():
     assert list(upper_triangle_pairs(3)) == [(0, 1), (0, 2), (1, 2)]
 
@@ -94,6 +102,20 @@ def test_nj_q_matrix_matches_loop_reference(n):
     np.fill_diagonal(D, 0.0)
 
     np.testing.assert_allclose(nj_q_matrix(D), _nj_q_matrix_loop_reference(D), rtol=0.0, atol=0.0)
+
+
+@pytest.mark.parametrize("n", [1, 2, 5])
+def test_score_distance_minus_asymmetry_matches_loop_reference(n):
+    rng = np.random.default_rng(321)
+    D = rng.random((n, n))
+    centrality = rng.random(n)
+
+    np.testing.assert_allclose(
+        score_distance_minus_asymmetry(D, centrality, alpha=1.3, beta=0.7),
+        _score_distance_minus_asymmetry_loop_reference(D, centrality, alpha=1.3, beta=0.7),
+        rtol=0.0,
+        atol=0.0,
+    )
 
 
 def test_adaptive_and_anticentral_metric_helpers():

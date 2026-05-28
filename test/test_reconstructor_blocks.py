@@ -20,13 +20,17 @@ from reconstructor_merge import (
     copy_parent_internal_node,
     copy_parent_without_new_node_record,
 )
+from reconstructor_nj import _select_min_distance_pair
 from reconstructor_pair_selection import (
     _anticentral_adaptive_v3_score_matrix,
     _best_pair_from_score_matrix,
     _ordered_pairs_by_score_matrix,
+    make_anticentral_adaptive_v2_pair_selector,
+    make_anticentral_hybrid_opt_pair_selector,
     make_hybrid_opt_pair_selector,
+    make_hybrid_opt_refined_pair_selector,
 )
-from reconstructor_metrics import hybrid_opt_centrality, nj_q_matrix
+from reconstructor_metrics import mixed_direct_inverse_centrality, hybrid_opt_centrality, nj_q_matrix, sum_distance_centrality
 from simulator import Genotype
 
 
@@ -125,12 +129,100 @@ def _best_pair_from_score_matrix_loop_reference(score, minimize=True):
     return best_pair[0], best_pair[1], best_score
 
 
+def _ordered_pairs_by_score_matrix_loop_reference(score, minimize=True):
+    n = score.shape[0]
+    return sorted(
+        [(i, j) for i in range(n) for j in range(i + 1, n)],
+        key=lambda pair: score[pair[0], pair[1]],
+        reverse=not minimize,
+    )
+
+
+def _hybrid_opt_refined_pair_selector_loop_reference(alpha=1.0, beta=1.0, gamma=1.0):
+    def select_pair(state):
+        D = state.D
+        n = len(D)
+        centrality = sum_distance_centrality(D)
+        mean_D = D[np.triu_indices(n, 1)].mean()
+        mean_c = np.mean(centrality)
+
+        score = np.full((n, n), np.inf)
+        for i, j in [(i, j) for i in range(n) for j in range(i + 1, n)]:
+            d_ij = D[i, j] / mean_D
+            asym = abs(centrality[i] - centrality[j]) / mean_c
+            score[i, j] = alpha * d_ij - beta * (asym ** gamma)
+
+        i, j, _ = _best_pair_from_score_matrix_loop_reference(score)
+        return PairChoice(i, j, score=score[i, j], metadata={"centrality": centrality})
+
+    return select_pair
+
+
+def _anticentral_hybrid_opt_pair_selector_loop_reference(alpha=1.0, beta=1.0, lam=1.0, epsilon=1e-6):
+    def select_pair(state):
+        n = len(state.D)
+        c_mix = mixed_direct_inverse_centrality(state.D, epsilon, lam)
+
+        score = np.full((n, n), -np.inf)
+        for i in range(n):
+            for j in range(i + 1, n):
+                d_ij = state.D[i, j]
+                if not np.isfinite(d_ij):
+                    continue
+                asym = abs(c_mix[i] - c_mix[j])
+                score[i, j] = alpha * d_ij + beta * asym
+
+        i, j, _ = _best_pair_from_score_matrix_loop_reference(score, minimize=False)
+        return PairChoice(i, j, score=score[i, j], metadata={"c_mix": c_mix})
+
+    return select_pair
+
+
+def _anticentral_adaptive_v2_pair_selector_loop_reference(
+    alpha=1.0,
+    beta=1.0,
+    gamma=0.2,
+    lam=1.0,
+    epsilon=1e-6,
+):
+    def select_pair(state):
+        n = len(state.D)
+        original_n = len(state.D_full)
+        a = alpha * (1 + 0.2 * np.tanh(3 * (1 - len(state.node_list) / original_n)))
+        b = beta * (1 + 0.3 * np.tanh(2 * (len(state.node_list) / original_n)))
+        g = gamma * (0.5 + 0.5 * np.tanh(3 * len(state.node_list) / original_n))
+
+        c_mix = mixed_direct_inverse_centrality(state.D, epsilon, lam)
+
+        score = np.full((n, n), -np.inf)
+        for i in range(n):
+            for j in range(i + 1, n):
+                d_ij = state.D[i, j]
+                if not np.isfinite(d_ij):
+                    continue
+                asym = abs(c_mix[i] - c_mix[j])
+                score[i, j] = a * d_ij + b * asym - g / (d_ij + epsilon)
+
+        i, j, _ = _best_pair_from_score_matrix_loop_reference(score, minimize=False)
+        return PairChoice(i, j, score=score[i, j], metadata={"c_mix": c_mix})
+
+    return select_pair
+
+
 def _assert_pair_choice_matches(actual, expected):
     assert actual[:2] == expected[:2]
     if np.isnan(expected[2]):
         assert np.isnan(actual[2])
     else:
         assert actual[2] == expected[2]
+
+
+def _assert_pair_choice_object_matches(actual, expected):
+    assert (actual.i, actual.j) == (expected.i, expected.j)
+    if np.isnan(expected.score):
+        assert np.isnan(actual.score)
+    else:
+        assert actual.score == expected.score
 
 
 def test_score_matrix_pair_helpers_choose_and_order_pairs():
@@ -145,6 +237,34 @@ def test_score_matrix_pair_helpers_choose_and_order_pairs():
     assert _best_pair_from_score_matrix(score) == (0, 2, 1.0)
     assert _best_pair_from_score_matrix(score, minimize=False) == (0, 1, 4.0)
     assert _ordered_pairs_by_score_matrix(score) == [(0, 2), (1, 2), (0, 1)]
+
+
+@pytest.mark.parametrize("minimize", [True, False])
+def test_ordered_pairs_by_score_matrix_matches_loop_reference(minimize):
+    score = np.array(
+        [
+            [np.inf, 2.0, 1.0, 1.0],
+            [99.0, np.inf, 3.0, 2.0],
+            [99.0, 99.0, np.inf, 3.0],
+            [99.0, 99.0, 99.0, np.inf],
+        ]
+    )
+
+    assert _ordered_pairs_by_score_matrix(score, minimize=minimize) == (
+        _ordered_pairs_by_score_matrix_loop_reference(score, minimize=minimize)
+    )
+
+
+def test_ordered_pairs_by_score_matrix_matches_loop_reference_with_nan():
+    score = np.array(
+        [
+            [np.inf, 2.0, np.nan],
+            [np.inf, np.inf, 1.0],
+            [np.inf, np.inf, np.inf],
+        ]
+    )
+
+    assert _ordered_pairs_by_score_matrix(score) == _ordered_pairs_by_score_matrix_loop_reference(score)
 
 
 @pytest.mark.parametrize(
@@ -226,6 +346,21 @@ def test_best_pair_from_score_matrix_matches_loop_reference_for_edge_values(scor
 def test_best_pair_from_score_matrix_raises_without_upper_triangle_pairs():
     with pytest.raises(ValueError):
         _best_pair_from_score_matrix(np.full((1, 1), np.inf))
+
+
+def test_standard_min_distance_pair_selector_matches_score_helper():
+    D = np.array(
+        [
+            [0.0, 3.0, 1.0],
+            [3.0, 0.0, 1.0],
+            [1.0, 1.0, 0.0],
+        ]
+    )
+    state = initialize_reconstruction_state(D, _cells(3), max_id=3, seed=7)
+
+    pair = _select_min_distance_pair(state)
+
+    assert (pair.i, pair.j, pair.score) == _best_pair_from_score_matrix(D)
 
 
 @pytest.mark.parametrize("n", [1, 2, 8, 30])
@@ -318,6 +453,53 @@ def test_hybrid_opt_pair_selector_matches_loop_reference(use_q_as_secondary, rev
         assert actual.metadata["Q"] is None
     else:
         np.testing.assert_allclose(actual.metadata["Q"], expected.metadata["Q"])
+
+
+def test_hybrid_opt_refined_pair_selector_matches_loop_reference():
+    D = np.array(
+        [
+            [0.0, 4.0, 4.5, 7.0],
+            [4.0, 0.0, 2.0, 6.0],
+            [4.5, 2.0, 0.0, 3.0],
+            [7.0, 6.0, 3.0, 0.0],
+        ],
+        dtype=float,
+    )
+    state = initialize_reconstruction_state(D, _cells(4), max_id=4, seed=7)
+    kwargs = {"alpha": 1.2, "beta": 0.8, "gamma": 1.4}
+
+    expected = _hybrid_opt_refined_pair_selector_loop_reference(**kwargs)(state)
+    actual = make_hybrid_opt_refined_pair_selector(**kwargs)(state)
+
+    _assert_pair_choice_object_matches(actual, expected)
+    np.testing.assert_allclose(actual.metadata["centrality"], expected.metadata["centrality"])
+
+
+@pytest.mark.parametrize(
+    "selector_factory, reference_factory",
+    [
+        (make_anticentral_hybrid_opt_pair_selector, _anticentral_hybrid_opt_pair_selector_loop_reference),
+        (make_anticentral_adaptive_v2_pair_selector, _anticentral_adaptive_v2_pair_selector_loop_reference),
+    ],
+)
+def test_anticentral_score_selectors_match_loop_reference(selector_factory, reference_factory):
+    D = np.array(
+        [
+            [0.0, 4.0, np.inf, 7.0],
+            [4.0, 0.0, 2.0, 6.0],
+            [np.inf, 2.0, 0.0, 3.0],
+            [7.0, 6.0, 3.0, 0.0],
+        ],
+        dtype=float,
+    )
+    state = initialize_reconstruction_state(D, _cells(4), max_id=4, seed=7)
+    kwargs = {"alpha": 1.2, "beta": 0.8, "lam": 0.9, "epsilon": 1e-5}
+
+    expected = reference_factory(**kwargs)(state)
+    actual = selector_factory(**kwargs)(state)
+
+    _assert_pair_choice_object_matches(actual, expected)
+    np.testing.assert_allclose(actual.metadata["c_mix"], expected.metadata["c_mix"])
 
 
 def test_parent_selectors_use_pair_metadata_metrics():

@@ -7,7 +7,7 @@ import networkx as nx
 import numpy as np
 
 from reconstructor_engine import Orientation, PairChoice, run_agglomerative_reconstruction
-from reconstructor_metrics import row_sum_anticentrality
+from reconstructor_pair_selection import _best_pair_from_score_matrix
 from reconstructor_plausibility import is_biologically_plausible_ancestor
 from simulator import Genotype
 
@@ -176,11 +176,16 @@ def distance_between(full_dist_matrix, id_to_index, a, b):
 
 
 def find_radius_candidates(y, upper_cells, full_dist_matrix, id_to_index, radius):
+    if not upper_cells:
+        return []
+
     y_idx = id_to_index[y.cell_id]
+    upper_indices = np.array([id_to_index[x.cell_id] for x in upper_cells], dtype=int)
+    in_radius = full_dist_matrix[y_idx, upper_indices] <= radius
     return [
         x
-        for x in upper_cells
-        if full_dist_matrix[y_idx, id_to_index[x.cell_id]] <= radius
+        for x, is_candidate in zip(upper_cells, in_radius)
+        if is_candidate
     ]
 
 
@@ -200,21 +205,31 @@ def select_first_candidate(candidates, y, full_dist_matrix, id_to_index):
 
 
 def select_anticentral_candidate(candidates, y, full_dist_matrix, id_to_index):
-    return max(
-        candidates,
-        key=lambda x: row_sum_anticentrality(full_dist_matrix, id_to_index[x.cell_id]),
-    )
+    candidate_indices = np.array([id_to_index[x.cell_id] for x in candidates], dtype=int)
+    row_sums = full_dist_matrix.sum(axis=1)
+    return candidates[int(np.argmax(row_sums[candidate_indices]))]
 
 
 def select_closest_candidate(candidates, y, full_dist_matrix, id_to_index, tie_breaker=None):
     tie_breaker = tie_breaker or select_first_candidate
     y_idx = id_to_index[y.cell_id]
-    min_distance = min(full_dist_matrix[y_idx, id_to_index[x.cell_id]] for x in candidates)
-    tied_candidates = [
-        x
-        for x in candidates
-        if full_dist_matrix[y_idx, id_to_index[x.cell_id]] == min_distance
-    ]
+    candidate_indices = np.array([id_to_index[x.cell_id] for x in candidates], dtype=int)
+    distances = full_dist_matrix[y_idx, candidate_indices]
+    if np.issubdtype(distances.dtype, np.inexact) and np.isnan(distances[0]):
+        tied_candidates = []
+    else:
+        comparable_distances = distances
+        if np.issubdtype(distances.dtype, np.inexact):
+            nan_mask = np.isnan(distances)
+            if np.any(nan_mask):
+                comparable_distances = distances.copy()
+                comparable_distances[nan_mask] = np.inf
+        min_distance = np.min(comparable_distances)
+        tied_candidates = [
+            x
+            for x, distance in zip(candidates, distances)
+            if distance == min_distance
+        ]
 
     if len(tied_candidates) == 1:
         return tied_candidates[0]
@@ -309,14 +324,8 @@ def make_biopsy_parent_selector(tie_breaker=None):
 
 
 def _minimum_distance_pair_selector(state):
-    best_pair = None
-    best_distance = None
-    for i, j in zip(*np.triu_indices(len(state.D), k=1)):
-        distance = state.D[i, j]
-        if best_distance is None or distance < best_distance:
-            best_pair = (i, j)
-            best_distance = distance
-    return PairChoice(best_pair[0], best_pair[1], score=best_distance)
+    i, j, distance = _best_pair_from_score_matrix(state.D)
+    return PairChoice(i, j, score=distance)
 
 
 def _pair_order_ancestor_selector(state, pair):
@@ -476,14 +485,8 @@ def deduplicate_cells_by_cell_id(cells):
 
 
 def build_final_distance_matrix(final_cells, full_dist_matrix, id_to_index):
-    final_ids = [cell.cell_id for cell in final_cells]
-    dist_matrix = np.zeros((len(final_ids), len(final_ids)))
-    for i, cell1 in enumerate(final_cells):
-        for j, cell2 in enumerate(final_cells):
-            idx1 = id_to_index[cell1.cell_id]
-            idx2 = id_to_index[cell2.cell_id]
-            dist_matrix[i, j] = full_dist_matrix[idx1, idx2]
-    return dist_matrix
+    indices = [id_to_index[cell.cell_id] for cell in final_cells]
+    return np.asarray(full_dist_matrix[np.ix_(indices, indices)], dtype=float)
 
 
 def assign_new_node_levels(new_nodes, node_levels):

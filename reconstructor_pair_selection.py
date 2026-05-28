@@ -74,11 +74,21 @@ def _best_pair_from_score_matrix(score, minimize=True):
 
 def _ordered_pairs_by_score_matrix(score, minimize=True):
     n = score.shape[0]
-    return sorted(
-        [(i, j) for i in range(n) for j in range(i + 1, n)],
-        key=lambda pair: score[pair[0], pair[1]],
-        reverse=not minimize,
-    )
+    tri_i, tri_j = np.triu_indices(n, k=1)
+    values = score[tri_i, tri_j]
+    if (
+        not np.issubdtype(values.dtype, np.number)
+        or np.issubdtype(values.dtype, np.complexfloating)
+        or (np.issubdtype(values.dtype, np.inexact) and np.any(np.isnan(values)))
+    ):
+        return sorted(
+            [(i, j) for i in range(n) for j in range(i + 1, n)],
+            key=lambda pair: score[pair[0], pair[1]],
+            reverse=not minimize,
+        )
+
+    order = np.argsort(-values if not minimize else values, kind="stable")
+    return [(int(tri_i[index]), int(tri_j[index])) for index in order]
 
 
 def make_adaptive_centrality_pair_selector(alpha=1.0, beta=0.5, epsilon=1e-6):
@@ -207,14 +217,14 @@ def make_hybrid_opt_refined_pair_selector(alpha=1.0, beta=1.0, gamma=1.0):
         D = state.D
         n = len(D)
         centrality = sum_distance_centrality(D)
-        mean_D = D[np.triu_indices(n, 1)].mean()
+        tri_i, tri_j = np.triu_indices(n, 1)
+        mean_D = D[tri_i, tri_j].mean()
         mean_c = np.mean(centrality)
 
         score = np.full((n, n), np.inf)
-        for i, j in _upper_triangle_pairs(n):
-            d_ij = D[i, j] / mean_D
-            asym = abs(centrality[i] - centrality[j]) / mean_c
-            score[i, j] = alpha * d_ij - beta * (asym ** gamma)
+        d_ij = D[tri_i, tri_j] / mean_D
+        asym = np.abs(centrality[tri_i] - centrality[tri_j]) / mean_c
+        score[tri_i, tri_j] = alpha * d_ij - beta * (asym ** gamma)
 
         i, j, _ = _best_pair_from_score_matrix(score)
         return PairChoice(i, j, score=score[i, j], metadata={"centrality": centrality})
@@ -304,13 +314,15 @@ def make_anticentral_hybrid_opt_pair_selector(alpha=1.0, beta=1.0, lam=1.0, epsi
         c_mix = mixed_direct_inverse_centrality(state.D, epsilon, lam)
 
         score = np.full((n, n), -np.inf)
-        for i in range(n):
-            for j in range(i + 1, n):
-                d_ij = state.D[i, j]
-                if not np.isfinite(d_ij):
-                    continue
-                asym = abs(c_mix[i] - c_mix[j])
-                score[i, j] = alpha * d_ij + beta * asym
+        tri_i, tri_j = np.triu_indices(n, k=1)
+        d_ij = state.D[tri_i, tri_j]
+        finite_mask = np.isfinite(d_ij)
+        if np.any(finite_mask):
+            valid_i = tri_i[finite_mask]
+            valid_j = tri_j[finite_mask]
+            valid_d = d_ij[finite_mask]
+            asym = np.abs(c_mix[valid_i] - c_mix[valid_j])
+            score[valid_i, valid_j] = alpha * valid_d + beta * asym
 
         i, j, _ = _best_pair_from_score_matrix(score, minimize=False)
 
@@ -336,13 +348,15 @@ def make_anticentral_adaptive_v2_pair_selector(
         c_mix = mixed_direct_inverse_centrality(state.D, epsilon, lam)
 
         score = np.full((n, n), -np.inf)
-        for i in range(n):
-            for j in range(i + 1, n):
-                d_ij = state.D[i, j]
-                if not np.isfinite(d_ij):
-                    continue
-                asym = abs(c_mix[i] - c_mix[j])
-                score[i, j] = a * d_ij + b * asym - g / (d_ij + epsilon)
+        tri_i, tri_j = np.triu_indices(n, k=1)
+        d_ij = state.D[tri_i, tri_j]
+        finite_mask = np.isfinite(d_ij)
+        if np.any(finite_mask):
+            valid_i = tri_i[finite_mask]
+            valid_j = tri_j[finite_mask]
+            valid_d = d_ij[finite_mask]
+            asym = np.abs(c_mix[valid_i] - c_mix[valid_j])
+            score[valid_i, valid_j] = a * valid_d + b * asym - g / (valid_d + epsilon)
 
         i, j, _ = _best_pair_from_score_matrix(score, minimize=False)
 

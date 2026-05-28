@@ -40,9 +40,13 @@ def nj_q_matrix(D):
 
 def score_distance_minus_asymmetry(D, centrality, alpha, beta):
     n = len(D)
+    centrality = np.asarray(centrality)
     score = np.full((n, n), np.inf)
-    for i, j in upper_triangle_pairs(n):
-        score[i, j] = alpha * D[i, j] - beta * abs(centrality[i] - centrality[j])
+    tri_i, tri_j = np.triu_indices(n, k=1)
+    score[tri_i, tri_j] = (
+        alpha * D[tri_i, tri_j]
+        - beta * np.abs(centrality[tri_i] - centrality[tri_j])
+    )
     return score
 
 
