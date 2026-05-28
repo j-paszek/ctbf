@@ -191,16 +191,28 @@ def make_hybrid_opt_refined_pair_selector(alpha=1.0, beta=1.0, gamma=1.0):
 def _anticentral_adaptive_v3_score_matrix(D, c, rng, alpha=1.0, beta=1.0, gamma=0.5):
     n = len(D)
     score = np.full((n, n), np.inf)
-    for i in range(n):
-        for j in range(i + 1, n):
-            c_diff = abs(c[i] - c[j])
-            adaptive = np.exp(-gamma * c_diff / (np.std(c) + 1e-9))
-            anticentral_term = 2 - (c[i] + c[j])
-            score[i, j] = (
-                alpha * D[i, j] * (1 + gamma * adaptive)
-                - beta * anticentral_term
-            )
-            score[i, j] += rng.random() * 1e-6
+    tri_i, tri_j = np.triu_indices(n, k=1)
+    if len(tri_i) == 0:
+        return score
+
+    c = np.asarray(c, dtype=float)
+    c_i = c[tri_i]
+    c_j = c[tri_j]
+    c_std = np.std(c) + 1e-9
+
+    c_diff = np.abs(c_i - c_j)
+    adaptive = np.exp(-gamma * c_diff / c_std)
+    anticentral_term = 2 - (c_i + c_j)
+    values = (
+        alpha * D[tri_i, tri_j] * (1 + gamma * adaptive)
+        - beta * anticentral_term
+    )
+    noise = np.fromiter(
+        (rng.random() for _ in range(len(tri_i))),
+        dtype=float,
+        count=len(tri_i),
+    )
+    score[tri_i, tri_j] = values + noise * 1e-6
     return score
 
 

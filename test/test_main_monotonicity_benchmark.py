@@ -560,6 +560,12 @@ def test_split_input_layout_runs_distance_reconstruct_and_evaluate_stages(tmp_pa
     )
     rows = pd.read_csv(main_benchmark.case_result_csv_path(tmp_path, spec))
     assert rows.iloc[0]["status"] == "evaluated"
+    timing_rows = pd.read_csv(main_benchmark.case_timing_path(tmp_path, spec))
+    assert {"distance_l1", "reconstruct", "evaluate_metric"} <= set(timing_rows["operation"])
+    assert {"adf1", "grf"} == set(timing_rows[timing_rows["stage"] == "evaluate"]["evaluation_method"])
+    reconstruct_rows = timing_rows[timing_rows["stage"] == "reconstruct"]
+    assert set(reconstruct_rows["algorithm"]) == {"neighbor_joining_baseline"}
+    assert set(reconstruct_rows["mode"]) == {"full_cnp"}
 
     summary = main_benchmark.check_corpus(
         tmp_path,
@@ -1078,60 +1084,250 @@ def test_write_biopsy_cell_summary_can_scope_to_selected_generation(tmp_path):
     assert summary.iloc[0]["total"] == 5
 
 
-def test_timing_recorder_writes_stage_totals_without_double_counting_algorithm_rows(tmp_path):
-    recorder = main_benchmark.TimingRecorder()
-    recorder.add(
-        "distance",
-        "distance_case",
-        count=2,
-        input_files=3,
-        instances=2,
-        skipped=1,
-        read_json_seconds=0.1,
-        core_seconds=0.2,
-        write_json_seconds=0.3,
-        total_seconds=0.7,
-        distance_mode="l1",
-    )
-    recorder.add(
-        "reconstruct",
-        "reconstruct_result",
-        count=4,
-        input_files=2,
-        instances=4,
-        read_json_seconds=0.4,
-        core_seconds=1.0,
-        write_json_seconds=0.5,
-        total_seconds=2.0,
-    )
-    recorder.add(
-        "reconstruct",
-        "reconstruct_result_by_algorithm_mode",
-        scope="algorithm_mode",
-        count=4,
-        instances=4,
-        core_seconds=1.0,
-        write_json_seconds=0.5,
-        total_seconds=1.5,
-        algorithm="neighbor_joining_baseline",
-        mode="full_cnp",
+def test_detailed_timing_summary_records_write_generation_csv_without_json(tmp_path):
+    records = [
+        {
+            "generation_count": 14,
+            "stage": "distance",
+            "operation": "distance_case",
+            "scope": "stage_total",
+            "count": 2,
+            "input_files": 3,
+            "instances": 2,
+            "skipped": 1,
+            "read_json_seconds": 0.1,
+            "core_seconds": 0.2,
+            "write_json_seconds": 0.3,
+            "total_seconds": 0.7,
+            "distance_mode": "l1",
+        },
+        {
+            "generation_count": 14,
+            "stage": "reconstruct",
+            "operation": "reconstruct_by_algorithm",
+            "scope": "algorithm",
+            "count": 4,
+            "instances": 4,
+            "core_seconds": 1.0,
+            "write_json_seconds": 0.5,
+            "total_seconds": 1.5,
+            "algorithm": "neighbor_joining_baseline",
+        },
+    ]
+
+    written = main_benchmark.write_detailed_timing_summary_records(
+        tmp_path,
+        records,
+        generation_count=14,
     )
 
-    written = recorder.write(tmp_path)
-
+    assert Path(written["csv"]).name == "timing_summary_g14.csv"
     frame = pd.read_csv(written["csv"])
     assert list(frame.columns) == main_benchmark.TIMING_REPORT_COLUMNS
-    assert set(frame["scope"]) == {"stage_total", "algorithm_mode"}
+    assert set(frame["scope"]) == {"stage_total", "algorithm"}
+    assert not (tmp_path / "reports" / "timing_summary_g14.json").exists()
+    assert not (tmp_path / "reports" / "timing_summary.json").exists()
 
-    payload = json.loads(Path(written["json"]).read_text())
-    totals = {row["stage"]: row for row in payload["totals_by_stage"]}
-    assert totals["distance"]["count"] == 2
-    assert totals["distance"]["instances"] == 2
-    assert totals["distance"]["core_seconds"] == pytest.approx(0.2)
-    assert totals["reconstruct"]["count"] == 4
-    assert totals["reconstruct"]["instances"] == 4
-    assert totals["reconstruct"]["core_seconds"] == pytest.approx(1.0)
-    assert totals["reconstruct"]["total_seconds"] == pytest.approx(2.0)
+
+def test_single_stage_command_timing_appends_once_and_skips_multi_stage(tmp_path):
+    specs = [
+        _spec(generation_count=14, seed=1),
+        _spec(generation_count=14, seed=2),
+    ]
+
+    first = main_benchmark.write_single_stage_command_timing(
+        tmp_path,
+        specs,
+        ["distance"],
+        elapsed_seconds=1.25,
+        started_at="2026-05-26T00:00:00+00:00",
+        finished_at="2026-05-26T00:00:02+00:00",
+        status="ok",
+        command="distance",
+    )
+    second = main_benchmark.write_single_stage_command_timing(
+        tmp_path,
+        specs,
+        ["distance"],
+        elapsed_seconds=9.0,
+        started_at="later",
+        finished_at="later",
+        status="ok",
+        command="distance again",
+    )
+    multi = main_benchmark.write_single_stage_command_timing(
+        tmp_path,
+        specs,
+        ["simulate", "biopsy-summary"],
+        elapsed_seconds=3.0,
+        started_at="multi",
+        finished_at="multi",
+        status="ok",
+        command="multi",
+    )
+
+    assert first == [main_benchmark.timing_summary_path(tmp_path)]
+    assert second == []
+    assert multi == []
+    rows = pd.read_csv(main_benchmark.timing_summary_path(tmp_path))
+    assert list(rows.columns) == main_benchmark.COMMAND_TIMING_COLUMNS
+    assert len(rows) == 1
+    assert rows.iloc[0]["stage"] == "distance"
+    assert rows.iloc[0]["case_count"] == 2
+    assert rows.iloc[0]["total_seconds"] == pytest.approx(1.25)
+    assert not (tmp_path / "reports" / "times_g14.csv").exists()
+
+
+def test_command_timing_ignores_legacy_detailed_summary_shape(tmp_path):
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "generation_count": 10,
+                "stage": "simulate",
+                "operation": "case_timing_total",
+                "scope": "stage_total",
+                "total_seconds": 17.0,
+            }
+        ]
+    ).to_csv(main_benchmark.timing_summary_path(tmp_path), index=False)
+
+    written = main_benchmark.write_single_stage_command_timing(
+        tmp_path,
+        [_spec(generation_count=10, seed=7)],
+        ["simulate"],
+        elapsed_seconds=12.0,
+        started_at="s1",
+        finished_at="f1",
+        status="ok",
+        command="simulate",
+    )
+
+    rows = pd.read_csv(main_benchmark.timing_summary_path(tmp_path))
+    assert written == [main_benchmark.timing_summary_path(tmp_path)]
+    assert list(rows.columns) == main_benchmark.COMMAND_TIMING_COLUMNS
+    assert len(rows) == 1
+    assert rows.iloc[0]["stage"] == "simulate"
+    assert rows.iloc[0]["case_count"] == 1
+    assert rows.iloc[0]["total_seconds"] == pytest.approx(12.0)
+
+
+def test_timing_report_groups_reconstruction_by_algorithm_and_evaluation_by_method(tmp_path):
+    spec = _spec(generation_count=14, seed=7, biopsy_size_scalable=0.5, biopsy_level_count=2)
+    case_directory = main_benchmark.case_dir(tmp_path, spec)
+    main_benchmark.write_case_timing_records(case_directory, [
+        main_benchmark.case_timing_record(
+            spec,
+            stage="reconstruct",
+            operation="reconstruct",
+            algorithm="alg_a",
+            mode="full_cnp",
+            elapsed_seconds=1.0,
+            started_at="s",
+            finished_at="f",
+        ),
+        main_benchmark.case_timing_record(
+            spec,
+            stage="reconstruct",
+            operation="reconstruct",
+            algorithm="alg_a",
+            mode="biopsy_guided_top",
+            elapsed_seconds=2.0,
+            started_at="s",
+            finished_at="f",
+        ),
+        main_benchmark.case_timing_record(
+            spec,
+            stage="evaluate",
+            operation="evaluate_metric",
+            algorithm="alg_a",
+            mode="full_cnp",
+            evaluation_method="adf1",
+            elapsed_seconds=0.25,
+            started_at="s",
+            finished_at="f",
+        ),
+        main_benchmark.case_timing_record(
+            spec,
+            stage="evaluate",
+            operation="evaluate_metric",
+            algorithm="alg_a",
+            mode="full_cnp",
+            evaluation_method="grf",
+            elapsed_seconds=0.75,
+            started_at="s",
+            finished_at="f",
+        ),
+    ])
+    main_benchmark.write_single_stage_command_timing(
+        tmp_path,
+        [spec],
+        ["reconstruct"],
+        elapsed_seconds=5.0,
+        started_at="s",
+        finished_at="f",
+        status="ok",
+        command="reconstruct",
+    )
+
+    written = main_benchmark.write_timing_report(tmp_path, specs=[spec])
+
+    detailed_path = Path(written["generation_summaries"]["g14"])
+    rows = pd.read_csv(detailed_path)
+    reconstruct = rows[(rows["stage"] == "reconstruct") & (rows["scope"] == "algorithm")].iloc[0]
+    assert reconstruct["algorithm"] == "alg_a"
+    assert reconstruct["count"] == 2
+    assert reconstruct["core_seconds"] == pytest.approx(3.0)
+    evaluate = rows[(rows["stage"] == "evaluate") & (rows["scope"] == "evaluation_method")]
+    assert set(evaluate["evaluation_method"]) == {"adf1", "grf"}
+    command = rows[(rows["stage"] == "reconstruct") & (rows["scope"] == "command_stage")].iloc[0]
+    assert command["total_seconds"] == pytest.approx(5.0)
+    assert detailed_path.name == "timing_summary_g14.csv"
+    assert "csv" not in written
+    assert not (tmp_path / "reports" / "timing_summary.json").exists()
+    assert not (tmp_path / "reports" / "times_g14.csv").exists()
+
+
+def test_timing_report_preserves_previous_stage_after_next_command_summary(tmp_path):
+    specs = [_spec(generation_count=10, seed=7)]
+
+    main_benchmark.write_single_stage_command_timing(
+        tmp_path,
+        specs,
+        ["simulate"],
+        elapsed_seconds=12.0,
+        started_at="s1",
+        finished_at="f1",
+        status="ok",
+        command="simulate",
+    )
+    main_benchmark.write_timing_report(tmp_path)
+
+    main_benchmark.write_single_stage_command_timing(
+        tmp_path,
+        specs,
+        ["biopsy-summary"],
+        elapsed_seconds=3.0,
+        started_at="s2",
+        finished_at="f2",
+        status="ok",
+        command="biopsy-summary",
+    )
+    main_benchmark.write_timing_report(tmp_path)
+
+    rows = pd.read_csv(main_benchmark.timing_summary_path(tmp_path))
+
+    assert list(rows.columns) == main_benchmark.COMMAND_TIMING_COLUMNS
+    assert set(rows["stage"]) == {"simulate", "biopsy-summary"}
+    assert rows.set_index("stage").loc["simulate", "total_seconds"] == pytest.approx(12.0)
+    assert rows.set_index("stage").loc["biopsy-summary", "total_seconds"] == pytest.approx(3.0)
+
+    detailed_rows = pd.read_csv(main_benchmark.detailed_timing_summary_path(tmp_path, 10))
+    assert set(detailed_rows[detailed_rows["scope"] == "command_stage"]["stage"]) == {
+        "simulate",
+        "biopsy-summary",
+    }
 
 
 def test_selected_algorithms_defaults_to_core_rows():

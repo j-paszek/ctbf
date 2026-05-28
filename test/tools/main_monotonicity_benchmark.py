@@ -7,6 +7,7 @@ import os
 import random
 import re
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 import sys
@@ -38,13 +39,18 @@ from reconstructor import build_evolution_tree  # noqa: E402
 from reconstructor_registry import get_algorithms_to_test  # noqa: E402
 from simulator import CancerCellEvolutionSimulator, Genotype  # noqa: E402
 from freeze_algorithm_variant_cases import (  # noqa: E402
+    EXT_GRF_METRIC_FIELD,
+    LEGACY_GRF_SET_SIMILARITY_FIELD,
     cnp2cnp_distance_matrix,
     genotypes_from_json,
     json_ready,
-    metric_summary,
+    legacy_set_grf_similarity_tree,
     node_link_data,
+    root_id,
     unique_cells_by_cell_id,
 )
+from evaluator import ext_grf_tree  # noqa: E402
+from evaluator_full import evaluate_4  # noqa: E402
 
 
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "test" / "data" / "main"
@@ -84,6 +90,7 @@ INPUT_LAYOUTS = ("legacy", "split")
 SPLIT_INPUT_LAYOUT = "split_v1"
 DISTANCE_FILE_NAME = "input_dm_cnp.json"
 CASE_RESULT_CSV_NAME = "result.csv"
+CASE_TIMING_FILE_NAME = "times.csv"
 RESULT_ROW_COLUMNS = [
     "case_id",
     "genome_length",
@@ -114,6 +121,7 @@ BIOPSY_CELL_SUMMARY_COLUMNS = [
     "total",
 ]
 TIMING_REPORT_COLUMNS = [
+    "generation_count",
     "stage",
     "operation",
     "scope",
@@ -129,7 +137,45 @@ TIMING_REPORT_COLUMNS = [
     "total_seconds",
     "algorithm",
     "mode",
+    "evaluation_method",
     "distance_mode",
+]
+CASE_TIMING_COLUMNS = [
+    "case_id",
+    "generation_count",
+    "stage",
+    "operation",
+    "algorithm",
+    "mode",
+    "evaluation_method",
+    "distance_mode",
+    "elapsed_seconds",
+    "started_at",
+    "finished_at",
+    "status",
+    "input_cell_count",
+    "unique_cell_count",
+    "tree_node_count",
+    "error",
+]
+CASE_TIMING_KEY_COLUMNS = [
+    "case_id",
+    "stage",
+    "operation",
+    "algorithm",
+    "mode",
+    "evaluation_method",
+    "distance_mode",
+]
+COMMAND_TIMING_COLUMNS = [
+    "generation_count",
+    "stage",
+    "started_at",
+    "finished_at",
+    "total_seconds",
+    "case_count",
+    "status",
+    "command",
 ]
 
 
@@ -147,6 +193,49 @@ class MainCaseSpec:
     r_dist: float = 4.0
 
 
+def utc_timestamp():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def normalize_timing_report_record(record):
+    normalized = {column: "" for column in TIMING_REPORT_COLUMNS}
+    for key, value in record.items():
+        if key in normalized:
+            normalized[key] = value
+    for key in [
+        "generation_count",
+        "count",
+        "input_files",
+        "instances",
+        "skipped",
+        "missing",
+        "failed",
+    ]:
+        if normalized[key] == "":
+            normalized[key] = 0
+        normalized[key] = int(normalized[key])
+    for key in [
+        "read_json_seconds",
+        "core_seconds",
+        "write_json_seconds",
+        "total_seconds",
+    ]:
+        if normalized[key] == "":
+            normalized[key] = 0.0
+        normalized[key] = float(normalized[key])
+    return normalized
+
+
+def write_detailed_timing_summary_records(output_root, records, *, generation_count):
+    reports_dir = Path(output_root) / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    records = [normalize_timing_report_record(record) for record in records]
+    frame = pd.DataFrame(records, columns=TIMING_REPORT_COLUMNS)
+    csv_path = detailed_timing_summary_path(output_root, generation_count)
+    frame.to_csv(csv_path, index=False)
+    return {"csv": csv_path}
+
+
 class TimingRecorder:
     def __init__(self):
         self.records = []
@@ -159,66 +248,19 @@ class TimingRecorder:
         for key, value in values.items():
             if key in record:
                 record[key] = value
-        for key in [
-            "count",
-            "input_files",
-            "instances",
-            "skipped",
-            "missing",
-            "failed",
-        ]:
-            if record[key] == "":
-                record[key] = 0
-        for key in [
-            "read_json_seconds",
-            "core_seconds",
-            "write_json_seconds",
-            "total_seconds",
-        ]:
-            if record[key] == "":
-                record[key] = 0.0
-            else:
-                record[key] = float(record[key])
-        self.records.append(record)
+        self.records.append(normalize_timing_report_record(record))
 
     def write(self, output_root):
         if not self.records:
             return {}
-        reports_dir = Path(output_root) / "reports"
-        reports_dir.mkdir(parents=True, exist_ok=True)
-        frame = pd.DataFrame(self.records, columns=TIMING_REPORT_COLUMNS)
-        csv_path = reports_dir / "timing_summary.csv"
-        json_path = reports_dir / "timing_summary.json"
-        frame.to_csv(csv_path, index=False)
-        total_frame = frame[frame["scope"] == "stage_total"]
-        if total_frame.empty:
-            totals_by_stage = []
-        else:
-            totals_by_stage = (
-                total_frame.groupby("stage", dropna=False)[
-                    [
-                        "count",
-                        "instances",
-                        "skipped",
-                        "missing",
-                        "failed",
-                        "read_json_seconds",
-                        "core_seconds",
-                        "write_json_seconds",
-                        "total_seconds",
-                    ]
-                ]
-                .sum(numeric_only=True)
-                .reset_index()
-                .to_dict(orient="records")
-            )
-        json_payload = {
-            "columns": TIMING_REPORT_COLUMNS,
-            "records": self.records,
-            "totals_by_stage": totals_by_stage,
-        }
-        write_json(json_path, json_payload, overwrite=True)
-        return {"csv": csv_path, "json": json_path}
+        generations = sorted({record["generation_count"] for record in self.records if record["generation_count"]})
+        if len(generations) != 1:
+            return {}
+        return write_detailed_timing_summary_records(
+            output_root,
+            self.records,
+            generation_count=generations[0],
+        )
 
 
 def load_json(path):
@@ -302,6 +344,18 @@ def genome_dict_path(output_root, spec_or_case_id):
     return case_dir(output_root, spec_or_case_id) / GENOME_DICT_FILE_NAME
 
 
+def case_timing_path(output_root, spec_or_case_id):
+    return case_dir(output_root, spec_or_case_id) / CASE_TIMING_FILE_NAME
+
+
+def timing_summary_path(output_root):
+    return Path(output_root) / "reports" / "timing_summary.csv"
+
+
+def detailed_timing_summary_path(output_root, generation_count):
+    return Path(output_root) / "reports" / f"timing_summary_g{int(generation_count)}.csv"
+
+
 def distance_path(output_root, spec_or_case_id):
     return case_dir(output_root, spec_or_case_id) / DISTANCE_FILE_NAME
 
@@ -318,6 +372,381 @@ def stable_rng(*parts):
     payload = "|".join(str(part) for part in parts).encode("utf-8")
     seed = int.from_bytes(hashlib.sha256(payload).digest()[:8], "big")
     return random.Random(seed)
+
+
+def case_timing_record(
+    case_or_spec,
+    *,
+    stage,
+    operation,
+    elapsed_seconds,
+    started_at,
+    finished_at,
+    status="ok",
+    algorithm="",
+    mode="",
+    evaluation_method="",
+    distance_mode="",
+    input_cell_count="",
+    unique_cell_count="",
+    tree_node_count="",
+    error="",
+):
+    if isinstance(case_or_spec, MainCaseSpec):
+        cid = case_id(case_or_spec)
+        generation_count = case_or_spec.generation_count
+    else:
+        cid = case_or_spec["case_id"]
+        generation_count = case_or_spec["NUMBER_OF_GENERATIONS"]
+    return {
+        "case_id": cid,
+        "generation_count": generation_count,
+        "stage": stage,
+        "operation": operation,
+        "algorithm": algorithm,
+        "mode": mode,
+        "evaluation_method": evaluation_method,
+        "distance_mode": distance_mode,
+        "elapsed_seconds": float(elapsed_seconds),
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "status": status,
+        "input_cell_count": input_cell_count,
+        "unique_cell_count": unique_cell_count,
+        "tree_node_count": tree_node_count,
+        "error": error,
+    }
+
+
+def normalize_case_timing_record(record):
+    normalized = {column: "" for column in CASE_TIMING_COLUMNS}
+    for key, value in record.items():
+        if key in normalized:
+            normalized[key] = value
+    for key in ["generation_count", "input_cell_count", "unique_cell_count", "tree_node_count"]:
+        if normalized[key] == "":
+            continue
+        normalized[key] = int(normalized[key])
+    if normalized["elapsed_seconds"] == "":
+        normalized["elapsed_seconds"] = 0.0
+    normalized["elapsed_seconds"] = float(normalized["elapsed_seconds"])
+    return normalized
+
+
+def case_timing_key(record):
+    return tuple(str(record.get(column, "")) for column in CASE_TIMING_KEY_COLUMNS)
+
+
+def write_case_timing_records(case_directory, records):
+    records = [normalize_case_timing_record(record) for record in records]
+    if not records:
+        return None
+    path = Path(case_directory) / CASE_TIMING_FILE_NAME
+    if path.exists():
+        existing = [
+            normalize_case_timing_record(row)
+            for row in pd.read_csv(path, keep_default_na=False).to_dict(orient="records")
+        ]
+    else:
+        existing = []
+    replacement_keys = {case_timing_key(record) for record in records}
+    kept = [
+        record
+        for record in existing
+        if case_timing_key(record) not in replacement_keys
+    ]
+    merged = sorted(
+        kept + records,
+        key=lambda record: (
+            int(record.get("generation_count") or 0),
+            str(record.get("case_id", "")),
+            str(record.get("stage", "")),
+            str(record.get("operation", "")),
+            str(record.get("algorithm", "")),
+            str(record.get("mode", "")),
+            str(record.get("evaluation_method", "")),
+            str(record.get("distance_mode", "")),
+        ),
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(merged, columns=CASE_TIMING_COLUMNS).to_csv(path, index=False)
+    return path
+
+
+def read_case_timing_records(path):
+    if not Path(path).exists():
+        return []
+    return [
+        normalize_case_timing_record(record)
+        for record in pd.read_csv(path, keep_default_na=False).to_dict(orient="records")
+    ]
+
+
+def collect_case_timing_records(output_root, specs=None):
+    if specs is None:
+        paths = sorted(Path(output_root).glob(f"**/{CASE_TIMING_FILE_NAME}"))
+    else:
+        paths = [
+            case_timing_path(output_root, spec)
+            for spec in specs
+            if case_timing_path(output_root, spec).exists()
+        ]
+    records = []
+    for path in paths:
+        records.extend(read_case_timing_records(path))
+    return records
+
+
+def normalize_command_timing_record(record):
+    normalized = {column: "" for column in COMMAND_TIMING_COLUMNS}
+    for key, value in record.items():
+        if key in normalized:
+            normalized[key] = value
+    if normalized["total_seconds"] == "" and "elapsed_seconds" in record:
+        normalized["total_seconds"] = record["elapsed_seconds"]
+    for key in ["generation_count", "case_count"]:
+        if normalized[key] == "":
+            normalized[key] = 0
+        normalized[key] = int(normalized[key])
+    if normalized["total_seconds"] == "":
+        normalized["total_seconds"] = 0.0
+    normalized["total_seconds"] = float(normalized["total_seconds"])
+    return normalized
+
+
+def write_command_timing_if_absent(
+    output_root,
+    *,
+    generation_count,
+    stage,
+    elapsed_seconds,
+    case_count,
+    started_at,
+    finished_at,
+    status="ok",
+    command="",
+):
+    path = timing_summary_path(output_root)
+    existing = read_command_timing_records(path)
+    if any(
+        record["generation_count"] == int(generation_count) and record["stage"] == stage
+        for record in existing
+    ):
+        return None
+    record = normalize_command_timing_record({
+        "generation_count": generation_count,
+        "stage": stage,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "total_seconds": elapsed_seconds,
+        "case_count": case_count,
+        "status": status,
+        "command": command,
+    })
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(existing + [record], columns=COMMAND_TIMING_COLUMNS).to_csv(path, index=False)
+    return path
+
+
+def read_command_timing_records(path):
+    path = Path(path)
+    if not path.exists():
+        return []
+    frame = pd.read_csv(path, keep_default_na=False)
+    columns = set(frame.columns)
+    current_columns = set(COMMAND_TIMING_COLUMNS)
+    legacy_elapsed_columns = (current_columns - {"total_seconds"}) | {"elapsed_seconds"}
+    if not (current_columns <= columns or legacy_elapsed_columns <= columns):
+        return []
+    return [
+        normalize_command_timing_record(record)
+        for record in frame.to_dict(orient="records")
+    ]
+
+
+def collect_command_timing_records(output_root):
+    return read_command_timing_records(timing_summary_path(output_root))
+
+
+def write_single_stage_command_timing(
+    output_root,
+    specs,
+    stages,
+    *,
+    elapsed_seconds,
+    started_at,
+    finished_at,
+    status,
+    command="",
+):
+    if status != "ok" or len(stages) != 1:
+        return []
+    counts_by_generation = {}
+    for spec in specs:
+        counts_by_generation[spec.generation_count] = counts_by_generation.get(spec.generation_count, 0) + 1
+    written = []
+    for generation_count, case_count in sorted(counts_by_generation.items()):
+        path = write_command_timing_if_absent(
+            output_root,
+            generation_count=generation_count,
+            stage=stages[0],
+            elapsed_seconds=elapsed_seconds,
+            case_count=case_count,
+            started_at=started_at,
+            finished_at=finished_at,
+            status=status,
+            command=command,
+        )
+        if path is not None:
+            written.append(path)
+    unique_written = []
+    seen = set()
+    for path in written:
+        if path in seen:
+            continue
+        seen.add(path)
+        unique_written.append(path)
+    return unique_written
+
+
+def timing_report_record_from_group(group, *, stage, operation, scope, generation_count=0, **labels):
+    record = {
+        "generation_count": generation_count,
+        "stage": stage,
+        "operation": operation,
+        "scope": scope,
+        "count": len(group),
+        "instances": len(group),
+        "core_seconds": float(sum(float(row["elapsed_seconds"]) for row in group)),
+        "total_seconds": float(sum(float(row["elapsed_seconds"]) for row in group)),
+    }
+    record.update(labels)
+    return record
+
+
+def timing_report_records_from_artifacts(output_root, specs=None):
+    records = []
+    allowed_generations = None if specs is None else {spec.generation_count for spec in specs}
+    case_records = collect_case_timing_records(output_root, specs=specs)
+    groups = {}
+    for record in case_records:
+        key = (record["generation_count"], record["stage"])
+        groups.setdefault(key, []).append(record)
+    for (generation_count, stage), group in sorted(groups.items()):
+        records.append(timing_report_record_from_group(
+            group,
+            generation_count=generation_count,
+            stage=stage,
+            operation="case_timing_total",
+            scope="stage_total",
+        ))
+
+    operation_groups = {}
+    for record in case_records:
+        if record["stage"] == "reconstruct":
+            key = (
+                record["generation_count"],
+                record["stage"],
+                "reconstruct_by_algorithm",
+                "algorithm",
+                record["algorithm"],
+                "",
+                "",
+                "",
+            )
+        elif record["stage"] == "evaluate":
+            key = (
+                record["generation_count"],
+                record["stage"],
+                "evaluate_by_metric_method",
+                "evaluation_method",
+                "",
+                "",
+                record["evaluation_method"],
+                "",
+            )
+        elif record["stage"] == "distance":
+            key = (
+                record["generation_count"],
+                record["stage"],
+                record["operation"],
+                "distance_mode",
+                "",
+                "",
+                "",
+                record["distance_mode"],
+            )
+        else:
+            key = (
+                record["generation_count"],
+                record["stage"],
+                record["operation"],
+                "operation",
+                "",
+                "",
+                "",
+                "",
+            )
+        operation_groups.setdefault(key, []).append(record)
+    for (
+        generation_count,
+        stage,
+        operation,
+        scope,
+        algorithm,
+        mode,
+        evaluation_method,
+        distance_mode,
+    ), group in sorted(operation_groups.items()):
+        records.append(timing_report_record_from_group(
+            group,
+            generation_count=generation_count,
+            stage=stage,
+            operation=operation,
+            scope=scope,
+            algorithm=algorithm,
+            mode=mode,
+            evaluation_method=evaluation_method,
+            distance_mode=distance_mode,
+        ))
+
+    for command_record in collect_command_timing_records(output_root):
+        if allowed_generations is not None and command_record["generation_count"] not in allowed_generations:
+            continue
+        records.append({
+            "generation_count": command_record["generation_count"],
+            "stage": command_record["stage"],
+            "operation": "command_wall_time",
+            "scope": "command_stage",
+            "count": command_record["case_count"],
+            "input_files": command_record["case_count"],
+            "instances": 1,
+            "core_seconds": command_record["total_seconds"],
+            "total_seconds": command_record["total_seconds"],
+        })
+    return records
+
+
+def write_timing_report(output_root, specs=None):
+    records = timing_report_records_from_artifacts(output_root, specs=specs)
+    frame = pd.DataFrame(
+        [normalize_timing_report_record(record) for record in records],
+        columns=TIMING_REPORT_COLUMNS,
+    )
+    generation_summaries = {}
+    for generation_count in sorted(
+        int(value)
+        for value in frame["generation_count"].unique()
+        if int(value) != 0
+    ):
+        generation_frame = frame[frame["generation_count"] == generation_count]
+        path = detailed_timing_summary_path(output_root, generation_count)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        generation_frame.to_csv(path, index=False)
+        generation_summaries[f"g{generation_count}"] = path
+    if not generation_summaries:
+        return {}
+    return {"generation_summaries": generation_summaries}
 
 
 def build_config_snapshot(base_config, spec):
@@ -480,14 +909,43 @@ def choose_biopsy_generations_with_retry(
     }
 
 
-def input_case_from_simulation(spec, base_config, *, max_retries=100):
+def input_case_from_simulation(spec, base_config, *, max_retries=100, timing_records=None):
     config = build_config_snapshot(base_config, spec)
+    sim_started_at = utc_timestamp()
+    sim_start = time.perf_counter()
     simulator = build_simulator_from_config(config, spec.seed)
+    sim_finished_at = utc_timestamp()
+    if timing_records is not None:
+        timing_records.append(case_timing_record(
+            spec,
+            stage="simulate",
+            operation="simulate_true_tree",
+            elapsed_seconds=time.perf_counter() - sim_start,
+            started_at=sim_started_at,
+            finished_at=sim_finished_at,
+            status="ok",
+            tree_node_count=len(simulator.tree.nodes),
+        ))
+    biopsy_started_at = utc_timestamp()
+    biopsy_start = time.perf_counter()
     selection = choose_biopsy_generations_with_retry(
         simulator,
         spec,
         max_retries=max_retries,
     )
+    biopsy_finished_at = utc_timestamp()
+    if timing_records is not None:
+        timing_records.append(case_timing_record(
+            spec,
+            stage="simulate",
+            operation="sample_biopsies",
+            elapsed_seconds=time.perf_counter() - biopsy_start,
+            started_at=biopsy_started_at,
+            finished_at=biopsy_finished_at,
+            status=selection["status"],
+            input_cell_count=selection["total_sampled_biopsy_cells"],
+            tree_node_count=len(simulator.tree.nodes),
+        ))
     cid = case_id(spec)
     true_tree = (
         simulator.canonicalized_tree_by_genome()
@@ -999,7 +1457,57 @@ def reconstruction_result(input_case, distance_payload, algorithm, mode):
     }
 
 
-def evaluate_result(input_case, result):
+def metric_summary_with_timings(true_tree, reconstructed_tree):
+    timings = []
+    adf1_started_at = utc_timestamp()
+    adf1_start = time.perf_counter()
+    metrics = evaluate_4(true_tree, reconstructed_tree)
+    restricted_labels = {
+        str(data.get("cell_id"))
+        for _, data in reconstructed_tree.nodes(data=True)
+        if data.get("cell_id") is not None
+    }
+    restricted_metrics = evaluate_4(
+        true_tree,
+        reconstructed_tree,
+        restrict_labels=restricted_labels,
+    )["ancestors_unique_restricted"]
+    timings.append({
+        "evaluation_method": "adf1",
+        "elapsed_seconds": time.perf_counter() - adf1_start,
+        "started_at": adf1_started_at,
+        "finished_at": utc_timestamp(),
+    })
+
+    grf_started_at = utc_timestamp()
+    grf_start = time.perf_counter()
+    true_root = root_id(true_tree)
+    reconstructed_root = root_id(reconstructed_tree)
+    ext_grf = ext_grf_tree(true_tree, true_root, reconstructed_tree, reconstructed_root)
+    legacy_grf = legacy_set_grf_similarity_tree(
+        true_tree,
+        true_root,
+        reconstructed_tree,
+        reconstructed_root,
+    )
+    timings.append({
+        "evaluation_method": "grf",
+        "elapsed_seconds": time.perf_counter() - grf_start,
+        "started_at": grf_started_at,
+        "finished_at": utc_timestamp(),
+    })
+
+    return {
+        "ancestors_unique_restricted": restricted_metrics,
+        "ancestors_multiset": metrics["ancestors_multiset"],
+        "ancestors_unique": metrics["ancestors_unique"],
+        "grf": 1 - ext_grf,
+        EXT_GRF_METRIC_FIELD: ext_grf,
+        LEGACY_GRF_SET_SIMILARITY_FIELD: legacy_grf,
+    }, timings
+
+
+def evaluate_result(input_case, result, metric_timings=None):
     if result.get("status") == "failed":
         return result
     true_tree = true_tree_from_input(input_case)
@@ -1016,8 +1524,11 @@ def evaluate_result(input_case, result):
         )
     reconstructed_tree = node_link_graph(reconstructed_payload)
     result = copy.deepcopy(result)
-    result["metrics"] = metric_summary(true_tree, reconstructed_tree)
+    metrics, timings = metric_summary_with_timings(true_tree, reconstructed_tree)
+    result["metrics"] = metrics
     result["status"] = "evaluated"
+    if metric_timings is not None:
+        metric_timings.extend(timings)
     return result
 
 
@@ -1718,10 +2229,12 @@ def run_simulate_stage(specs, args, base_config, timing=None):
             continue
         try:
             core_start = time.perf_counter()
+            case_timing_records = []
             input_case = input_case_from_simulation(
                 spec,
                 base_config,
                 max_retries=args.max_biopsy_generation_retries,
+                timing_records=case_timing_records,
             )
             core_seconds += time.perf_counter() - core_start
         except Exception:
@@ -1735,6 +2248,7 @@ def run_simulate_stage(specs, args, base_config, timing=None):
             overwrite=True,
         )
         write_seconds += time.perf_counter() - write_start
+        write_case_timing_records(directory, case_timing_records)
         completed += 1
         print(f"wrote input {written[0] if written else directory}")
     if timing is not None:
@@ -1784,15 +2298,30 @@ def run_distance_stage(specs, args, timing=None):
             skipped += 1
             continue
         try:
+            operation_started_at = utc_timestamp()
             core_start = time.perf_counter()
             distance_payload = compute_case_distances(input_case, distance_mode=args.distance_mode)
-            core_seconds += time.perf_counter() - core_start
+            core_elapsed = time.perf_counter() - core_start
+            operation_finished_at = utc_timestamp()
+            core_seconds += core_elapsed
         except Exception:
             failed += 1
             raise
         write_start = time.perf_counter()
         write_json(output_file, distance_payload, overwrite=True)
         write_seconds += time.perf_counter() - write_start
+        write_case_timing_records(directory, [case_timing_record(
+            input_case,
+            stage="distance",
+            operation=f"distance_{args.distance_mode}",
+            elapsed_seconds=core_elapsed,
+            started_at=operation_started_at,
+            finished_at=operation_finished_at,
+            status=distance_payload["status"],
+            distance_mode=args.distance_mode,
+            input_cell_count=distance_payload.get("biopsy_cell_count", ""),
+            unique_cell_count=distance_payload.get("unique_biopsy_cell_count", ""),
+        )])
         completed += 1
         print(f"wrote distances {output_file}")
     if timing is not None:
@@ -1823,6 +2352,7 @@ def run_reconstruct_stage(specs, args, algorithms, modes, timing=None):
     failed = 0
     missing = 0
     by_algorithm_mode = {}
+    by_algorithm = {}
     input_layout = getattr(args, "input_layout", "legacy")
     for spec in specs:
         directory = case_dir(args.output_root, spec)
@@ -1858,12 +2388,21 @@ def run_reconstruct_stage(specs, args, algorithms, modes, timing=None):
                     "failed": 0,
                     "skipped": 0,
                 })
+                by_algorithm.setdefault(algorithm_name, {
+                    "count": 0,
+                    "core_seconds": 0.0,
+                    "write_json_seconds": 0.0,
+                    "failed": 0,
+                    "skipped": 0,
+                })
                 output_file = result_path(args.output_root, spec, mode, algorithm_name)
                 if output_file.exists() and not args.overwrite:
                     print(f"exists result {output_file}")
                     skipped += 1
                     by_algorithm_mode[timing_key]["skipped"] += 1
+                    by_algorithm[algorithm_name]["skipped"] += 1
                     continue
+                operation_started_at = utc_timestamp()
                 core_start = time.perf_counter()
                 try:
                     result = reconstruction_result(input_case, distance_payload, algorithm, mode)
@@ -1872,6 +2411,7 @@ def run_reconstruct_stage(specs, args, algorithms, modes, timing=None):
                 except Exception as exc:
                     failed += 1
                     by_algorithm_mode[timing_key]["failed"] += 1
+                    by_algorithm[algorithm_name]["failed"] += 1
                     result = {
                         "case_id": input_case["case_id"],
                         "corpus": CORPUS_NAME,
@@ -1883,15 +2423,35 @@ def run_reconstruct_stage(specs, args, algorithms, modes, timing=None):
                     if args.fail_fast:
                         raise
                 core_elapsed = time.perf_counter() - core_start
+                operation_finished_at = utc_timestamp()
                 core_seconds += core_elapsed
                 by_algorithm_mode[timing_key]["core_seconds"] += core_elapsed
+                by_algorithm[algorithm_name]["core_seconds"] += core_elapsed
                 write_start = time.perf_counter()
                 write_json(output_file, result, overwrite=True)
                 write_elapsed = time.perf_counter() - write_start
                 write_seconds += write_elapsed
                 by_algorithm_mode[timing_key]["write_json_seconds"] += write_elapsed
+                by_algorithm[algorithm_name]["write_json_seconds"] += write_elapsed
                 completed += 1
                 by_algorithm_mode[timing_key]["count"] += 1
+                by_algorithm[algorithm_name]["count"] += 1
+                tree_node_count = ""
+                if result.get("status") == "reconstructed" and "reconstructed_tree" in result:
+                    tree_node_count = len(result["reconstructed_tree"].get("nodes", []))
+                write_case_timing_records(directory, [case_timing_record(
+                    input_case,
+                    stage="reconstruct",
+                    operation="reconstruct",
+                    elapsed_seconds=core_elapsed,
+                    started_at=operation_started_at,
+                    finished_at=operation_finished_at,
+                    status=result.get("status", "failed"),
+                    algorithm=algorithm_name,
+                    mode=mode,
+                    tree_node_count=tree_node_count,
+                    error=result.get("error", ""),
+                )])
                 print(f"wrote result {output_file}")
     if timing is not None:
         total_seconds = time.perf_counter() - stage_start
@@ -1909,11 +2469,11 @@ def run_reconstruct_stage(specs, args, algorithms, modes, timing=None):
             write_json_seconds=write_seconds,
             total_seconds=total_seconds,
         )
-        for (algorithm_name, mode), values in sorted(by_algorithm_mode.items()):
+        for algorithm_name, values in sorted(by_algorithm.items()):
             timing.add(
                 "reconstruct",
-                "reconstruct_result_by_algorithm_mode",
-                scope="algorithm_mode",
+                "reconstruct_result_by_algorithm",
+                scope="algorithm",
                 count=values["count"],
                 instances=values["count"],
                 skipped=values["skipped"],
@@ -1922,7 +2482,6 @@ def run_reconstruct_stage(specs, args, algorithms, modes, timing=None):
                 write_json_seconds=values["write_json_seconds"],
                 total_seconds=values["core_seconds"] + values["write_json_seconds"],
                 algorithm=algorithm_name,
-                mode=mode,
             )
 
 
@@ -1936,6 +2495,7 @@ def run_evaluate_stage(specs, args, algorithms, modes, timing=None):
     failed = 0
     missing = 0
     by_algorithm_mode = {}
+    by_evaluation_method = {}
     input_layout = getattr(args, "input_layout", "legacy")
     for spec in specs:
         case_directory = case_dir(args.output_root, spec)
@@ -1959,6 +2519,7 @@ def run_evaluate_stage(specs, args, algorithms, modes, timing=None):
             skipped += 1
             continue
         case_records = []
+        case_timing_records = []
         for algorithm in algorithms:
             algorithm_name = getattr(algorithm, "__name__", str(algorithm))
             for mode in modes:
@@ -1984,19 +2545,42 @@ def run_evaluate_stage(specs, args, algorithms, modes, timing=None):
                 by_algorithm_mode[timing_key]["read_json_seconds"] += read_elapsed
                 core_start = time.perf_counter()
                 try:
-                    evaluated = evaluate_result(input_case, result)
+                    metric_timings = []
+                    evaluated = evaluate_result(input_case, result, metric_timings=metric_timings)
                 except Exception as exc:
                     failed += 1
                     by_algorithm_mode[timing_key]["failed"] += 1
                     evaluated = copy.deepcopy(result)
                     evaluated["status"] = "failed"
                     evaluated["error"] = str(exc)
+                    metric_timings = []
                     if args.fail_fast:
                         raise
                 core_elapsed = time.perf_counter() - core_start
                 core_seconds += core_elapsed
                 by_algorithm_mode[timing_key]["core_seconds"] += core_elapsed
                 case_records.append(case_result_record(input_case, output_file, evaluated))
+                for metric_timing in metric_timings:
+                    method = metric_timing["evaluation_method"]
+                    by_evaluation_method.setdefault(method, {
+                        "count": 0,
+                        "core_seconds": 0.0,
+                    })
+                    by_evaluation_method[method]["count"] += 1
+                    by_evaluation_method[method]["core_seconds"] += metric_timing["elapsed_seconds"]
+                    case_timing_records.append(case_timing_record(
+                        input_case,
+                        stage="evaluate",
+                        operation="evaluate_metric",
+                        elapsed_seconds=metric_timing["elapsed_seconds"],
+                        started_at=metric_timing["started_at"],
+                        finished_at=metric_timing["finished_at"],
+                        status=evaluated.get("status", "failed"),
+                        algorithm=algorithm_name,
+                        mode=mode,
+                        evaluation_method=metric_timing["evaluation_method"],
+                        error=evaluated.get("error", ""),
+                    ))
                 completed += 1
                 by_algorithm_mode[timing_key]["count"] += 1
         if case_records:
@@ -2009,6 +2593,7 @@ def run_evaluate_stage(specs, args, algorithms, modes, timing=None):
                 by_algorithm_mode[timing_key]["write_json_seconds"] += (
                     write_elapsed / len(case_records)
                 )
+            write_case_timing_records(case_directory, case_timing_records)
             print(f"wrote evaluated results {written}")
     if timing is not None:
         total_seconds = time.perf_counter() - stage_start
@@ -2026,26 +2611,16 @@ def run_evaluate_stage(specs, args, algorithms, modes, timing=None):
             write_json_seconds=write_seconds,
             total_seconds=total_seconds,
         )
-        for (algorithm_name, mode), values in sorted(by_algorithm_mode.items()):
+        for evaluation_method, values in sorted(by_evaluation_method.items()):
             timing.add(
                 "evaluate",
-                "evaluate_result_by_algorithm_mode",
-                scope="algorithm_mode",
+                "evaluate_result_by_metric_method",
+                scope="evaluation_method",
                 count=values["count"],
                 instances=values["count"],
-                skipped=values["skipped"],
-                missing=values["missing"],
-                failed=values["failed"],
-                read_json_seconds=values["read_json_seconds"],
                 core_seconds=values["core_seconds"],
-                write_json_seconds=values["write_json_seconds"],
-                total_seconds=(
-                    values["read_json_seconds"]
-                    + values["core_seconds"]
-                    + values["write_json_seconds"]
-                ),
-                algorithm=algorithm_name,
-                mode=mode,
+                total_seconds=values["core_seconds"],
+                evaluation_method=evaluation_method,
             )
 
 
@@ -2080,6 +2655,12 @@ def run_biopsy_summary_stage(specs, args, timing=None):
     print("Wrote biopsy-cell summary:", written)
 
 
+def run_timing_report_stage(specs, args):
+    written = write_timing_report(args.output_root, specs=specs)
+    print("Wrote timing reports:", written)
+    return written
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Build and report the main sampling-monotonicity benchmark corpus.")
     parser.add_argument(
@@ -2091,6 +2672,7 @@ def parse_args():
             "reconstruct",
             "evaluate",
             "biopsy-summary",
+            "timing-report",
             "report",
             "check",
             "all",
@@ -2143,6 +2725,8 @@ def main():
             print(f"... {len(specs) - 10} more")
         return
 
+    command_started_at = utc_timestamp()
+    command_start = time.perf_counter()
     with open(args.config, "r") as f:
         base_config = json.load(f)
 
@@ -2160,6 +2744,8 @@ def main():
                 run_evaluate_stage(specs, args, algorithms, modes, timing=timing)
             elif stage == "biopsy-summary":
                 run_biopsy_summary_stage(specs, args, timing=timing)
+            elif stage == "timing-report":
+                pass
             elif stage == "report":
                 stage_start = time.perf_counter()
                 core_start = time.perf_counter()
@@ -2182,9 +2768,23 @@ def main():
                 raise
             exit_code = 1
             break
-    timing_written = timing.write(args.output_root)
-    if timing_written:
-        print("Wrote timing reports:", timing_written)
+    command_finished_at = utc_timestamp()
+    command_timing_written = write_single_stage_command_timing(
+        args.output_root,
+        specs,
+        stages,
+        elapsed_seconds=time.perf_counter() - command_start,
+        started_at=command_started_at,
+        finished_at=command_finished_at,
+        status="ok" if exit_code == 0 else "failed",
+        command=" ".join(sys.argv),
+    )
+    if command_timing_written:
+        print("Wrote command timing:", command_timing_written)
+    if exit_code == 0:
+        timing_written = write_timing_report(args.output_root)
+        if timing_written:
+            print("Wrote timing reports:", timing_written)
     return exit_code
 
 
