@@ -2,6 +2,7 @@ import networkx as nx
 import itertools
 import re
 from collections import Counter
+from dataclasses import dataclass
 
 
 GRF_METRIC_NAME = "grf"
@@ -20,6 +21,13 @@ EXT_GRF_METRIC_DESCRIPTION = (
     "Exact generalized Robinson-Foulds distance on multisets of label multisets. "
     "0.0 means identical cluster-multiset structure; higher values mean poorer agreement."
 )
+
+
+@dataclass(frozen=True)
+class ClusterEvaluationContext:
+    clusters: tuple
+    counts: Counter
+    cluster_set: frozenset
 
 def parse_newick_to_nx(newick_str, prefix="node"):
     """
@@ -91,6 +99,30 @@ def compute_all_clusters(G, root):
     dfs(root)
     return list(clusters.values())
 
+
+def cluster_evaluation_context(G, root):
+    clusters = tuple(compute_all_clusters(G, root))
+    return ClusterEvaluationContext(
+        clusters=clusters,
+        counts=Counter(clusters),
+        cluster_set=frozenset(clusters),
+    )
+
+
+def _cached_jaccard_distance(left_cluster, right_cluster, cache):
+    if cache is None:
+        return jaccard_distance(left_cluster, right_cluster)
+
+    key = (left_cluster, right_cluster)
+    if key in cache:
+        return cache[key]
+    reverse_key = (right_cluster, left_cluster)
+    if reverse_key in cache:
+        return cache[reverse_key]
+    distance = jaccard_distance(left_cluster, right_cluster)
+    cache[key] = distance
+    return distance
+
 def jaccard_distance(ms1, ms2):
     """
     Computes Jaccard distance using two sorted (label, count) tuples.
@@ -140,19 +172,17 @@ def _multiset_difference_counts(left_counts, right_counts):
     )
 
 
-def _weighted_jaccard_distance_sum(left_counts, right_counts):
+def _weighted_jaccard_distance_sum(left_counts, right_counts, jaccard_cache=None):
     return sum(
         left_multiplicity
         * right_multiplicity
-        * jaccard_distance(left_cluster, right_cluster)
+        * _cached_jaccard_distance(left_cluster, right_cluster, jaccard_cache)
         for left_cluster, left_multiplicity in left_counts.items()
         for right_cluster, right_multiplicity in right_counts.items()
     )
 
 
-def _ext_grf_from_clusters(A, B):
-    A_counts = Counter(A)
-    B_counts = Counter(B)
+def ext_grf_from_cluster_counts(A_counts, B_counts, jaccard_cache=None):
     len_A = sum(A_counts.values())
     len_B = sum(B_counts.values())
     union_size = _multiset_union_size(A_counts, B_counts)
@@ -165,10 +195,22 @@ def _ext_grf_from_clusters(A, B):
     b_minus_a = _multiset_difference_counts(B_counts, A_counts)
     a_minus_b = _multiset_difference_counts(A_counts, B_counts)
 
-    num1 = _weighted_jaccard_distance_sum(A_counts, b_minus_a)
-    num2 = _weighted_jaccard_distance_sum(a_minus_b, B_counts)
+    num1 = _weighted_jaccard_distance_sum(A_counts, b_minus_a, jaccard_cache)
+    num2 = _weighted_jaccard_distance_sum(a_minus_b, B_counts, jaccard_cache)
 
     return (num1 / (len_A * union_size)) + (num2 / (len_B * union_size))
+
+
+def ext_grf_from_clusters(A, B, jaccard_cache=None):
+    return ext_grf_from_cluster_counts(
+        Counter(A),
+        Counter(B),
+        jaccard_cache=jaccard_cache,
+    )
+
+
+def _ext_grf_from_clusters(A, B):
+    return ext_grf_from_clusters(A, B)
 
 
 def ext_grf_tree(G1, root1, G2, root2):
@@ -179,9 +221,9 @@ def ext_grf_tree(G1, root1, G2, root2):
     formula over multisets of clusters, so repeated equal clusters contribute
     with their multiplicity instead of being collapsed to set membership.
     """
-    A = compute_all_clusters(G1, root1)
-    B = compute_all_clusters(G2, root2)
-    return _ext_grf_from_clusters(A, B)
+    A = cluster_evaluation_context(G1, root1)
+    B = cluster_evaluation_context(G2, root2)
+    return ext_grf_from_cluster_counts(A.counts, B.counts)
 
 
 def grf_tree(G1, root1, G2, root2):

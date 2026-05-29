@@ -44,13 +44,13 @@ from freeze_algorithm_variant_cases import (  # noqa: E402
     cnp2cnp_distance_matrix,
     genotypes_from_json,
     json_ready,
-    legacy_set_grf_similarity_tree,
+    legacy_set_grf_similarity_from_cluster_contexts,
     node_link_data,
     root_id,
     unique_cells_by_cell_id,
 )
-from evaluator import ext_grf_tree  # noqa: E402
-from evaluator_full import evaluate_4  # noqa: E402
+from evaluator import cluster_evaluation_context, ext_grf_from_cluster_counts  # noqa: E402
+from evaluator_full import evaluate_4, tree_evaluation_context  # noqa: E402
 
 
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "test" / "data" / "main"
@@ -191,6 +191,16 @@ class MainCaseSpec:
     single_or_multiple_event_prob: float
     duplication_multiplicity: int
     r_dist: float = 4.0
+
+
+@dataclass(frozen=True)
+class EvaluationCaseContext:
+    input_case: dict
+    genome_dict: dict
+    true_tree: nx.DiGraph
+    true_eval_context: object
+    true_root: object
+    true_cluster_context: object
 
 
 def utc_timestamp():
@@ -1301,6 +1311,26 @@ def load_split_input_case(case_directory):
     return input_case
 
 
+def load_split_evaluation_input_case(case_directory):
+    case_directory = Path(case_directory)
+    biopsy_payload = load_json(case_directory / BIOPSY_INPUT_FILE_NAME)
+    true_tree_payload = load_json(case_directory / TRUE_TREE_INPUT_FILE_NAME)
+    genome_dict = read_genome_dict(case_directory / GENOME_DICT_FILE_NAME)
+    input_case = {
+        key: copy.deepcopy(value)
+        for key, value in biopsy_payload.items()
+        if key not in {"true_tree_file", "genome_dict_file", "biopsies"}
+    }
+    if input_case.get("status") == "ok":
+        input_case["true_tree"] = hydrate_tree_payload(
+            true_tree_payload["true_tree"],
+            genome_dict,
+            require_all=True,
+        )
+    input_case["input_layout"] = SPLIT_INPUT_LAYOUT
+    return input_case, genome_dict
+
+
 def load_input_case(case_directory_or_path, *, preferred_layout=None, hydrate=True):
     path = Path(case_directory_or_path)
     case_directory = path if path.is_dir() else path.parent
@@ -1311,6 +1341,24 @@ def load_input_case(case_directory_or_path, *, preferred_layout=None, hydrate=Tr
         return load_json(legacy_path)
     if split_input_exists(case_directory):
         return load_split_input_case(case_directory) if hydrate else load_json(case_directory / BIOPSY_INPUT_FILE_NAME)
+    raise FileNotFoundError(f"No input artifact found in {case_directory}")
+
+
+def load_evaluation_input_case(case_directory_or_path, *, preferred_layout=None):
+    path = Path(case_directory_or_path)
+    case_directory = path if path.is_dir() else path.parent
+    legacy_path = case_directory / LEGACY_INPUT_FILE_NAME
+    if preferred_layout == "split" and split_input_exists(case_directory):
+        return load_split_evaluation_input_case(case_directory)
+    if legacy_path.exists():
+        input_case = load_json(legacy_path)
+        try:
+            genome_dict = genome_dict_from_input_case(input_case)
+        except ValueError:
+            genome_dict = None
+        return input_case, genome_dict
+    if split_input_exists(case_directory):
+        return load_split_evaluation_input_case(case_directory)
     raise FileNotFoundError(f"No input artifact found in {case_directory}")
 
 
@@ -1368,6 +1416,19 @@ def cell_lists_from_input(input_case):
 
 def true_tree_from_input(input_case):
     return node_link_graph(input_case["true_tree"])
+
+
+def build_evaluation_case_context(input_case, genome_dict=None):
+    true_tree = true_tree_from_input(input_case)
+    true_root = root_id(true_tree)
+    return EvaluationCaseContext(
+        input_case=input_case,
+        genome_dict=genome_dict,
+        true_tree=true_tree,
+        true_eval_context=tree_evaluation_context(true_tree),
+        true_root=true_root,
+        true_cluster_context=cluster_evaluation_context(true_tree, true_root),
+    )
 
 
 def l1_distance_matrix(cells):
@@ -1457,21 +1518,30 @@ def reconstruction_result(input_case, distance_payload, algorithm, mode):
     }
 
 
-def metric_summary_with_timings(true_tree, reconstructed_tree):
+def metric_summary_with_timings(
+    true_tree,
+    reconstructed_tree,
+    *,
+    true_eval_context=None,
+    true_root=None,
+    true_cluster_context=None,
+):
     timings = []
     adf1_started_at = utc_timestamp()
     adf1_start = time.perf_counter()
-    metrics = evaluate_4(true_tree, reconstructed_tree)
+    if true_eval_context is None:
+        true_eval_context = tree_evaluation_context(true_tree)
+    reconstructed_eval_context = tree_evaluation_context(reconstructed_tree)
     restricted_labels = {
         str(data.get("cell_id"))
         for _, data in reconstructed_tree.nodes(data=True)
         if data.get("cell_id") is not None
     }
-    restricted_metrics = evaluate_4(
-        true_tree,
-        reconstructed_tree,
+    metrics = evaluate_4(
+        true_eval_context,
+        reconstructed_eval_context,
         restrict_labels=restricted_labels,
-    )["ancestors_unique_restricted"]
+    )
     timings.append({
         "evaluation_method": "adf1",
         "elapsed_seconds": time.perf_counter() - adf1_start,
@@ -1481,14 +1551,25 @@ def metric_summary_with_timings(true_tree, reconstructed_tree):
 
     grf_started_at = utc_timestamp()
     grf_start = time.perf_counter()
-    true_root = root_id(true_tree)
+    if true_root is None:
+        true_root = root_id(true_tree)
+    if true_cluster_context is None:
+        true_cluster_context = cluster_evaluation_context(true_tree, true_root)
     reconstructed_root = root_id(reconstructed_tree)
-    ext_grf = ext_grf_tree(true_tree, true_root, reconstructed_tree, reconstructed_root)
-    legacy_grf = legacy_set_grf_similarity_tree(
-        true_tree,
-        true_root,
+    reconstructed_cluster_context = cluster_evaluation_context(
         reconstructed_tree,
         reconstructed_root,
+    )
+    jaccard_cache = {}
+    ext_grf = ext_grf_from_cluster_counts(
+        true_cluster_context.counts,
+        reconstructed_cluster_context.counts,
+        jaccard_cache=jaccard_cache,
+    )
+    legacy_grf = legacy_set_grf_similarity_from_cluster_contexts(
+        true_cluster_context,
+        reconstructed_cluster_context,
+        jaccard_cache=jaccard_cache,
     )
     timings.append({
         "evaluation_method": "grf",
@@ -1498,7 +1579,7 @@ def metric_summary_with_timings(true_tree, reconstructed_tree):
     })
 
     return {
-        "ancestors_unique_restricted": restricted_metrics,
+        "ancestors_unique_restricted": metrics["ancestors_unique_restricted"],
         "ancestors_multiset": metrics["ancestors_multiset"],
         "ancestors_unique": metrics["ancestors_unique"],
         "grf": 1 - ext_grf,
@@ -1507,14 +1588,24 @@ def metric_summary_with_timings(true_tree, reconstructed_tree):
     }, timings
 
 
-def evaluate_result(input_case, result, metric_timings=None):
+def evaluate_result(input_case, result, metric_timings=None, evaluation_context=None):
     if result.get("status") == "failed":
         return result
-    true_tree = true_tree_from_input(input_case)
-    try:
-        genome_dict = genome_dict_from_input_case(input_case)
-    except ValueError:
-        genome_dict = None
+    if evaluation_context is None:
+        true_tree = true_tree_from_input(input_case)
+        try:
+            genome_dict = genome_dict_from_input_case(input_case)
+        except ValueError:
+            genome_dict = None
+        true_eval_context = None
+        true_root = None
+        true_cluster_context = None
+    else:
+        true_tree = evaluation_context.true_tree
+        genome_dict = evaluation_context.genome_dict
+        true_eval_context = evaluation_context.true_eval_context
+        true_root = evaluation_context.true_root
+        true_cluster_context = evaluation_context.true_cluster_context
     reconstructed_payload = result["reconstructed_tree"]
     if genome_dict is not None:
         reconstructed_payload = hydrate_tree_payload(
@@ -1524,7 +1615,13 @@ def evaluate_result(input_case, result, metric_timings=None):
         )
     reconstructed_tree = node_link_graph(reconstructed_payload)
     result = copy.deepcopy(result)
-    metrics, timings = metric_summary_with_timings(true_tree, reconstructed_tree)
+    metrics, timings = metric_summary_with_timings(
+        true_tree,
+        reconstructed_tree,
+        true_eval_context=true_eval_context,
+        true_root=true_root,
+        true_cluster_context=true_cluster_context,
+    )
     result["metrics"] = metrics
     result["status"] = "evaluated"
     if metric_timings is not None:
@@ -2510,7 +2607,7 @@ def run_evaluate_stage(specs, args, algorithms, modes, timing=None):
             skipped += 1
             continue
         read_start = time.perf_counter()
-        input_case = load_input_case(
+        input_case, genome_dict = load_evaluation_input_case(
             case_directory,
             preferred_layout=input_layout,
         )
@@ -2518,6 +2615,12 @@ def run_evaluate_stage(specs, args, algorithms, modes, timing=None):
         if input_case.get("status") != "ok":
             skipped += 1
             continue
+        core_start = time.perf_counter()
+        evaluation_context = build_evaluation_case_context(
+            input_case,
+            genome_dict=genome_dict,
+        )
+        core_seconds += time.perf_counter() - core_start
         case_records = []
         case_timing_records = []
         for algorithm in algorithms:
@@ -2546,7 +2649,12 @@ def run_evaluate_stage(specs, args, algorithms, modes, timing=None):
                 core_start = time.perf_counter()
                 try:
                     metric_timings = []
-                    evaluated = evaluate_result(input_case, result, metric_timings=metric_timings)
+                    evaluated = evaluate_result(
+                        input_case,
+                        result,
+                        metric_timings=metric_timings,
+                        evaluation_context=evaluation_context,
+                    )
                 except Exception as exc:
                     failed += 1
                     by_algorithm_mode[timing_key]["failed"] += 1

@@ -1,5 +1,6 @@
 import re
 from collections import Counter
+from dataclasses import dataclass
 from typing import Tuple, Dict, Iterable, Optional, Any
 import networkx as nx
 
@@ -49,6 +50,16 @@ EVALUATE_4_MODE_SPECS = {
         "paper_name": "AD-F1 when reading the F1 value",
     },
 }
+
+
+@dataclass(frozen=True)
+class TreeEvaluationContext:
+    graph: nx.DiGraph
+    labels: Dict[Any, str]
+    parents: Dict[Any, Optional[Any]]
+    children: Dict[Any, Tuple[Any, ...]]
+    named_nodes: Tuple[Any, ...]
+    roots: Tuple[Any, ...]
 
 
 # ---------------------------
@@ -186,11 +197,44 @@ def named_label(tree: nx.DiGraph, node: Any) -> Optional[str]:
 
 def parent_of(tree: nx.DiGraph, node: Any) -> Optional[Any]:
     """Return parent node id or None. Assumes a rooted tree with single parent."""
-    preds = list(tree.predecessors(node))
-    if not preds:
-        return None
-    # If multiple parents (shouldn't happen), pick the first deterministically
-    return preds[0]
+    # If multiple parents (shouldn't happen), pick the first deterministically.
+    return next(iter(tree.predecessors(node)), None)
+
+
+def tree_evaluation_context(tree_in: Any) -> TreeEvaluationContext:
+    G = ensure_nx(tree_in)
+    labels = {}
+    named_nodes = []
+    for node, data in G.nodes(data=True):
+        label = data.get("cell_id")
+        if label is None:
+            continue
+        label = str(label).strip()
+        if label:
+            labels[node] = label
+            named_nodes.append(node)
+
+    parents = {}
+    children = {}
+    for node in G.nodes:
+        parents[node] = parent_of(G, node)
+        children[node] = tuple(G.successors(node))
+
+    roots = tuple(node for node, parent in parents.items() if parent is None)
+    return TreeEvaluationContext(
+        graph=G,
+        labels=labels,
+        parents=parents,
+        children=children,
+        named_nodes=tuple(named_nodes),
+        roots=roots,
+    )
+
+
+def ensure_tree_evaluation_context(tree_or_context: Any) -> TreeEvaluationContext:
+    if isinstance(tree_or_context, TreeEvaluationContext):
+        return tree_or_context
+    return tree_evaluation_context(tree_or_context)
 
 
 # ---------------------------
@@ -204,23 +248,52 @@ def label_multiset_ancestor_pairs(tree_in: Any,
     Returns Counter of pairs -> multiplicity (multiset).
     Accepts either networkx.DiGraph or Newick string (will be converted).
     """
-    G = ensure_nx(tree_in)
+    context = ensure_tree_evaluation_context(tree_in)
     allowed = set(restrict_labels) if restrict_labels is not None else None
 
-    # Collect named nodes
-    nodes = [n for n in G.nodes if named_label(G, n) is not None]
+    if not context.roots:
+        return _label_multiset_ancestor_pairs_by_parent_chain(context, allowed)
+
+    pairs = Counter()
+    ancestor_counts = Counter()
+    for root in context.roots:
+        stack = [(root, None, False)]
+        while stack:
+            node, added_label, leaving = stack.pop()
+            if leaving:
+                if added_label is not None:
+                    ancestor_counts[added_label] -= 1
+                    if ancestor_counts[added_label] == 0:
+                        del ancestor_counts[added_label]
+                continue
+
+            label = context.labels.get(node)
+            active_label = label if label is not None and (allowed is None or label in allowed) else None
+            if active_label is not None:
+                for ancestor_label, count in ancestor_counts.items():
+                    pairs[(ancestor_label, active_label)] += count
+                ancestor_counts[active_label] += 1
+
+            stack.append((node, active_label, True))
+            for child in reversed(context.children.get(node, ())):
+                stack.append((child, None, False))
+    return pairs
+
+
+def _label_multiset_ancestor_pairs_by_parent_chain(context, allowed):
+    nodes = context.named_nodes
     if allowed is not None:
-        nodes = [n for n in nodes if named_label(G, n) in allowed]
+        nodes = [node for node in nodes if context.labels[node] in allowed]
 
     pairs = Counter()
     for desc in nodes:
-        ld = named_label(G, desc)
-        cur = parent_of(G, desc)
+        descendant_label = context.labels[desc]
+        cur = context.parents.get(desc)
         while cur is not None:
-            la = named_label(G, cur)
-            if la is not None and (allowed is None or la in allowed):
-                pairs[(la, ld)] += 1
-            cur = parent_of(G, cur)
+            ancestor_label = context.labels.get(cur)
+            if ancestor_label is not None and (allowed is None or ancestor_label in allowed):
+                pairs[(ancestor_label, descendant_label)] += 1
+            cur = context.parents.get(cur)
     return pairs
 
 
@@ -230,21 +303,19 @@ def label_edge_multiset(tree_in: Any,
     """
     Count edges by (parent_label, child_label) for named parent & child nodes.
     """
-    G = ensure_nx(tree_in)
+    context = ensure_tree_evaluation_context(tree_in)
     allowed = set(restrict_labels) if restrict_labels is not None else None
     edges = Counter()
-    for node in G.nodes:
-        # skip root nodes
-        par = parent_of(G, node)
-        if par is None:
+    for node, parent in context.parents.items():
+        if parent is None:
             continue
-        la = named_label(G, par)
-        lb = named_label(G, node)
-        if la is None or lb is None:
+        parent_label = context.labels.get(parent)
+        child_label = context.labels.get(node)
+        if parent_label is None or child_label is None:
             continue
-        if allowed is not None and (la not in allowed or lb not in allowed):
+        if allowed is not None and (parent_label not in allowed or child_label not in allowed):
             continue
-        edges[(la, lb)] += 1
+        edges[(parent_label, child_label)] += 1
     return edges
 
 
@@ -326,10 +397,23 @@ def _set_confusion(true_ctr: Counter, rec_ctr: Counter, restrict_labels: Optiona
     Set-level confusion (unique pairs only).
     Returns tp, fp, fn, set_true, set_rec
     """
-    T = {k for k, v in true_ctr.items() if v > 0}
+    return _set_confusion_from_sets(
+        _positive_key_set(true_ctr),
+        _positive_key_set(rec_ctr),
+        restrict_labels=restrict_labels,
+    )
+
+
+def _positive_key_set(counter: Counter):
+    return {key for key, value in counter.items() if value > 0}
+
+
+def _set_confusion_from_sets(true_set, rec_set, restrict_labels: Optional[Iterable[str]] = None):
+    T = true_set
     if restrict_labels is not None:
-        T = {(x, y) for (x, y) in T if x in restrict_labels and y in restrict_labels}
-    R = {k for k, v in rec_ctr.items() if v > 0}
+        allowed = set(restrict_labels)
+        T = {(x, y) for (x, y) in true_set if x in allowed and y in allowed}
+    R = rec_set
     tp = len(T & R)
     fp = len(R - T)
     fn = len(T - R)
@@ -359,11 +443,11 @@ def evaluate_multiset(true_tree: Any, rec_tree: Any,
     Compute multiset ancestor-pair evaluation (returns dict like original).
     true_tree and rec_tree may be nx.DiGraph or Newick strings.
     """
-    Tt = ensure_nx(true_tree)
-    Tr = ensure_nx(rec_tree)
+    true_context = ensure_tree_evaluation_context(true_tree)
+    rec_context = ensure_tree_evaluation_context(rec_tree)
 
-    P_true = label_multiset_ancestor_pairs(Tt, restrict_labels)
-    P_rec = label_multiset_ancestor_pairs(Tr, restrict_labels)
+    P_true = label_multiset_ancestor_pairs(true_context, restrict_labels)
+    P_rec = label_multiset_ancestor_pairs(rec_context, restrict_labels)
 
     tp, fp, fn, tp_ctr, fp_ctr, fn_ctr = multiset_confusion(P_true, P_rec, return_details=True, as_lists=False)
     prec, rec, f1, iou = prf1_iou(tp, fp, fn)
@@ -382,15 +466,16 @@ def evaluate_multiset_with_pruned_truth(true_tree: Any,
     """
     Run original evaluation and also evaluation restricted to observed labels from rec_tree (or provided set).
     """
-    original = evaluate_multiset(true_tree, rec_tree, restrict_labels=None)
+    true_context = ensure_tree_evaluation_context(true_tree)
+    rec_context = ensure_tree_evaluation_context(rec_tree)
 
-    Tr = ensure_nx(rec_tree)
+    original = evaluate_multiset(true_context, rec_context, restrict_labels=None)
     if observed_labels is not None:
         V = set(observed_labels)
     else:
-        V = {named_label(Tr, n) for n in Tr.nodes if named_label(Tr, n) is not None}
+        V = set(rec_context.labels.values())
 
-    pruned = evaluate_multiset(true_tree, rec_tree, restrict_labels=V)
+    pruned = evaluate_multiset(true_context, rec_context, restrict_labels=V)
     pruned["labels_used"] = sorted(V)
     return {"original": original, "pruned_truth": pruned}
 
@@ -401,6 +486,32 @@ def label_edge_multiset_wrapper(tree: Any,
     Backwards-compatible name for label_edge_multiset
     """
     return label_edge_multiset(tree, restrict_labels)
+
+
+def _multiset_mode(true_counter, rec_counter, true_count_key, rec_count_key):
+    tp, fp, fn = multiset_confusion_simple(true_counter, rec_counter)
+    precision, recall, f1, iou = prf1_iou(tp, fp, fn)
+    return {
+        "TP": tp, "FP": fp, "FN": fn,
+        "precision": precision, "recall": recall, "F1": f1, "IoU": iou,
+        true_count_key: sum(true_counter.values()),
+        rec_count_key: sum(rec_counter.values()),
+    }
+
+
+def _unique_mode_from_sets(true_set, rec_set, true_count_key, rec_count_key, restrict_labels=None):
+    tp, fp, fn, filtered_true_set, filtered_rec_set = _set_confusion_from_sets(
+        true_set,
+        rec_set,
+        restrict_labels=restrict_labels,
+    )
+    precision, recall, f1, iou = prf1_iou(tp, fp, fn)
+    return {
+        "TP": tp, "FP": fp, "FN": fn,
+        "precision": precision, "recall": recall, "F1": f1, "IoU": iou,
+        true_count_key: len(filtered_true_set),
+        rec_count_key: len(filtered_rec_set),
+    }, filtered_true_set, filtered_rec_set
 
 
 def evaluate_4(true_tree: Any,
@@ -417,70 +528,54 @@ def evaluate_4(true_tree: Any,
     higher is better. The paper-facing AD-F1 metric is
     result['ancestors_unique_restricted']['F1'].
     """
-    Tt = ensure_nx(true_tree)
-    Tr = ensure_nx(rec_tree)
+    true_context = ensure_tree_evaluation_context(true_tree)
+    rec_context = ensure_tree_evaluation_context(rec_tree)
 
     # Ancestors multiset
-    P_true_pairs = label_multiset_ancestor_pairs(Tt)
-    P_rec_pairs = label_multiset_ancestor_pairs(Tr)
-    tp1, fp1, fn1 = multiset_confusion_simple(P_true_pairs, P_rec_pairs)
-    prec1, rec1, f11, iou1 = prf1_iou(tp1, fp1, fn1)
-    mode1 = {
-        "TP": tp1, "FP": fp1, "FN": fn1,
-        "precision": prec1, "recall": rec1, "F1": f11, "IoU": iou1,
-        "num_pairs_true": sum(P_true_pairs.values()),
-        "num_pairs_rec": sum(P_rec_pairs.values())
-    }
+    P_true_pairs = label_multiset_ancestor_pairs(true_context)
+    P_rec_pairs = label_multiset_ancestor_pairs(rec_context)
+    mode1 = _multiset_mode(P_true_pairs, P_rec_pairs, "num_pairs_true", "num_pairs_rec")
+
+    true_pair_set = _positive_key_set(P_true_pairs)
+    rec_pair_set = _positive_key_set(P_rec_pairs)
 
     # Ancestors unique (set)
-    tp2, fp2, fn2, T2, R2 = _set_confusion(P_true_pairs, P_rec_pairs)
-    prec2, rec2, f12, iou2 = prf1_iou(tp2, fp2, fn2)
-    mode2 = {
-        "TP": tp2, "FP": fp2, "FN": fn2,
-        "precision": prec2, "recall": rec2, "F1": f12, "IoU": iou2,
-        "num_unique_pairs_true": len(T2),
-        "num_unique_pairs_rec": len(R2)
-    }
+    mode2, T2, R2 = _unique_mode_from_sets(
+        true_pair_set,
+        rec_pair_set,
+        "num_unique_pairs_true",
+        "num_unique_pairs_rec",
+    )
 
     # Ancestors unique restricted (set)
-    tp0, fp0, fn0, T0, R0 = _set_confusion(P_true_pairs, P_rec_pairs, restrict_labels)
-    prec0, rec0, f10, iou0 = prf1_iou(tp0, fp0, fn0)
-    mode0 = {
-        "TP": tp0, "FP": fp0, "FN": fn0,
-        "precision": prec0, "recall": rec0, "F1": f10, "IoU": iou0,
-        "num_unique_pairs_true": len(T0),
-        "num_unique_pairs_rec": len(R0)
-    }
+    mode0, T0, R0 = _unique_mode_from_sets(
+        true_pair_set,
+        rec_pair_set,
+        "num_unique_pairs_true",
+        "num_unique_pairs_rec",
+        restrict_labels=restrict_labels,
+    )
 
     # Edges multiset
-    E_true = label_edge_multiset(Tt, restrict_labels)
-    E_rec = label_edge_multiset(Tr, restrict_labels)
-    tp3, fp3, fn3 = multiset_confusion_simple(E_true, E_rec)
-    prec3, rec3, f13, iou3 = prf1_iou(tp3, fp3, fn3)
-    mode3 = {
-        "TP": tp3, "FP": fp3, "FN": fn3,
-        "precision": prec3, "recall": rec3, "F1": f13, "IoU": iou3,
-        "num_edges_true": sum(E_true.values()),
-        "num_edges_rec": sum(E_rec.values())
-    }
+    E_true = label_edge_multiset(true_context, restrict_labels)
+    E_rec = label_edge_multiset(rec_context, restrict_labels)
+    mode3 = _multiset_mode(E_true, E_rec, "num_edges_true", "num_edges_rec")
 
     # Edges unique (set)
-    tp4, fp4, fn4, T4, R4 = _set_confusion(E_true, E_rec)
-    prec4, rec4, f14, iou4 = prf1_iou(tp4, fp4, fn4)
-    mode4 = {
-        "TP": tp4, "FP": fp4, "FN": fn4,
-        "precision": prec4, "recall": rec4, "F1": f14, "IoU": iou4,
-        "num_unique_edges_true": len(T4),
-        "num_unique_edges_rec": len(R4)
-    }
+    mode4, T4, R4 = _unique_mode_from_sets(
+        _positive_key_set(E_true),
+        _positive_key_set(E_rec),
+        "num_unique_edges_true",
+        "num_unique_edges_rec",
+    )
 
     if print_debug:
         print("---- DEBUG four modes ----")
-        print("Ancestors multiset:      TP/FP/FN =", tp1, fp1, fn1)
-        print("Ancestors unique:        TP/FP/FN =", tp2, fp2, fn2)
-        print("Edges multiset:          TP/FP/FN =", tp3, fp3, fn3)
-        print("Edges unique:            TP/FP/FN =", tp4, fp4, fn4)
-        print("anc unique & restricted: TP/FP/FN =", tp0, fp0, fn0)
+        print("Ancestors multiset:      TP/FP/FN =", mode1["TP"], mode1["FP"], mode1["FN"])
+        print("Ancestors unique:        TP/FP/FN =", mode2["TP"], mode2["FP"], mode2["FN"])
+        print("Edges multiset:          TP/FP/FN =", mode3["TP"], mode3["FP"], mode3["FN"])
+        print("Edges unique:            TP/FP/FN =", mode4["TP"], mode4["FP"], mode4["FN"])
+        print("anc unique & restricted: TP/FP/FN =", mode0["TP"], mode0["FP"], mode0["FN"])
 
         _, _, _, tp_list, fp_list, fn_list = multiset_confusion(
             P_true_pairs, P_rec_pairs,

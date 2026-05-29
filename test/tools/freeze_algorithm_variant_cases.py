@@ -27,8 +27,12 @@ from algorithm_evaluation.tester import (  # noqa: E402
 )
 from ctbs import load_ctbs_runtime_config, use_cnp2cnp_to_compute_pairwise_distance  # noqa: E402
 from ctbs_utils import to_newick  # noqa: E402
-from evaluator import compute_all_clusters, ext_grf_tree, jaccard_distance  # noqa: E402
-from evaluator_full import evaluate_4  # noqa: E402
+from evaluator import (  # noqa: E402
+    cluster_evaluation_context,
+    ext_grf_from_cluster_counts,
+    jaccard_distance,
+)
+from evaluator_full import evaluate_4, tree_evaluation_context  # noqa: E402
 from reconstructor import build_evolution_tree  # noqa: E402
 from simulator import CancerCellEvolutionSimulator, Genotype  # noqa: E402
 
@@ -354,31 +358,72 @@ def root_id(tree):
     return roots[0]
 
 
-def legacy_set_grf_distance_tree(true_tree, true_root, reconstructed_tree, reconstructed_root):
-    true_clusters = compute_all_clusters(true_tree, true_root)
-    reconstructed_clusters = compute_all_clusters(reconstructed_tree, reconstructed_root)
-    true_cluster_set = set(true_clusters)
-    reconstructed_cluster_set = set(reconstructed_clusters)
+def _cached_jaccard_distance(left_cluster, right_cluster, cache):
+    if cache is None:
+        return jaccard_distance(left_cluster, right_cluster)
+    key = (left_cluster, right_cluster)
+    if key in cache:
+        return cache[key]
+    reverse_key = (right_cluster, left_cluster)
+    if reverse_key in cache:
+        return cache[reverse_key]
+    distance = jaccard_distance(left_cluster, right_cluster)
+    cache[key] = distance
+    return distance
+
+
+def legacy_set_grf_distance_from_cluster_contexts(
+    true_cluster_context,
+    reconstructed_cluster_context,
+    *,
+    jaccard_cache=None,
+):
+    true_cluster_set = true_cluster_context.cluster_set
+    reconstructed_cluster_set = reconstructed_cluster_context.cluster_set
     union_size = len(true_cluster_set | reconstructed_cluster_set)
     if union_size == 0:
         return 0.0
-    if not true_clusters or not reconstructed_clusters:
+    if not true_cluster_context.clusters or not reconstructed_cluster_context.clusters:
         return 1.0
 
     numerator_1 = sum(
-        jaccard_distance(true_cluster, reconstructed_cluster)
-        for true_cluster in true_clusters
-        for reconstructed_cluster in reconstructed_clusters
+        true_count
+        * reconstructed_count
+        * _cached_jaccard_distance(true_cluster, reconstructed_cluster, jaccard_cache)
+        for true_cluster, true_count in true_cluster_context.counts.items()
+        for reconstructed_cluster, reconstructed_count in reconstructed_cluster_context.counts.items()
         if reconstructed_cluster not in true_cluster_set
     )
     numerator_2 = sum(
-        jaccard_distance(reconstructed_cluster, true_cluster)
-        for reconstructed_cluster in reconstructed_clusters
-        for true_cluster in true_clusters
+        reconstructed_count
+        * true_count
+        * _cached_jaccard_distance(reconstructed_cluster, true_cluster, jaccard_cache)
+        for reconstructed_cluster, reconstructed_count in reconstructed_cluster_context.counts.items()
+        for true_cluster, true_count in true_cluster_context.counts.items()
         if true_cluster not in reconstructed_cluster_set
     )
-    return (numerator_1 / (len(true_clusters) * union_size)) + (
-        numerator_2 / (len(reconstructed_clusters) * union_size)
+    return (numerator_1 / (len(true_cluster_context.clusters) * union_size)) + (
+        numerator_2 / (len(reconstructed_cluster_context.clusters) * union_size)
+    )
+
+
+def legacy_set_grf_similarity_from_cluster_contexts(
+    true_cluster_context,
+    reconstructed_cluster_context,
+    *,
+    jaccard_cache=None,
+):
+    return 1 - legacy_set_grf_distance_from_cluster_contexts(
+        true_cluster_context,
+        reconstructed_cluster_context,
+        jaccard_cache=jaccard_cache,
+    )
+
+
+def legacy_set_grf_distance_tree(true_tree, true_root, reconstructed_tree, reconstructed_root):
+    return legacy_set_grf_distance_from_cluster_contexts(
+        cluster_evaluation_context(true_tree, true_root),
+        cluster_evaluation_context(reconstructed_tree, reconstructed_root),
     )
 
 
@@ -392,31 +437,41 @@ def legacy_set_grf_similarity_tree(true_tree, true_root, reconstructed_tree, rec
 
 
 def metric_summary(true_tree, reconstructed_tree):
-    metrics = evaluate_4(true_tree, reconstructed_tree)
+    true_eval_context = tree_evaluation_context(true_tree)
+    reconstructed_eval_context = tree_evaluation_context(reconstructed_tree)
     restricted_labels = {
         str(data.get("cell_id"))
         for _, data in reconstructed_tree.nodes(data=True)
         if data.get("cell_id") is not None
     }
-    restricted_metrics = evaluate_4(
-        true_tree,
-        reconstructed_tree,
+    metrics = evaluate_4(
+        true_eval_context,
+        reconstructed_eval_context,
         restrict_labels=restricted_labels,
-    )["ancestors_unique_restricted"]
+    )
     true_root = root_id(true_tree)
     reconstructed_root = root_id(reconstructed_tree)
-    ext_grf = ext_grf_tree(true_tree, true_root, reconstructed_tree, reconstructed_root)
+    true_cluster_context = cluster_evaluation_context(true_tree, true_root)
+    reconstructed_cluster_context = cluster_evaluation_context(
+        reconstructed_tree,
+        reconstructed_root,
+    )
+    jaccard_cache = {}
+    ext_grf = ext_grf_from_cluster_counts(
+        true_cluster_context.counts,
+        reconstructed_cluster_context.counts,
+        jaccard_cache=jaccard_cache,
+    )
     return {
-        "ancestors_unique_restricted": restricted_metrics,
+        "ancestors_unique_restricted": metrics["ancestors_unique_restricted"],
         "ancestors_multiset": metrics["ancestors_multiset"],
         "ancestors_unique": metrics["ancestors_unique"],
         "grf": 1 - ext_grf,
         EXT_GRF_METRIC_FIELD: ext_grf,
-        LEGACY_GRF_SET_SIMILARITY_FIELD: legacy_set_grf_similarity_tree(
-            true_tree,
-            true_root,
-            reconstructed_tree,
-            reconstructed_root,
+        LEGACY_GRF_SET_SIMILARITY_FIELD: legacy_set_grf_similarity_from_cluster_contexts(
+            true_cluster_context,
+            reconstructed_cluster_context,
+            jaccard_cache=jaccard_cache,
         ),
     }
 
