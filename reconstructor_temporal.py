@@ -12,7 +12,7 @@ import networkx as nx
 import numpy as np
 
 from reconstructor_plausibility import is_biologically_plausible_ancestor
-from distance_semantics import validate_distance_matrix
+from distance_semantics import DirectedDistanceBundle, validate_distance_matrix
 
 
 ORDERED_OCCURRENCE_INPUT_MODE = "ordered_occurrences"
@@ -160,13 +160,14 @@ def _seeded_tie_ranks(biological_edges, root_candidates, seed):
 
 def _mixed_radix_coefficients(
     occurrence_count,
-    max_distance_unit,
+    max_edge_distance_unit,
+    max_root_distance_unit,
     max_tie_rank,
 ):
     biological_edge_count = max(occurrence_count - 1, 0)
     max_violation_total = biological_edge_count
-    max_distance_total = biological_edge_count * max_distance_unit
-    max_root_score_total = biological_edge_count * max_distance_unit
+    max_distance_total = biological_edge_count * max_edge_distance_unit
+    max_root_score_total = biological_edge_count * max_root_distance_unit
     # A spanning arborescence on n occurrences plus the virtual root selects
     # exactly n edges. This bound also covers invalid multi-root candidates.
     max_tie_total = occurrence_count * max_tie_rank
@@ -198,7 +199,35 @@ def _mixed_radix_coefficients(
     }
 
 
-def _solve_temporal_arborescence(D, id_to_index, occurrences, seed, use_time):
+def _validate_directed_input(directed_distance_bundle, ids, D):
+    if not isinstance(directed_distance_bundle, DirectedDistanceBundle):
+        raise ValueError(
+            "Directed temporal reconstruction requires a DirectedDistanceBundle."
+        )
+    bundle_ids = list(directed_distance_bundle.ids)
+    if set(bundle_ids) != set(ids):
+        raise ValueError(
+            "Directed-distance ids must match the symmetric distance ids exactly."
+        )
+    bundle_index = {cell_id: index for index, cell_id in enumerate(bundle_ids)}
+    alignment = [bundle_index[cell_id] for cell_id in ids]
+    directed = directed_distance_bundle.directed_matrix[np.ix_(alignment, alignment)]
+    minimum = directed_distance_bundle.minimum_matrix[np.ix_(alignment, alignment)]
+    if not np.array_equal(minimum, D):
+        raise ValueError(
+            "Directed-distance bundle minimum must equal the reconstruction matrix."
+        )
+    return np.array(directed, copy=True)
+
+
+def _solve_temporal_arborescence(
+    D,
+    id_to_index,
+    occurrences,
+    seed,
+    use_time,
+    directed_distances=None,
+):
     occurrence_by_id = {occurrence.node_id: occurrence for occurrence in occurrences}
     biological_edges = _candidate_biological_edges(occurrences, use_time)
     if use_time:
@@ -221,12 +250,22 @@ def _solve_temporal_arborescence(D, id_to_index, occurrences, seed, use_time):
         all_root_candidates,
         seed,
     )
-    distance_units = _exact_distance_units(D)
-    max_distance_unit = max(int(value) for value in distance_units.flat)
+    edge_distances = D if directed_distances is None else directed_distances
+    edge_distance_units = _exact_distance_units(edge_distances)
+    root_distance_units = _exact_distance_units(D)
+    max_edge_distance_unit = max(
+        int(value)
+        for value in edge_distance_units.flat
+    )
+    max_root_distance_unit = max(
+        int(value)
+        for value in root_distance_units.flat
+    )
     max_tie_rank = max(tie_ranks.values(), default=0)
     coefficients = _mixed_radix_coefficients(
         len(occurrences),
-        max_distance_unit,
+        max_edge_distance_unit,
+        max_root_distance_unit,
         max_tie_rank,
     )
 
@@ -239,7 +278,7 @@ def _solve_temporal_arborescence(D, id_to_index, occurrences, seed, use_time):
         parent = occurrence_by_id[parent_id]
         child = occurrence_by_id[child_id]
         distance_unit = int(
-            distance_units[
+            edge_distance_units[
                 id_to_index[parent.cell_id],
                 id_to_index[child.cell_id],
             ]
@@ -256,7 +295,7 @@ def _solve_temporal_arborescence(D, id_to_index, occurrences, seed, use_time):
         root = occurrence_by_id[root_id]
         root_state_index = id_to_index[root.cell_id]
         root_score_unit = sum(
-            int(distance_units[root_state_index, id_to_index[other.cell_id]])
+            int(root_distance_units[root_state_index, id_to_index[other.cell_id]])
             for other in occurrences
             if other.node_id != root_id
         )
@@ -355,11 +394,75 @@ def temporal_cnp_arborescence_no_time(dist_matrix, cell_lists, ids, seed=7):
     )
 
 
+def _temporal_cnp_arborescence_directed(
+    dist_matrix,
+    cell_lists,
+    ids,
+    seed,
+    *,
+    use_time,
+    directed_distance_bundle,
+):
+    occurrences = _normalize_occurrences(cell_lists)
+    D, id_to_index = _validate_distance_input(dist_matrix, ids, occurrences)
+    directed = _validate_directed_input(directed_distance_bundle, ids, D)
+    return _solve_temporal_arborescence(
+        D,
+        id_to_index,
+        occurrences,
+        seed,
+        use_time,
+        directed_distances=directed,
+    )
+
+
+def temporal_cnp_arborescence_directed(
+    dist_matrix,
+    cell_lists,
+    ids,
+    seed=7,
+    *,
+    directed_distance_bundle,
+):
+    """G0-03-A variant using C[parent,child] after time/plausibility tiers."""
+    return _temporal_cnp_arborescence_directed(
+        dist_matrix,
+        cell_lists,
+        ids,
+        seed,
+        use_time=True,
+        directed_distance_bundle=directed_distance_bundle,
+    )
+
+
+def temporal_cnp_arborescence_directed_no_time(
+    dist_matrix,
+    cell_lists,
+    ids,
+    seed=7,
+    *,
+    directed_distance_bundle,
+):
+    """Exact no-time ablation of the G0-03-A directed edge-cost variant."""
+    return _temporal_cnp_arborescence_directed(
+        dist_matrix,
+        cell_lists,
+        ids,
+        seed,
+        use_time=False,
+        directed_distance_bundle=directed_distance_bundle,
+    )
+
+
 def uses_ordered_occurrence_input(algorithm):
     return (
         getattr(algorithm, "ctbf_input_mode", None)
         == ORDERED_OCCURRENCE_INPUT_MODE
     )
+
+
+def uses_directed_distance_input(algorithm):
+    return bool(getattr(algorithm, "ctbf_requires_directed_distances", False))
 
 
 temporal_cnp_arborescence.ctbf_input_mode = ORDERED_OCCURRENCE_INPUT_MODE
@@ -368,11 +471,26 @@ temporal_cnp_arborescence.ctbf_order_ablation = temporal_cnp_arborescence_no_tim
 temporal_cnp_arborescence_no_time.ctbf_input_mode = ORDERED_OCCURRENCE_INPUT_MODE
 temporal_cnp_arborescence_no_time.ctbf_use_time = False
 temporal_cnp_arborescence_no_time.ctbf_order_ablation = None
+temporal_cnp_arborescence_directed.ctbf_input_mode = ORDERED_OCCURRENCE_INPUT_MODE
+temporal_cnp_arborescence_directed.ctbf_use_time = True
+temporal_cnp_arborescence_directed.ctbf_requires_directed_distances = True
+temporal_cnp_arborescence_directed.ctbf_order_ablation = (
+    temporal_cnp_arborescence_directed_no_time
+)
+temporal_cnp_arborescence_directed_no_time.ctbf_input_mode = (
+    ORDERED_OCCURRENCE_INPUT_MODE
+)
+temporal_cnp_arborescence_directed_no_time.ctbf_use_time = False
+temporal_cnp_arborescence_directed_no_time.ctbf_requires_directed_distances = True
+temporal_cnp_arborescence_directed_no_time.ctbf_order_ablation = None
 
 
 __all__ = [
     "ORDERED_OCCURRENCE_INPUT_MODE",
     "temporal_cnp_arborescence",
+    "temporal_cnp_arborescence_directed",
+    "temporal_cnp_arborescence_directed_no_time",
     "temporal_cnp_arborescence_no_time",
+    "uses_directed_distance_input",
     "uses_ordered_occurrence_input",
 ]

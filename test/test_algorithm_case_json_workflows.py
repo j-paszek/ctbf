@@ -54,6 +54,48 @@ def _tree_from_node_link(data):
     return json_graph.node_link_graph(data, directed=True, edges="links")
 
 
+def _assert_reconstruction_matches_stored_observable_tree(regenerated, stored):
+    """Compare rooted labeled output without equating graph-local node ids."""
+    regenerated_tree = _tree_from_node_link(regenerated["reconstructed_tree"])
+    stored_tree = _tree_from_node_link(stored["reconstructed_tree"])
+
+    regenerated_roots = [
+        node for node, degree in regenerated_tree.in_degree() if degree == 0
+    ]
+    stored_roots = [
+        node for node, degree in stored_tree.in_degree() if degree == 0
+    ]
+    assert len(regenerated_roots) == 1
+    assert len(stored_roots) == 1
+
+    regenerated_graph_root = regenerated_roots[0]
+    stored_graph_root = stored_roots[0]
+    regenerated_root_cell_id = regenerated_tree.nodes[regenerated_graph_root].get(
+        "cell_id"
+    )
+    stored_root_cell_id = stored_tree.nodes[stored_graph_root].get("cell_id")
+    # CTBF's existing algorithms do not yet expose one uniform root-reference
+    # type: legacy directed agglomeration returns root-state cell_id, whereas
+    # classical and newer routines may return graph node_id.
+    assert regenerated["root"] in (
+        regenerated_graph_root,
+        regenerated_root_cell_id,
+    )
+    assert stored["root"] in (stored_graph_root, stored_root_cell_id)
+
+    regenerated_root = regenerated_tree.nodes[regenerated_graph_root]
+    stored_root = stored_tree.nodes[stored_graph_root]
+    assert regenerated_root.get("cell_id") == stored_root.get("cell_id")
+    assert np.array_equal(
+        np.asarray(regenerated_root.get("genome")),
+        np.asarray(stored_root.get("genome")),
+    )
+
+    assert regenerated["newick"] == stored["newick"]
+    assert regenerated["newick"] == to_newick(regenerated_tree)
+    assert stored["newick"] == to_newick(stored_tree)
+
+
 def _assert_stored_metrics_match_current(input_case, result):
     true_tree = _tree_from_node_link(input_case["true_tree"])
     reconstructed_tree = _tree_from_node_link(result["reconstructed_tree"])
@@ -239,11 +281,7 @@ def test_json_reconstruction_is_deterministic_against_stored_tree(mode, algorith
 
     regenerated = freeze_algorithm_variant_cases.reconstruction_result(input_case, algorithm_callable, mode)
     stored = _result(mode, algorithm)
-    stored_tree = _tree_from_node_link(stored["reconstructed_tree"])
-
-    assert regenerated["root"] == stored["root"]
-    assert regenerated["newick"] == stored["newick"]
-    assert regenerated["newick"] == to_newick(stored_tree)
+    _assert_reconstruction_matches_stored_observable_tree(regenerated, stored)
 
 
 @pytest.mark.json_full
@@ -257,11 +295,7 @@ def test_all_json_reconstruction_is_deterministic_against_stored_tree(case):
     input_case = load_json(input_file)
     stored = load_json(result_file)
     regenerated = _reconstruct_from_stored_result(input_case, stored, mode)
-    stored_tree = _tree_from_node_link(stored["reconstructed_tree"])
-
-    assert regenerated["root"] == stored["root"]
-    assert regenerated["newick"] == stored["newick"]
-    assert regenerated["newick"] == to_newick(stored_tree)
+    _assert_reconstruction_matches_stored_observable_tree(regenerated, stored)
 
 
 def test_json_biopsy_preset_reconstruction_is_deterministic_against_stored_tree():
@@ -277,11 +311,7 @@ def test_json_biopsy_preset_reconstruction_is_deterministic_against_stored_tree(
     )
 
     regenerated = _reconstruct_from_stored_result(input_case, stored, "biopsy_guided_top")
-    stored_tree = _tree_from_node_link(stored["reconstructed_tree"])
-
-    assert regenerated["root"] == stored["root"]
-    assert regenerated["newick"] == stored["newick"]
-    assert regenerated["newick"] == to_newick(stored_tree)
+    _assert_reconstruction_matches_stored_observable_tree(regenerated, stored)
 
 
 @pytest.mark.parametrize(
@@ -306,11 +336,7 @@ def test_selected_extra_json_reconstruction_is_deterministic_against_stored_tree
     input_case = load_json(input_file)
     stored = load_json(result_file)
     regenerated = _reconstruct_from_stored_result(input_case, stored, mode)
-    stored_tree = _tree_from_node_link(stored["reconstructed_tree"])
-
-    assert regenerated["root"] == stored["root"]
-    assert regenerated["newick"] == stored["newick"]
-    assert regenerated["newick"] == to_newick(stored_tree)
+    _assert_reconstruction_matches_stored_observable_tree(regenerated, stored)
 
 
 def test_json_pairwise_ranking_uses_frozen_outputs_without_simulation():
@@ -343,8 +369,8 @@ def test_json_algorithm_listing_keeps_biopsy_preset_rows_mode_specific():
 
 def test_comparison_group_resolves_core_algorithm_names_for_heatmap_filtering():
     assert resolve_comparison_algorithm_names(["recommended_core"]) == [
-        "neighbor_joining_baseline",
-        "neighbor_joining_hybrid_opt",
+        "neighbor_joining_classical",
+        "rooted_labeled_nj",
         "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
     ]
     assert resolve_comparison_algorithm_names(["new_alg_comparison"]) == [

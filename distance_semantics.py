@@ -1,6 +1,8 @@
 """Shared distance semantics and provenance for CTBF reconstruction inputs."""
 
+from dataclasses import dataclass
 from hashlib import sha256
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -11,6 +13,11 @@ import numpy as np
 CNP2CNP_DISTANCE = "any"
 CNP2CNP_SYMMETRIZATION = "minimum_bidirectional"
 CNP2CNP_SEMANTICS_VERSION = "ctbf-cnp2cnp-any-min-bidirectional-v1"
+CNP2CNP_ORDERED_TRIANGLE_FAST = "ordered_triangle_fast"
+CNP2CNP_ORDERED_TRIANGLE_FAST_SEMANTICS_VERSION = (
+    "ctbf-cnp2cnp-any-ordered-triangle-fast-v1"
+)
+DIRECTED_DISTANCE_BUNDLE_SCHEMA_VERSION = "ctbf-directed-distance-bundle-v1"
 DISTANCE_PROVENANCE_SCHEMA_VERSION = "ctbf-distance-provenance-v1"
 
 
@@ -54,6 +61,96 @@ def validate_distance_matrix(ids, matrix):
     if not np.all(np.diag(array) == 0):
         raise ValueError("Distance matrix diagonal must be exactly zero.")
     return values, np.array(array, copy=True)
+
+
+def validate_directed_distance_matrix(ids, matrix):
+    """Validate an ordered dissimilarity matrix without requiring symmetry."""
+    values = _validated_ids(ids)
+    try:
+        array = np.asarray(matrix, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Directed distance matrix must contain numeric values.") from exc
+
+    if array.ndim != 2:
+        raise ValueError("Directed distance matrix must be two-dimensional.")
+    rows, columns = array.shape
+    if rows != columns:
+        raise ValueError(
+            f"Directed distance matrix must be square, got shape {array.shape}."
+        )
+    if len(values) != rows:
+        raise ValueError(
+            f"Directed distance matrix has {rows} rows but {len(values)} ids."
+        )
+    if not np.all(np.isfinite(array)):
+        raise ValueError("Directed distance matrix must contain only finite values.")
+    if np.any(array < 0):
+        raise ValueError(
+            "Directed distance matrix must contain nonnegative dissimilarities."
+        )
+    if not np.all(np.diag(array) == 0):
+        raise ValueError("Directed distance matrix diagonal must be exactly zero.")
+    return values, np.array(array, copy=True)
+
+
+@dataclass(frozen=True, init=False, eq=False)
+class DirectedDistanceBundle:
+    """Immutable ordered counts plus their validated symmetric minimum.
+
+    The asymmetric matrix is deliberately not a ``DistanceMatrix``. Consumers
+    that do not explicitly declare directed-distance support receive only
+    ``minimum_matrix``.
+    """
+
+    ids: tuple
+    directed_matrix: np.ndarray
+    minimum_matrix: np.ndarray
+    _provenance_json: str | None
+
+    def __init__(self, ids, directed_matrix, *, minimum_matrix=None, provenance=None):
+        ids, directed = validate_directed_distance_matrix(ids, directed_matrix)
+        derived_minimum = np.minimum(directed, directed.T)
+        _, derived_minimum = validate_distance_matrix(ids, derived_minimum)
+
+        if minimum_matrix is not None:
+            _, supplied_minimum = validate_distance_matrix(ids, minimum_matrix)
+            if not np.array_equal(supplied_minimum, derived_minimum):
+                raise ValueError(
+                    "Directed-distance minimum does not equal min(C, C.T)."
+                )
+
+        directed.setflags(write=False)
+        derived_minimum.setflags(write=False)
+        object.__setattr__(self, "ids", tuple(ids))
+        object.__setattr__(self, "directed_matrix", directed)
+        object.__setattr__(self, "minimum_matrix", derived_minimum)
+        try:
+            provenance_json = (
+                None
+                if provenance is None
+                else json.dumps(provenance, sort_keys=True, separators=(",", ":"))
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Directed-distance provenance must be JSON-safe.") from exc
+        object.__setattr__(self, "_provenance_json", provenance_json)
+
+    @property
+    def provenance(self):
+        """Return a copy so callers cannot mutate bundle provenance in place."""
+        return (
+            None
+            if self._provenance_json is None
+            else json.loads(self._provenance_json)
+        )
+
+    def build_tree_kwargs(self):
+        """Expose the symmetric view plus this explicit directed side input."""
+        return {
+            "dist_matrix_path": None,
+            "inids": list(self.ids),
+            "indm": np.array(self.minimum_matrix, copy=True),
+            "directed_distance_bundle": self,
+        }
 
 
 def parse_cnp2cnp_directional_distance(output):
@@ -112,6 +209,74 @@ def combine_ordered_cnp2cnp_matrices(
     return validate_distance_matrix(forward_ids, symmetric)
 
 
+def directed_bundle_from_ordered_cnp2cnp_matrices(
+    forward_ids,
+    forward_matrix,
+    reverse_ids,
+    reverse_matrix,
+    *,
+    provenance=None,
+):
+    """Recover ``C[u,v]`` from two opposite cnp2cnp matrix invocations."""
+    forward_ids, forward_matrix = validate_distance_matrix(
+        forward_ids,
+        forward_matrix,
+    )
+    reverse_ids, reverse_matrix = validate_distance_matrix(
+        reverse_ids,
+        reverse_matrix,
+    )
+    if set(forward_ids) != set(reverse_ids):
+        raise ValueError("Opposite-order cnp2cnp matrices contain different ids.")
+
+    reverse_index = {value: index for index, value in enumerate(reverse_ids)}
+    order = [reverse_index[value] for value in forward_ids]
+    reverse_aligned = reverse_matrix[np.ix_(order, order)]
+
+    size = len(forward_ids)
+    directed = np.zeros((size, size), dtype=float)
+    upper_i, upper_j = np.triu_indices(size, k=1)
+    directed[upper_i, upper_j] = forward_matrix[upper_i, upper_j]
+    directed[upper_j, upper_i] = reverse_aligned[upper_i, upper_j]
+    return DirectedDistanceBundle(
+        forward_ids,
+        directed,
+        provenance=provenance,
+    )
+
+
+def _stable_label_record(value):
+    type_name = f"{type(value).__module__}.{type(value).__qualname__}"
+    try:
+        payload = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError):
+        payload = repr(value)
+    return {"type": type_name, "payload": payload}
+
+
+def stable_distance_label_key(value):
+    """Return a deterministic, biopsy-order-independent label sort key."""
+    record = _stable_label_record(value)
+    return record["type"], record["payload"]
+
+
+def stable_row_order_digest(row_order):
+    """Hash an ordered, type-preserving representation of matrix labels."""
+    records = [_stable_label_record(value) for value in row_order]
+    payload = json.dumps(
+        records,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(payload).hexdigest()
+
+
 def _file_sha256(path):
     digest = sha256()
     with open(path, "rb") as source:
@@ -139,20 +304,45 @@ def _source_revision(source_dir):
         return None, None
 
 
-def cnp2cnp_provenance(runfile=None, *, construction, python_executable=None):
+def cnp2cnp_provenance(
+    runfile=None,
+    *,
+    construction,
+    python_executable=None,
+    semantic_mode=CNP2CNP_SYMMETRIZATION,
+    row_order=None,
+    profile_count=None,
+    retains_directed=False,
+):
     """Build JSON-safe provenance for a newly constructed cnp2cnp matrix."""
     python_executable = str(python_executable or sys.executable)
+    if semantic_mode == CNP2CNP_SYMMETRIZATION:
+        semantics_version = CNP2CNP_SEMANTICS_VERSION
+        symmetrization = CNP2CNP_SYMMETRIZATION
+        formula = "min(d_any(u,v),d_any(v,u))"
+        calls_per_pair = 2
+    elif semantic_mode == CNP2CNP_ORDERED_TRIANGLE_FAST:
+        semantics_version = CNP2CNP_ORDERED_TRIANGLE_FAST_SEMANTICS_VERSION
+        symmetrization = "ordered_triangle_mirrored"
+        formula = "d_any(x_i,x_j) mirrored for recorded row order i<j"
+        calls_per_pair = 1
+        if row_order is None:
+            raise ValueError("Ordered-triangle provenance requires row_order.")
+    else:
+        raise ValueError(f"Unknown cnp2cnp semantic mode {semantic_mode!r}.")
+
+    if construction == "trivial_singleton":
+        calls_per_pair = 0
+
     provenance = {
         "schema_version": DISTANCE_PROVENANCE_SCHEMA_VERSION,
         "metric": "cnp2cnp",
         "distance_mode": CNP2CNP_DISTANCE,
-        "semantics_version": CNP2CNP_SEMANTICS_VERSION,
-        "symmetrization": CNP2CNP_SYMMETRIZATION,
-        "formula": "min(d_any(u,v),d_any(v,u))",
+        "semantics_version": semantics_version,
+        "symmetrization": symmetrization,
+        "formula": formula,
         "construction": construction,
-        "directional_calls_per_unordered_pair": (
-            0 if construction == "trivial_singleton" else 2
-        ),
+        "directional_calls_per_unordered_pair": calls_per_pair,
         "python_executable": python_executable,
         "cnp2cnp_executable": None,
         "cnp2cnp_source_revision": None,
@@ -160,12 +350,52 @@ def cnp2cnp_provenance(runfile=None, *, construction, python_executable=None):
         "source_sha256": {},
         "command_template": None,
     }
+    if profile_count is not None:
+        profile_count = int(profile_count)
+        if profile_count < 0:
+            raise ValueError("profile_count must be nonnegative.")
+        unordered_pairs = profile_count * (profile_count - 1) // 2
+        provenance["profile_count"] = profile_count
+        provenance["directional_transformation_count"] = (
+            calls_per_pair * unordered_pairs
+        )
+        if construction in {
+            "opposite_order_matrix_mode",
+            "opposite_order_matrix_mode_directed_bundle",
+        }:
+            process_count = 0 if profile_count <= 1 else 2
+        elif construction == "ordered_triangle_matrix_mode":
+            process_count = 0 if profile_count <= 1 else 1
+        elif construction == "bidirectional_pair_mode":
+            process_count = calls_per_pair * unordered_pairs
+        else:
+            process_count = 0
+        provenance["external_process_count"] = process_count
+
+    if row_order is not None:
+        row_order = list(row_order)
+        provenance["row_order"] = [
+            _stable_label_record(value)
+            for value in row_order
+        ]
+        provenance["row_order_sha256"] = stable_row_order_digest(row_order)
+
+    if retains_directed:
+        provenance["directed_bundle_schema_version"] = (
+            DIRECTED_DISTANCE_BUNDLE_SCHEMA_VERSION
+        )
+        provenance["retains_directed_counts"] = True
+        provenance["directed_formula"] = "C[u,v] = d_any(u,v)"
+
     if runfile is None:
         return provenance
 
     executable = Path(runfile).expanduser().resolve()
     provenance["cnp2cnp_executable"] = str(executable)
-    if construction == "opposite_order_matrix_mode":
+    if construction in {
+        "opposite_order_matrix_mode",
+        "opposite_order_matrix_mode_directed_bundle",
+    }:
         provenance["command_template"] = [
             python_executable,
             str(executable),
@@ -175,6 +405,19 @@ def cnp2cnp_provenance(runfile=None, *, construction, python_executable=None):
             CNP2CNP_DISTANCE,
             "-i",
             "<ordered-or-reversed-input.fa>",
+            "-o",
+            "<temporary-output.phy>",
+        ]
+    elif construction == "ordered_triangle_matrix_mode":
+        provenance["command_template"] = [
+            python_executable,
+            str(executable),
+            "-m",
+            "matrix",
+            "-d",
+            CNP2CNP_DISTANCE,
+            "-i",
+            "<recorded-ordered-input.fa>",
             "-o",
             "<temporary-output.phy>",
         ]
@@ -214,12 +457,20 @@ def cnp2cnp_provenance(runfile=None, *, construction, python_executable=None):
 
 __all__ = [
     "CNP2CNP_DISTANCE",
+    "CNP2CNP_ORDERED_TRIANGLE_FAST",
+    "CNP2CNP_ORDERED_TRIANGLE_FAST_SEMANTICS_VERSION",
     "CNP2CNP_SEMANTICS_VERSION",
     "CNP2CNP_SYMMETRIZATION",
+    "DIRECTED_DISTANCE_BUNDLE_SCHEMA_VERSION",
     "DISTANCE_PROVENANCE_SCHEMA_VERSION",
+    "DirectedDistanceBundle",
     "cnp2cnp_provenance",
     "combine_ordered_cnp2cnp_matrices",
+    "directed_bundle_from_ordered_cnp2cnp_matrices",
     "minimum_bidirectional_distance",
     "parse_cnp2cnp_directional_distance",
+    "stable_distance_label_key",
+    "stable_row_order_digest",
+    "validate_directed_distance_matrix",
     "validate_distance_matrix",
 ]

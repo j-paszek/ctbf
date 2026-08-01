@@ -242,6 +242,8 @@ def test_reconstructor_rule_for_connecting():
     biopsy_set1, biopsy_set2, njbs1, njbs2 = generate_biopsy_sets()
     # biopsy_set1 = [[c1], [c2, c3]] # cannot match 13 to 7
     # biopsy_set2 = [[c4], [c2, c3]] # should match 14 to 5
+    # Repeated observations c1/c2 share cell_id 7 and therefore one distance
+    # row.
     rt, _, _ = build_evolution_tree(biopsy_set1, dist_matrix_path=data_path("dm", "dm1"), r=2, only_nj=False)
     rt2, _, _ = build_evolution_tree(biopsy_set2, dist_matrix_path=data_path("dm", "dm2"), r=2, only_nj=False)
     assert "((7:0.0000)7:0.0000,(13:0.0000)13:0.0000)None;" == to_newick(rt)

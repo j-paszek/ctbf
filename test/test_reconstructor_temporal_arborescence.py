@@ -10,13 +10,18 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from reconstructor import build_evolution_tree
+from distance_semantics import DirectedDistanceBundle
 from reconstructor_plausibility import is_biologically_plausible_ancestor
 from reconstructor_temporal import (
     temporal_cnp_arborescence,
+    temporal_cnp_arborescence_directed,
+    temporal_cnp_arborescence_directed_no_time,
     temporal_cnp_arborescence_no_time,
+    uses_directed_distance_input,
     uses_ordered_occurrence_input,
 )
 from simulator import Genotype
+from ctbs import run_single_test
 
 
 def _cell(genome, node_id, cell_id, generation=None):
@@ -312,6 +317,190 @@ def test_temporal_algorithm_contract_metadata_is_explicit():
     assert temporal_cnp_arborescence.ctbf_order_ablation is (
         temporal_cnp_arborescence_no_time
     )
+    assert uses_directed_distance_input(temporal_cnp_arborescence) is False
+    assert uses_directed_distance_input(temporal_cnp_arborescence_directed) is True
+    assert temporal_cnp_arborescence_directed.ctbf_order_ablation is (
+        temporal_cnp_arborescence_directed_no_time
+    )
+
+
+def test_directed_variant_changes_only_both_plausible_numeric_edge_tier():
+    cells = [[_cell([2], 10, 1), _cell([3], 20, 2)]]
+    bundle = DirectedDistanceBundle(
+        [1, 2],
+        np.array([[0.0, 9.0], [1.0, 0.0]]),
+    )
+
+    minimum_tree, _, _ = temporal_cnp_arborescence(
+        bundle.minimum_matrix,
+        cells,
+        [1, 2],
+        seed=0,
+    )
+    directed_tree, _, directed_root = temporal_cnp_arborescence_directed(
+        bundle.minimum_matrix,
+        cells,
+        [1, 2],
+        seed=0,
+        directed_distance_bundle=bundle,
+    )
+
+    assert _label_topology(minimum_tree, 0) == (1, [(1, 2)])
+    assert _label_topology(directed_tree, directed_root) == (2, [(2, 1)])
+    assert next(iter(directed_tree.edges(data=True)))[2]["weight"] == 1.0
+
+
+def test_directed_variant_keeps_no_regain_above_a_cheaper_impossible_direction():
+    lost = _cell([0], 10, 1)
+    present = _cell([1], 20, 2)
+    bundle = DirectedDistanceBundle(
+        [1, 2],
+        np.array([[0.0, 0.0], [100.0, 0.0]]),
+    )
+
+    tree, _, root = temporal_cnp_arborescence_directed_no_time(
+        bundle.minimum_matrix,
+        [[lost, present]],
+        [1, 2],
+        seed=0,
+        directed_distance_bundle=bundle,
+    )
+
+    assert _label_topology(tree, root) == (2, [(2, 1)])
+
+
+def test_directed_variant_keeps_biopsy_time_above_a_cheaper_reverse_direction():
+    early = _cell([2], 10, 1)
+    late = _cell([3], 20, 2)
+    bundle = DirectedDistanceBundle(
+        [1, 2],
+        np.array([[0.0, 9.0], [1.0, 0.0]]),
+    )
+
+    ordered, _, ordered_root = temporal_cnp_arborescence_directed(
+        bundle.minimum_matrix,
+        [[early], [late]],
+        [1, 2],
+        seed=0,
+        directed_distance_bundle=bundle,
+    )
+    ablated, _, ablated_root = temporal_cnp_arborescence_directed_no_time(
+        bundle.minimum_matrix,
+        [[early], [late]],
+        [1, 2],
+        seed=0,
+        directed_distance_bundle=bundle,
+    )
+
+    assert _label_topology(ordered, ordered_root) == (1, [(1, 2)])
+    assert _label_topology(ablated, ablated_root) == (2, [(2, 1)])
+
+
+def test_directed_variant_matches_minimum_variant_when_counts_tie():
+    cells = [[
+        _cell([2], 10, 1),
+        _cell([3], 20, 2),
+        _cell([4], 30, 3),
+    ]]
+    symmetric = np.array([
+        [0.0, 1.0, 4.0],
+        [1.0, 0.0, 2.0],
+        [4.0, 2.0, 0.0],
+    ])
+    bundle = DirectedDistanceBundle([1, 2, 3], symmetric)
+
+    minimum, _, _ = temporal_cnp_arborescence_no_time(
+        symmetric,
+        cells,
+        [1, 2, 3],
+        seed=17,
+    )
+    directed, _, _ = temporal_cnp_arborescence_directed_no_time(
+        symmetric,
+        cells,
+        [1, 2, 3],
+        seed=17,
+        directed_distance_bundle=bundle,
+    )
+
+    assert _tree_signature(directed) == _tree_signature(minimum)
+
+
+def test_facade_passes_directed_bundle_only_to_declared_algorithm():
+    cells = [[_cell([2], 10, 1), _cell([3], 20, 2)]]
+    bundle = DirectedDistanceBundle([1, 2], [[0.0, 9.0], [1.0, 0.0]])
+
+    tree, _, _ = build_evolution_tree(
+        cells,
+        distance_matrix=bundle,
+        neighbor_joining=temporal_cnp_arborescence_directed,
+        seed=0,
+    )
+    assert nx.is_arborescence(tree)
+
+    with pytest.raises(ValueError, match="explicitly declares"):
+        build_evolution_tree(
+            cells,
+            distance_matrix=bundle,
+            neighbor_joining=temporal_cnp_arborescence,
+        )
+    with pytest.raises(ValueError, match="requires a DirectedDistanceBundle"):
+        build_evolution_tree(
+            cells,
+            inids=[1, 2],
+            indm=bundle.minimum_matrix,
+            neighbor_joining=temporal_cnp_arborescence_directed,
+        )
+
+
+def test_run_single_test_carries_directed_provider_to_ordered_and_no_time_pair():
+    class TwoObservationSimulator:
+        def __init__(self):
+            self.tree = nx.DiGraph()
+            self.tree.add_node(0, genome=[2], generation=0, cell_id=0)
+            self.tree.add_node(5, genome=[2], generation=1, cell_id=1)
+            self.tree.add_node(7, genome=[3], generation=2, cell_id=2)
+            self.tree.add_edge(0, 5, events="")
+            self.tree.add_edge(5, 7, events="gain")
+
+        def perform_biopsy(
+            self,
+            generation,
+            biopsy_size=0,
+            biopsy_size_scalable=None,
+            seed=None,
+        ):
+            if generation == 1:
+                return [_cell([2], 5, 1)]
+            if generation == 2:
+                return [_cell([3], 7, 2)]
+            return []
+
+    bundle = DirectedDistanceBundle(
+        [1, 2],
+        [[0.0, 9.0], [1.0, 0.0]],
+        provenance={"semantics_version": "test"},
+    )
+
+    class FixedDirectedProvider:
+        def compute(self, cells):
+            assert {cell.cell_id for cell in cells} == {1, 2}
+            return bundle
+
+    result = run_single_test(
+        seed=0,
+        simulator_with_loaded_tree=TwoObservationSimulator(),
+        biopsy_generations=[1, 2],
+        biopsy_size_scalable=1.0,
+        reconstruction_algorithm=temporal_cnp_arborescence_directed,
+        distance_provider=FixedDirectedProvider(),
+    )
+
+    assert result is not None
+    _truth, ordered, no_time = result
+    assert _label_topology(ordered, 0) == (1, [(1, 2)])
+    no_time_root = next(node for node, indegree in no_time.in_degree() if indegree == 0)
+    assert _label_topology(no_time, no_time_root) == (2, [(2, 1)])
 
 
 @pytest.mark.parametrize(

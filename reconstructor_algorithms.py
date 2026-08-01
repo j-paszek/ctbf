@@ -45,6 +45,8 @@ from reconstructor_pair_selection import (
 )
 from reconstructor_temporal import (
     temporal_cnp_arborescence,
+    temporal_cnp_arborescence_directed,
+    temporal_cnp_arborescence_directed_no_time,
     temporal_cnp_arborescence_no_time,
 )
 
@@ -538,5 +540,7 @@ __all__ = [
     "neighbor_joining_standard",
     "rooted_labeled_nj",
     "temporal_cnp_arborescence",
+    "temporal_cnp_arborescence_directed",
+    "temporal_cnp_arborescence_directed_no_time",
     "temporal_cnp_arborescence_no_time",
 ]

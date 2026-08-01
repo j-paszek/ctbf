@@ -11,11 +11,18 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import ctbs
 from distance_semantics import (
+    CNP2CNP_ORDERED_TRIANGLE_FAST,
+    CNP2CNP_ORDERED_TRIANGLE_FAST_SEMANTICS_VERSION,
     CNP2CNP_SEMANTICS_VERSION,
+    DIRECTED_DISTANCE_BUNDLE_SCHEMA_VERSION,
+    DirectedDistanceBundle,
     cnp2cnp_provenance,
     combine_ordered_cnp2cnp_matrices,
+    directed_bundle_from_ordered_cnp2cnp_matrices,
     minimum_bidirectional_distance,
     parse_cnp2cnp_directional_distance,
+    stable_row_order_digest,
+    validate_directed_distance_matrix,
     validate_distance_matrix,
 )
 from reconstructor import build_evolution_tree
@@ -80,6 +87,63 @@ def test_opposite_order_matrix_combination_realigns_ids_and_takes_minimum():
             ]
         ),
     )
+
+
+def test_opposite_order_matrices_recover_immutable_directed_bundle():
+    provenance = {"schema_version": DIRECTED_DISTANCE_BUNDLE_SCHEMA_VERSION}
+    bundle = directed_bundle_from_ordered_cnp2cnp_matrices(
+        ["A", "B", "C"],
+        np.array([
+            [0.0, 7.0, 2.0],
+            [7.0, 0.0, 5.0],
+            [2.0, 5.0, 0.0],
+        ]),
+        ["C", "B", "A"],
+        np.array([
+            [0.0, 1.0, 9.0],
+            [1.0, 0.0, 3.0],
+            [9.0, 3.0, 0.0],
+        ]),
+        provenance=provenance,
+    )
+
+    assert bundle.ids == ("A", "B", "C")
+    assert np.array_equal(
+        bundle.directed_matrix,
+        np.array([
+            [0.0, 7.0, 2.0],
+            [3.0, 0.0, 5.0],
+            [9.0, 1.0, 0.0],
+        ]),
+    )
+    assert np.array_equal(
+        bundle.minimum_matrix,
+        np.array([
+            [0.0, 3.0, 2.0],
+            [3.0, 0.0, 1.0],
+            [2.0, 1.0, 0.0],
+        ]),
+    )
+    assert bundle.directed_matrix.flags.writeable is False
+    assert bundle.minimum_matrix.flags.writeable is False
+    returned_provenance = bundle.provenance
+    returned_provenance["schema_version"] = "changed"
+    assert bundle.provenance == provenance
+    with pytest.raises(ValueError, match="read-only"):
+        bundle.directed_matrix[0, 1] = 0.0
+
+
+def test_directed_bundle_rejects_invalid_values_and_misaligned_minimum():
+    with pytest.raises(ValueError, match="diagonal"):
+        validate_directed_distance_matrix([1, 2], [[1, 2], [3, 0]])
+    with pytest.raises(ValueError, match="nonnegative"):
+        DirectedDistanceBundle([1, 2], [[0, -1], [2, 0]])
+    with pytest.raises(ValueError, match=r"min\(C, C.T\)"):
+        DirectedDistanceBundle(
+            [1, 2],
+            [[0, 7], [3, 0]],
+            minimum_matrix=[[0, 7], [7, 0]],
+        )
 
 
 def test_symmetric_pair_helper_calls_both_profile_orders(monkeypatch):
@@ -161,3 +225,192 @@ def test_cnp2cnp_provenance_records_semantics_command_and_source_hashes(tmp_path
         "<forward-or-reverse-pair.fa>",
     ]
     assert set(provenance["source_sha256"]) == {"cnp2cnp.py", "cnpsolver.py"}
+
+
+def test_fast_and_directed_provenance_are_separately_versioned():
+    row_order = [1, "2", 3]
+    fast = cnp2cnp_provenance(
+        None,
+        construction="ordered_triangle_matrix_mode",
+        semantic_mode=CNP2CNP_ORDERED_TRIANGLE_FAST,
+        row_order=row_order,
+        profile_count=3,
+    )
+    directed = cnp2cnp_provenance(
+        None,
+        construction="opposite_order_matrix_mode_directed_bundle",
+        profile_count=3,
+        retains_directed=True,
+    )
+
+    assert fast["semantics_version"] == (
+        CNP2CNP_ORDERED_TRIANGLE_FAST_SEMANTICS_VERSION
+    )
+    assert fast["semantics_version"] != CNP2CNP_SEMANTICS_VERSION
+    assert fast["row_order_sha256"] == stable_row_order_digest(row_order)
+    assert fast["directional_transformation_count"] == 3
+    assert fast["external_process_count"] == 1
+    assert directed["semantics_version"] == CNP2CNP_SEMANTICS_VERSION
+    assert directed["directional_transformation_count"] == 6
+    assert directed["external_process_count"] == 2
+    assert directed["directed_bundle_schema_version"] == (
+        DIRECTED_DISTANCE_BUNDLE_SCHEMA_VERSION
+    )
+
+
+def test_explicit_matrix_providers_use_one_or_two_recorded_orders(monkeypatch, tmp_path):
+    calls = []
+    directional = {(1, 2): 7.0, (2, 1): 3.0}
+
+    def fake_run(args, capture_output, text, check):
+        input_path = Path(args[args.index("-i") + 1])
+        output_path = Path(args[args.index("-o") + 1])
+        lines = [line.strip() for line in input_path.read_text().splitlines()]
+        ids = [int(lines[index][1:]) for index in range(0, len(lines), 2)]
+        calls.append(ids)
+        matrix = np.zeros((len(ids), len(ids)), dtype=float)
+        for left in range(len(ids)):
+            for right in range(left + 1, len(ids)):
+                matrix[left, right] = directional[(ids[left], ids[right])]
+                matrix[right, left] = matrix[left, right]
+        output_path.write_text(
+            f"{len(ids)}\n"
+            + "".join(
+                f"{cell_id} " + " ".join(str(value) for value in row) + "\n"
+                for cell_id, row in zip(ids, matrix)
+            )
+        )
+        return type("Completed", (), {"stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(ctbs.subprocess, "run", fake_run)
+    base = ctbs.default_ctbs_runtime_config()
+    runtime = ctbs.CtbsRuntimeConfig(
+        in_file_name=base.in_file_name,
+        out_file_name=str(tmp_path / "compatibility.phy"),
+        sim_dm=base.sim_dm,
+        cnp2cnp_folder=base.cnp2cnp_folder,
+        cnp2cnp_file="/tmp/cnp2cnp.py",
+        true_tree_root_id=base.true_tree_root_id,
+        run_single_test=base.run_single_test,
+    )
+    cells = [
+        Genotype([3], node_id=20, cell_id=2),
+        Genotype([2], node_id=10, cell_id=1),
+    ]
+
+    fast = ctbs.Cnp2CnpOrderedTriangleFastDistanceProvider(runtime).compute(cells)
+    assert calls == [[1, 2]]
+    assert fast.ids == [1, 2]
+    assert fast.matrix[0, 1] == 7.0
+    assert fast.provenance["row_order_sha256"] == stable_row_order_digest([1, 2])
+
+    calls.clear()
+    bundle = ctbs.Cnp2CnpDirectedFileDistanceProvider(runtime).compute(cells)
+    assert calls == [[1, 2], [2, 1]]
+    assert np.array_equal(bundle.directed_matrix, [[0.0, 7.0], [3.0, 0.0]])
+    assert np.array_equal(bundle.minimum_matrix, [[0.0, 3.0], [3.0, 0.0]])
+
+    calls.clear()
+    minimum = ctbs.Cnp2CnpFileDistanceProvider(runtime).compute(cells)
+    assert calls == [[2, 1], [1, 2]]
+    assert np.array_equal(minimum.matrix, [[0.0, 3.0], [3.0, 0.0]])
+
+
+def test_default_provider_keeps_minimum_and_rejects_unsupported_parallel_modes():
+    base = ctbs.default_ctbs_runtime_config()
+    runtime = ctbs.CtbsRuntimeConfig(
+        in_file_name=base.in_file_name,
+        out_file_name=base.out_file_name,
+        sim_dm=base.sim_dm,
+        cnp2cnp_folder=base.cnp2cnp_folder,
+        cnp2cnp_file="/tmp/nonexistent-ctbf-cnp2cnp.py",
+        true_tree_root_id=base.true_tree_root_id,
+        run_single_test=base.run_single_test,
+    )
+
+    assert isinstance(
+        ctbs.default_distance_provider(runtime_config=runtime),
+        ctbs.Cnp2CnpFileDistanceProvider,
+    )
+    assert isinstance(
+        ctbs.default_distance_provider(
+            runtime_config=runtime,
+            distance_construction=ctbs.CNP2CNP_DISTANCE_CONSTRUCTION_FAST,
+        ),
+        ctbs.Cnp2CnpOrderedTriangleFastDistanceProvider,
+    )
+    with pytest.raises(ValueError, match="parallel=False"):
+        ctbs.default_distance_provider(
+            parallel=True,
+            runtime_config=runtime,
+            distance_construction=ctbs.CNP2CNP_DISTANCE_CONSTRUCTION_DIRECTED,
+        )
+
+
+@pytest.mark.parametrize("cells", [[], [Genotype([2], node_id=1, cell_id=1)]])
+def test_fast_and_directed_providers_handle_degenerate_inputs_without_processes(
+    monkeypatch,
+    cells,
+):
+    monkeypatch.setattr(
+        ctbs.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("cnp2cnp process should not run"),
+    )
+    base = ctbs.default_ctbs_runtime_config()
+    runtime = ctbs.CtbsRuntimeConfig(
+        in_file_name=base.in_file_name,
+        out_file_name=base.out_file_name,
+        sim_dm=base.sim_dm,
+        cnp2cnp_folder=base.cnp2cnp_folder,
+        cnp2cnp_file="/tmp/nonexistent-ctbf-cnp2cnp.py",
+        true_tree_root_id=base.true_tree_root_id,
+        run_single_test=base.run_single_test,
+    )
+
+    fast = ctbs.Cnp2CnpOrderedTriangleFastDistanceProvider(runtime).compute(cells)
+    directed = ctbs.Cnp2CnpDirectedFileDistanceProvider(runtime).compute(cells)
+
+    assert fast.matrix.shape == (len(cells), len(cells))
+    assert directed.minimum_matrix.shape == (len(cells), len(cells))
+    assert fast.provenance["external_process_count"] == 0
+    assert directed.provenance["external_process_count"] == 0
+
+
+def test_runtime_distance_construction_selection_is_explicit(monkeypatch):
+    cells = [
+        Genotype([2], node_id=10, cell_id=1),
+        Genotype([3], node_id=20, cell_id=2),
+    ]
+    calls = []
+    supplied = ctbs.SuppliedDistanceProvider(
+        [1, 2],
+        [[0.0, 1.0], [1.0, 0.0]],
+    )
+
+    def fake_default_provider(**kwargs):
+        calls.append(kwargs)
+        return supplied
+
+    monkeypatch.setattr(ctbs, "default_distance_provider", fake_default_provider)
+    result = ctbs._compute_distance_matrix(
+        [cells],
+        parallel=False,
+        time_collector=None,
+        runtime_config=ctbs.default_ctbs_runtime_config(),
+        distance_construction=ctbs.CNP2CNP_DISTANCE_CONSTRUCTION_FAST,
+    )
+
+    assert isinstance(result, ctbs.DistanceMatrix)
+    assert calls[0]["distance_construction"] == (
+        ctbs.CNP2CNP_DISTANCE_CONSTRUCTION_FAST
+    )
+    with pytest.raises(ValueError, match="either distance_provider"):
+        ctbs._compute_distance_matrix(
+            [cells],
+            parallel=False,
+            time_collector=None,
+            runtime_config=ctbs.default_ctbs_runtime_config(),
+            distance_provider=supplied,
+            distance_construction=ctbs.CNP2CNP_DISTANCE_CONSTRUCTION_FAST,
+        )

@@ -17,10 +17,15 @@ from reconstructor_registry import get_algorithm_map, resolve_reconstruction_alg
 from reconstructor_temporal import uses_ordered_occurrence_input
 from distance_semantics import (
     CNP2CNP_DISTANCE,
+    CNP2CNP_ORDERED_TRIANGLE_FAST,
+    CNP2CNP_SYMMETRIZATION,
+    DirectedDistanceBundle,
     cnp2cnp_provenance,
     combine_ordered_cnp2cnp_matrices,
+    directed_bundle_from_ordered_cnp2cnp_matrices,
     minimum_bidirectional_distance,
     parse_cnp2cnp_directional_distance,
+    stable_distance_label_key,
     validate_distance_matrix as _validate_distance_matrix,
 )
 from evaluator import grf_tree
@@ -50,6 +55,15 @@ DEFAULT_CTBS_CONFIG = {
 CTBS_CONFIG_PATH = Path(__file__).with_name("ctbs_config.json")
 
 RECONSTRUCTION_ALGORITHMS = get_algorithm_map()
+
+CNP2CNP_DISTANCE_CONSTRUCTION_DEFAULT = CNP2CNP_SYMMETRIZATION
+CNP2CNP_DISTANCE_CONSTRUCTION_FAST = CNP2CNP_ORDERED_TRIANGLE_FAST
+CNP2CNP_DISTANCE_CONSTRUCTION_DIRECTED = "minimum_with_directed"
+CNP2CNP_DISTANCE_CONSTRUCTIONS = frozenset({
+    CNP2CNP_DISTANCE_CONSTRUCTION_DEFAULT,
+    CNP2CNP_DISTANCE_CONSTRUCTION_FAST,
+    CNP2CNP_DISTANCE_CONSTRUCTION_DIRECTED,
+})
 
 
 @dataclass(frozen=True)
@@ -184,6 +198,7 @@ class Cnp2CnpPairwiseDistanceProvider(DistanceProvider):
             construction=(
                 "trivial_singleton" if len(cells) <= 1 else "bidirectional_pair_mode"
             ),
+            profile_count=len(cells),
         )
         if len(cells) <= 1:
             return _trivial_distance_matrix(cells, provenance=provenance)
@@ -206,6 +221,7 @@ class Cnp2CnpFileDistanceProvider(DistanceProvider):
                 provenance=cnp2cnp_provenance(
                     self.runtime_config.cnp2cnp_file,
                     construction="trivial_singleton",
+                    profile_count=len(cells),
                 ),
             )
         distance_matrix = distance_matrix_from_cnp2cnp_matrix_mode(
@@ -220,8 +236,119 @@ class Cnp2CnpFileDistanceProvider(DistanceProvider):
         return distance_matrix
 
 
-def default_distance_provider(parallel=False, runtime_config=None, max_threads=None):
+def _ordered_cells(cells, requested_order=None):
+    by_id = {}
+    for cell in cells:
+        cell_id = cell.get_id()
+        if cell_id in by_id:
+            raise ValueError(f"Duplicate cnp2cnp input id {cell_id!r}.")
+        by_id[cell_id] = cell
+
+    if requested_order is None:
+        ordered_ids = sorted(by_id, key=stable_distance_label_key)
+    else:
+        ordered_ids = list(requested_order)
+        if len(ordered_ids) != len(set(ordered_ids)):
+            raise ValueError("Explicit cnp2cnp row order contains duplicate ids.")
+        if set(ordered_ids) != set(by_id):
+            raise ValueError(
+                "Explicit cnp2cnp row order must contain every input id exactly once."
+            )
+    return [by_id[cell_id] for cell_id in ordered_ids]
+
+
+@dataclass(frozen=True)
+class Cnp2CnpOrderedTriangleFastDistanceProvider(DistanceProvider):
+    """Explicit one-process, order-conditioned cnp2cnp compatibility mode."""
+
+    runtime_config: CtbsRuntimeConfig
+    row_order: tuple | None = None
+
+    def compute(self, cells):
+        ordered_cells = _ordered_cells(cells, self.row_order)
+        if len(ordered_cells) <= 1:
+            row_order = [cell.get_id() for cell in ordered_cells]
+            return _trivial_distance_matrix(
+                ordered_cells,
+                provenance=cnp2cnp_provenance(
+                    self.runtime_config.cnp2cnp_file,
+                    construction="trivial_singleton",
+                    semantic_mode=CNP2CNP_ORDERED_TRIANGLE_FAST,
+                    row_order=row_order,
+                    profile_count=len(ordered_cells),
+                ),
+            )
+        distance_matrix = distance_matrix_from_cnp2cnp_ordered_triangle(
+            ordered_cells,
+            runtime_config=self.runtime_config,
+        )
+        _write_labeled_distance_matrix(
+            self.runtime_config.out_file_name,
+            distance_matrix.ids,
+            distance_matrix.matrix,
+        )
+        return distance_matrix
+
+
+@dataclass(frozen=True)
+class Cnp2CnpDirectedFileDistanceProvider(DistanceProvider):
+    """Two-process provider retaining C[u,v] beside its symmetric minimum."""
+
+    runtime_config: CtbsRuntimeConfig
+
+    def compute(self, cells):
+        ordered_cells = _ordered_cells(cells)
+        if len(ordered_cells) <= 1:
+            ids = [cell.get_id() for cell in ordered_cells]
+            return DirectedDistanceBundle(
+                ids,
+                np.zeros((len(ids), len(ids)), dtype=float),
+                provenance=cnp2cnp_provenance(
+                    self.runtime_config.cnp2cnp_file,
+                    construction="trivial_singleton",
+                    profile_count=len(ordered_cells),
+                    retains_directed=True,
+                ),
+            )
+        bundle = directed_distance_bundle_from_cnp2cnp_matrix_mode(
+            ordered_cells,
+            runtime_config=self.runtime_config,
+        )
+        _write_labeled_distance_matrix(
+            self.runtime_config.out_file_name,
+            bundle.ids,
+            bundle.minimum_matrix,
+        )
+        return bundle
+
+
+def default_distance_provider(
+    parallel=False,
+    runtime_config=None,
+    max_threads=None,
+    distance_construction=CNP2CNP_DISTANCE_CONSTRUCTION_DEFAULT,
+):
     runtime_config = _coerce_runtime_config(runtime_config)
+    if distance_construction not in CNP2CNP_DISTANCE_CONSTRUCTIONS:
+        available = ", ".join(sorted(CNP2CNP_DISTANCE_CONSTRUCTIONS))
+        raise ValueError(
+            f"Unknown cnp2cnp distance construction {distance_construction!r}; "
+            f"choose one of: {available}."
+        )
+    if distance_construction == CNP2CNP_DISTANCE_CONSTRUCTION_FAST:
+        if parallel:
+            raise ValueError(
+                "ordered_triangle_fast is a one-process matrix construction; "
+                "set parallel=False."
+            )
+        return Cnp2CnpOrderedTriangleFastDistanceProvider(runtime_config)
+    if distance_construction == CNP2CNP_DISTANCE_CONSTRUCTION_DIRECTED:
+        if parallel:
+            raise ValueError(
+                "minimum_with_directed currently uses two matrix processes; "
+                "set parallel=False."
+            )
+        return Cnp2CnpDirectedFileDistanceProvider(runtime_config)
     if parallel:
         return Cnp2CnpPairwiseDistanceProvider(runtime_config, max_threads=max_threads)
     return Cnp2CnpFileDistanceProvider(runtime_config)
@@ -377,7 +504,13 @@ def _write_labeled_distance_matrix(path, ids, matrix):
             destination.write(f"{str(cell_id).ljust(10)} {values}\n")
 
 
-def _cnp2cnp_matrix_from_records(records, runfile):
+def _run_cnp2cnp_ordered_matrix(
+    records,
+    runfile,
+    *,
+    temporary_directory=None,
+    stem="ordered",
+):
     if not records:
         raise ValueError("cnp2cnp matrix construction requires at least one profile.")
     record_ids = [_parse_distance_label(str(record[0])) for record in records]
@@ -386,47 +519,71 @@ def _cnp2cnp_matrix_from_records(records, runfile):
         np.zeros((len(records), len(records)), dtype=float),
     )
     if len(records) == 1:
-        provenance = cnp2cnp_provenance(
-            runfile,
-            construction="trivial_singleton",
-        )
-        return DistanceMatrix(
-            ids=record_ids,
-            matrix=np.zeros((1, 1), dtype=float),
-            provenance=provenance,
-        )
+        return record_ids, np.zeros((1, 1), dtype=float)
 
-    with tempfile.TemporaryDirectory(prefix="ctbf-cnp2cnp-matrix-") as tmpdir:
-        tmpdir = Path(tmpdir)
-        forward_input = tmpdir / "forward.fa"
-        reverse_input = tmpdir / "reverse.fa"
-        forward_output = tmpdir / "forward.phy"
-        reverse_output = tmpdir / "reverse.phy"
-        _write_cnp2cnp_records(forward_input, records)
-        _write_cnp2cnp_records(reverse_input, list(reversed(records)))
+    if temporary_directory is None:
+        with tempfile.TemporaryDirectory(prefix="ctbf-cnp2cnp-matrix-") as tmpdir:
+            return _run_cnp2cnp_ordered_matrix(
+                records,
+                runfile,
+                temporary_directory=tmpdir,
+                stem=stem,
+            )
 
-        command_prefix = [
+    temporary_directory = Path(temporary_directory)
+    ordered_input = temporary_directory / f"{stem}.fa"
+    ordered_output = temporary_directory / f"{stem}.phy"
+    _write_cnp2cnp_records(ordered_input, records)
+
+    subprocess.run(
+        [
             str(sys.executable),
             runfile,
             "-m",
             "matrix",
             "-d",
             CNP2CNP_DISTANCE,
-        ]
-        subprocess.run(
-            command_prefix + ["-i", str(forward_input), "-o", str(forward_output)],
-            capture_output=True,
-            text=True,
-            check=True,
+            "-i",
+            str(ordered_input),
+            "-o",
+            str(ordered_output),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return _parse_labeled_distance_matrix(ordered_output)
+
+
+def _cnp2cnp_matrix_from_records(records, runfile):
+    if not records:
+        raise ValueError("cnp2cnp matrix construction requires at least one profile.")
+
+    if len(records) <= 1:
+        forward_ids, forward_matrix = _run_cnp2cnp_ordered_matrix(records, runfile)
+        return DistanceMatrix(
+            ids=forward_ids,
+            matrix=forward_matrix,
+            provenance=cnp2cnp_provenance(
+                runfile,
+                construction="trivial_singleton",
+                profile_count=len(records),
+            ),
         )
-        subprocess.run(
-            command_prefix + ["-i", str(reverse_input), "-o", str(reverse_output)],
-            capture_output=True,
-            text=True,
-            check=True,
+
+    with tempfile.TemporaryDirectory(prefix="ctbf-cnp2cnp-matrix-") as tmpdir:
+        forward_ids, forward_matrix = _run_cnp2cnp_ordered_matrix(
+            records,
+            runfile,
+            temporary_directory=tmpdir,
+            stem="forward",
         )
-        forward_ids, forward_matrix = _parse_labeled_distance_matrix(forward_output)
-        reverse_ids, reverse_matrix = _parse_labeled_distance_matrix(reverse_output)
+        reverse_ids, reverse_matrix = _run_cnp2cnp_ordered_matrix(
+            list(reversed(records)),
+            runfile,
+            temporary_directory=tmpdir,
+            stem="reverse",
+        )
 
     ids, matrix = combine_ordered_cnp2cnp_matrices(
         forward_ids,
@@ -440,7 +597,72 @@ def _cnp2cnp_matrix_from_records(records, runfile):
         provenance=cnp2cnp_provenance(
             runfile,
             construction="opposite_order_matrix_mode",
+            profile_count=len(records),
         ),
+    )
+
+
+def _cnp2cnp_ordered_triangle_from_records(records, runfile):
+    if not records:
+        raise ValueError("cnp2cnp matrix construction requires at least one profile.")
+    ids, matrix = _run_cnp2cnp_ordered_matrix(records, runfile)
+    row_order = list(ids)
+    construction = (
+        "trivial_singleton" if len(records) <= 1 else "ordered_triangle_matrix_mode"
+    )
+    return DistanceMatrix(
+        ids=ids,
+        matrix=matrix,
+        provenance=cnp2cnp_provenance(
+            runfile,
+            construction=construction,
+            semantic_mode=CNP2CNP_ORDERED_TRIANGLE_FAST,
+            row_order=row_order,
+            profile_count=len(records),
+        ),
+    )
+
+
+def _cnp2cnp_directed_bundle_from_records(records, runfile):
+    if not records:
+        raise ValueError("cnp2cnp matrix construction requires at least one profile.")
+    provenance = cnp2cnp_provenance(
+        runfile,
+        construction=(
+            "trivial_singleton"
+            if len(records) <= 1
+            else "opposite_order_matrix_mode_directed_bundle"
+        ),
+        profile_count=len(records),
+        retains_directed=True,
+    )
+    if len(records) <= 1:
+        forward_ids, forward_matrix = _run_cnp2cnp_ordered_matrix(records, runfile)
+        return DirectedDistanceBundle(
+            forward_ids,
+            forward_matrix,
+            provenance=provenance,
+        )
+
+    with tempfile.TemporaryDirectory(prefix="ctbf-cnp2cnp-matrix-") as tmpdir:
+        forward_ids, forward_matrix = _run_cnp2cnp_ordered_matrix(
+            records,
+            runfile,
+            temporary_directory=tmpdir,
+            stem="forward",
+        )
+        reverse_ids, reverse_matrix = _run_cnp2cnp_ordered_matrix(
+            list(reversed(records)),
+            runfile,
+            temporary_directory=tmpdir,
+            stem="reverse",
+        )
+    return directed_bundle_from_ordered_cnp2cnp_matrices(
+        forward_ids,
+        forward_matrix,
+        reverse_ids,
+        reverse_matrix,
+        provenance=provenance,
     )
 
 
@@ -449,6 +671,26 @@ def distance_matrix_from_cnp2cnp_matrix_mode(cells, runtime_config=None):
     runtime_config = _coerce_runtime_config(runtime_config)
     records = [(cell.get_id(), cell.get_cnp()) for cell in cells]
     return _cnp2cnp_matrix_from_records(records, runtime_config.cnp2cnp_file)
+
+
+def distance_matrix_from_cnp2cnp_ordered_triangle(cells, runtime_config=None):
+    """Run one recorded cnp2cnp triangle and mirror its ordered values."""
+    runtime_config = _coerce_runtime_config(runtime_config)
+    records = [(cell.get_id(), cell.get_cnp()) for cell in cells]
+    return _cnp2cnp_ordered_triangle_from_records(
+        records,
+        runtime_config.cnp2cnp_file,
+    )
+
+
+def directed_distance_bundle_from_cnp2cnp_matrix_mode(cells, runtime_config=None):
+    """Run opposite cnp2cnp triangles and retain the complete ordered matrix."""
+    runtime_config = _coerce_runtime_config(runtime_config)
+    records = [(cell.get_id(), cell.get_cnp()) for cell in cells]
+    return _cnp2cnp_directed_bundle_from_records(
+        records,
+        runtime_config.cnp2cnp_file,
+    )
 
 
 def use_cnp2cnp_to_compute_dist_matrix(sample=None, folder=None, runfile=None,
@@ -575,12 +817,29 @@ def _handle_small_biopsy(time_collector, min_total_cells=MIN_TOTAL_BIOPSY_CELLS)
         for key in ["Computing cnp2cnp distance matrix: ", "Clear CNPs: ", "GRF our: ", "GRF NJ: "]:
             time_collector[key] = 0
 
-def _compute_distance_matrix(all_in_one_sample, parallel, time_collector, runtime_config, distance_provider=None):
+def _compute_distance_matrix(
+    all_in_one_sample,
+    parallel,
+    time_collector,
+    runtime_config,
+    distance_provider=None,
+    distance_construction=None,
+):
     # for parallel case single distances are being computed
     # for not parallel we write biopsy to cnp2cnp format file, and proces that
     unique_cells = unique_cells_by_cell_id(all_in_one_sample[0])
     if distance_provider is None:
-        distance_provider = default_distance_provider(parallel=parallel, runtime_config=runtime_config)
+        distance_provider = default_distance_provider(
+            parallel=parallel,
+            runtime_config=runtime_config,
+            distance_construction=(
+                distance_construction or CNP2CNP_DISTANCE_CONSTRUCTION_DEFAULT
+            ),
+        )
+    elif distance_construction is not None:
+        raise ValueError(
+            "Pass either distance_provider or distance_construction, not both."
+        )
 
     if time_collector is not None:
         with Timer("Computing cnp2cnp distance matrix: ", time_collector):
@@ -588,6 +847,15 @@ def _compute_distance_matrix(all_in_one_sample, parallel, time_collector, runtim
     else:
         distance_matrix = distance_provider.compute(unique_cells)
     return distance_matrix
+
+
+def _symmetric_distance_view(distance_input):
+    if isinstance(distance_input, DirectedDistanceBundle):
+        return list(distance_input.ids), np.array(
+            distance_input.minimum_matrix,
+            copy=True,
+        )
+    return distance_input.ids, distance_input.matrix
 
 def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, visualize,
                               clear_cnps, parallel, write_newick, reconstruction_algorithm,
@@ -729,7 +997,8 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
                     visualize=False, time_collector=None, clear_cnps=False, compare_dm=False,
                     write_newick=False, simulator_with_loaded_tree=None, parallel=False,
                     reconstruction_algorithm=None, biopsy_guided_strategy=None,
-                    biopsy_guided_config=None, runtime_config=None, distance_provider=None):
+                    biopsy_guided_config=None, runtime_config=None, distance_provider=None,
+                    distance_construction=None):
     """
     Runs one test that consists of simulation, biopsy, tree reconstruction and tree evaluation.
 
@@ -748,6 +1017,9 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
     compare_dm      - whether to output distance matrix of simulated tree cells
     write_newick       - whether to output simulated tree and reconstructed tree in newick format
     simlulator_with_loaded_tree - for testing and repeatability, simlulator with loaded tree
+    distance_provider - optional explicit provider object
+    distance_construction - optional provider mode: minimum_bidirectional
+        (default), ordered_triangle_fast, or minimum_with_directed
 
     Returns
     -------
@@ -779,7 +1051,9 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
         time_collector,
         runtime_config,
         distance_provider=distance_provider,
+        distance_construction=distance_construction,
     )
+    distance_ids, symmetric_distance_matrix = _symmetric_distance_view(distance_matrix)
 
     # 4. Tree reconstruction and evaluation
     return _reconstruct_and_evaluate(
@@ -794,8 +1068,8 @@ def run_single_test(config="config_telomeric.json", bedfile="bed like config sam
         write_newick,
         reconstruction_algorithm,
         biopsy_guided_config,
-        distance_matrix.ids,
-        distance_matrix.matrix,
+        distance_ids,
+        symmetric_distance_matrix,
         time_collector,
         runtime_config,
         distance_matrix,

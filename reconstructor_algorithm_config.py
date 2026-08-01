@@ -152,6 +152,48 @@ ALGORITHM_DISPLAY_CONFIGS = [
         ),
         groups=("publication", "full_tree_ablation", "temporal_arborescence_pair"),
     ),
+    AlgorithmDisplayConfig(
+        name="temporal_cnp_arborescence_directed",
+        label="temporal CNP arborescence + directed cnp2cnp",
+        summary=(
+            "G0-03-A discovery variant: preserves temporal feasibility, the "
+            "no-regain tier, symmetric root score, and seeded ties while replacing "
+            "only the edge-distance tier with C[parent,child]."
+        ),
+        procedure=AlgorithmProcedureConfig(
+            pair_selection="same global candidate-edge universe as temporal_cnp_arborescence",
+            ancestor_selection=(
+                "time feasibility, then plausibility violations, directed cnp2cnp "
+                "edge count, unchanged symmetric root score, and seeded exact ties"
+            ),
+            distance_update="immutable directed bundle plus its validated symmetric minimum",
+            merge_strategy=(
+                "same observed occurrence vertices as temporal_cnp_arborescence; no inferred node"
+            ),
+            plausibility="irreversible-zero violations remain the first objective tier",
+        ),
+        groups=("discovery", "cnp2cnp_direction_pair"),
+    ),
+    AlgorithmDisplayConfig(
+        name="temporal_cnp_arborescence_directed_no_time",
+        label="directed cnp2cnp arborescence (order ablation)",
+        summary=(
+            "Exact use_time=False ablation of the G0-03-A directed edge-cost variant."
+        ),
+        procedure=AlgorithmProcedureConfig(
+            pair_selection="same complete no-time edge universe as the minimum-only ablation",
+            ancestor_selection=(
+                "plausibility violations, directed cnp2cnp edge count, unchanged "
+                "symmetric root score, and seeded exact ties"
+            ),
+            distance_update="same immutable directed bundle as the ordered variant",
+            merge_strategy=(
+                "same observed occurrence vertices as the ordered directed variant; no inferred node"
+            ),
+            plausibility="irreversible-zero violations remain the first objective tier",
+        ),
+        groups=("discovery", "cnp2cnp_direction_no_time_pair"),
+    ),
     _legacy(
         "neighbor_joining_baseline",
         "legacy directed closest-pair",
@@ -409,6 +451,14 @@ COMPARISON_GROUPS = {
     "temporal_arborescence_pair": (
         "temporal_cnp_arborescence",
         "temporal_cnp_arborescence_no_time",
+    ),
+    "cnp2cnp_direction_pair": (
+        "temporal_cnp_arborescence",
+        "temporal_cnp_arborescence_directed",
+    ),
+    "cnp2cnp_direction_no_time_pair": (
+        "temporal_cnp_arborescence_no_time",
+        "temporal_cnp_arborescence_directed_no_time",
     ),
     "biopsy_preset_comparison": (
         "neighbor_joining_baseline",

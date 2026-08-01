@@ -21,15 +21,21 @@ from simulator import Genotype
 
 
 def build_evolution_tree(cell_lists, seed=7, dist_matrix_path=None, r=2, only_nj=False, inids=None, indm=None,
-                         distance_matrix=None,
+                         distance_matrix=None, directed_distance_bundle=None,
                          neighbor_joining=neighbor_joining_standard, biopsy_guided_config=None):  # noqa: F405
     if distance_matrix is not None:
-        if any(value is not None for value in (dist_matrix_path, inids, indm)):
+        if any(value is not None for value in (
+            dist_matrix_path,
+            inids,
+            indm,
+            directed_distance_bundle,
+        )):
             raise ValueError("Pass either distance_matrix or legacy distance matrix arguments, not both.")
         distance_kwargs = distance_matrix.build_tree_kwargs()
         dist_matrix_path = distance_kwargs.get("dist_matrix_path")
         inids = distance_kwargs.get("inids")
         indm = distance_kwargs.get("indm")
+        directed_distance_bundle = distance_kwargs.get("directed_distance_bundle")
 
     return build_evolution_tree_impl(
         cell_lists,
@@ -39,6 +45,7 @@ def build_evolution_tree(cell_lists, seed=7, dist_matrix_path=None, r=2, only_nj
         only_nj=only_nj,
         inids=inids,
         indm=indm,
+        directed_distance_bundle=directed_distance_bundle,
         neighbor_joining=neighbor_joining,
         biopsy_guided_config=biopsy_guided_config,
     )

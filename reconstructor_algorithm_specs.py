@@ -23,6 +23,8 @@ from reconstructor_algorithms import (
     neighbor_joining_hybrid_opt_v2,
     rooted_labeled_nj,
     temporal_cnp_arborescence,
+    temporal_cnp_arborescence_directed,
+    temporal_cnp_arborescence_directed_no_time,
     temporal_cnp_arborescence_no_time,
 )
 
@@ -145,11 +147,26 @@ PUBLICATION_ALGORITHM_SPECS = [
 ]
 
 
+DISCOVERY_ALGORITHM_SPECS = [
+    ReconstructionAlgorithmSpec(
+        "temporal_cnp_arborescence_directed",
+        _constant_algorithm(temporal_cnp_arborescence_directed),
+        legacy=False,
+    ),
+    ReconstructionAlgorithmSpec(
+        "temporal_cnp_arborescence_directed_no_time",
+        _constant_algorithm(temporal_cnp_arborescence_directed_no_time),
+        legacy=False,
+    ),
+]
+
+
 def build_algorithms(specs):
     return [spec.build() for spec in specs]
 
 
 __all__ = [
+    "DISCOVERY_ALGORITHM_SPECS",
     "EXPERIMENTAL_ALGORITHM_SPECS",
     "LEGACY_ALGORITHM_SPECS",
     "PUBLICATION_ALGORITHM_SPECS",

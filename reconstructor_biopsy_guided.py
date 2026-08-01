@@ -10,7 +10,10 @@ from reconstructor_biopsy_blocks import (
     reconstruct_biopsy_layers,
 )
 from reconstructor_utils import parse_distance_matrix
-from reconstructor_temporal import uses_ordered_occurrence_input
+from reconstructor_temporal import (
+    uses_directed_distance_input,
+    uses_ordered_occurrence_input,
+)
 from distance_semantics import validate_distance_matrix
 
 
@@ -22,6 +25,7 @@ def build_evolution_tree_impl(
     only_nj=False,
     inids=None,
     indm=None,
+    directed_distance_bundle=None,
     neighbor_joining=None,
     biopsy_guided_config=None,
 ):
@@ -48,17 +52,36 @@ def build_evolution_tree_impl(
                 "Occurrence-level reconstruction cannot be combined with a "
                 "biopsy-guided interpolation preset."
             )
+        requires_directed = uses_directed_distance_input(neighbor_joining)
+        if requires_directed and directed_distance_bundle is None:
+            raise ValueError(
+                f"{neighbor_joining.__name__} requires a DirectedDistanceBundle."
+            )
+        if directed_distance_bundle is not None and not requires_directed:
+            raise ValueError(
+                "Directed distance evidence may be passed only to an algorithm "
+                "that explicitly declares directed-distance support."
+            )
+        algorithm_kwargs = {"seed": seed}
+        if requires_directed:
+            algorithm_kwargs["directed_distance_bundle"] = directed_distance_bundle
         tree, _new_nodes, final_root = neighbor_joining(
             full_dist_matrix,
             cell_lists,
             ids,
-            seed=seed,
+            **algorithm_kwargs,
         )
         node_levels = {
             node_id: data["biopsy_level"]
             for node_id, data in tree.nodes(data=True)
         }
         return tree, node_levels, final_root
+
+    if directed_distance_bundle is not None:
+        raise ValueError(
+            "Directed distance evidence may be passed only to an ordered "
+            "algorithm that explicitly declares directed-distance support."
+        )
 
     biopsy_guided_config = normalize_biopsy_guided_config(biopsy_guided_config)
 

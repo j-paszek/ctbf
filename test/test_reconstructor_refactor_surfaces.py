@@ -25,6 +25,7 @@ from reconstructor import (
     resolve_biopsy_guided_config,
 )
 from reconstructor_algorithm_specs import (
+    DISCOVERY_ALGORITHM_SPECS,
     LEGACY_ALGORITHM_SPECS,
     PUBLICATION_ALGORITHM_SPECS,
     ReconstructionAlgorithmSpec,
@@ -42,6 +43,7 @@ from reconstructor_plausibility import (
 from reconstructor_registry import (
     LEGACY_ALGORITHM_NAMES,
     get_algorithms,
+    get_discovery_algorithms,
     get_legacy_algorithms,
     get_publication_algorithms,
     resolve_reconstruction_algorithm,
@@ -85,6 +87,16 @@ def test_algorithm_specs_are_registry_source_of_truth():
         "rooted_labeled_nj",
         "temporal_cnp_arborescence",
         "temporal_cnp_arborescence_no_time",
+        "temporal_cnp_arborescence_directed",
+        "temporal_cnp_arborescence_directed_no_time",
+    ]
+    assert [spec.name for spec in DISCOVERY_ALGORITHM_SPECS] == [
+        "temporal_cnp_arborescence_directed",
+        "temporal_cnp_arborescence_directed_no_time",
+    ]
+    assert [algorithm.__name__ for algorithm in get_discovery_algorithms()] == [
+        "temporal_cnp_arborescence_directed",
+        "temporal_cnp_arborescence_directed_no_time",
     ]
 
 
@@ -95,6 +107,8 @@ def test_algorithm_specs_are_registry_source_of_truth():
         "rooted_labeled_nj",
         "temporal_cnp_arborescence",
         "temporal_cnp_arborescence_no_time",
+        "temporal_cnp_arborescence_directed",
+        "temporal_cnp_arborescence_directed_no_time",
     ],
 )
 def test_publication_algorithms_resolve_by_stable_name(name):
@@ -186,6 +200,14 @@ def test_algorithm_display_config_explains_legacy_and_fast_benchmark_rows():
     assert COMPARISON_GROUPS["temporal_arborescence_pair"] == (
         "temporal_cnp_arborescence",
         "temporal_cnp_arborescence_no_time",
+    )
+    assert COMPARISON_GROUPS["cnp2cnp_direction_pair"] == (
+        "temporal_cnp_arborescence",
+        "temporal_cnp_arborescence_directed",
+    )
+    assert COMPARISON_GROUPS["cnp2cnp_direction_no_time_pair"] == (
+        "temporal_cnp_arborescence_no_time",
+        "temporal_cnp_arborescence_directed_no_time",
     )
     assert COMPARISON_GROUPS["historical_legacy"] == tuple(LEGACY_ALGORITHM_NAMES)
     assert COMPARISON_GROUPS["recommended_core"] == (
