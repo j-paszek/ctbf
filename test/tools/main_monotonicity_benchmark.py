@@ -35,22 +35,33 @@ from algorithm_evaluation.tester import (  # noqa: E402
 )
 from ctbf_constraints import MIN_TOTAL_BIOPSY_CELLS  # noqa: E402
 from ctbs_utils import to_newick  # noqa: E402
+from distance_semantics import validate_distance_matrix  # noqa: E402
 from reconstructor import build_evolution_tree  # noqa: E402
 from reconstructor_registry import get_algorithms_to_test  # noqa: E402
 from simulator import CancerCellEvolutionSimulator, Genotype  # noqa: E402
 from freeze_algorithm_variant_cases import (  # noqa: E402
     EXT_GRF_METRIC_FIELD,
     LEGACY_GRF_SET_SIMILARITY_FIELD,
-    cnp2cnp_distance_matrix,
+    cnp2cnp_distance_matrix_with_provenance,
     genotypes_from_json,
     json_ready,
-    legacy_set_grf_similarity_from_cluster_contexts,
     node_link_data,
     root_id,
     unique_cells_by_cell_id,
 )
-from evaluator import cluster_evaluation_context, ext_grf_from_cluster_counts  # noqa: E402
-from evaluator_full import evaluate_4, tree_evaluation_context  # noqa: E402
+from evaluator import (  # noqa: E402
+    cluster_comparison_work,
+    cluster_evaluation_context,
+    ext_grf_from_cluster_counts,
+    grf_comparison_metadata,
+    legacy_set_grf_similarity_from_cluster_contexts,
+)
+from evaluator_full import (
+    RestrictedAdf1Cache,
+    adf1_restricted_metrics_from_contexts,
+    tree_evaluation_context,
+    tree_evaluation_context_from_node_link,
+)  # noqa: E402
 
 
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "test" / "data" / "main"
@@ -196,11 +207,9 @@ class MainCaseSpec:
 @dataclass(frozen=True)
 class EvaluationCaseContext:
     input_case: dict
-    genome_dict: dict
-    true_tree: nx.DiGraph
     true_eval_context: object
-    true_root: object
     true_cluster_context: object
+    true_adf1_cache: object
 
 
 def utc_timestamp():
@@ -634,12 +643,21 @@ def timing_report_record_from_group(group, *, stage, operation, scope, generatio
     return record
 
 
+def is_evaluate_phase_timing_record(record):
+    return (
+        record.get("stage") == "evaluate"
+        and str(record.get("operation", "")).startswith("evaluate_phase:")
+    )
+
+
 def timing_report_records_from_artifacts(output_root, specs=None):
     records = []
     allowed_generations = None if specs is None else {spec.generation_count for spec in specs}
     case_records = collect_case_timing_records(output_root, specs=specs)
     groups = {}
     for record in case_records:
+        if is_evaluate_phase_timing_record(record):
+            continue
         key = (record["generation_count"], record["stage"])
         groups.setdefault(key, []).append(record)
     for (generation_count, stage), group in sorted(groups.items()):
@@ -664,12 +682,34 @@ def timing_report_records_from_artifacts(output_root, specs=None):
                 "",
                 "",
             )
-        elif record["stage"] == "evaluate":
+        elif is_evaluate_phase_timing_record(record):
+            key = (
+                record["generation_count"],
+                record["stage"],
+                record["operation"],
+                "evaluation_phase",
+                "",
+                "",
+                record["evaluation_method"],
+                "",
+            )
+        elif record["stage"] == "evaluate" and record["operation"] == "evaluate_metric":
             key = (
                 record["generation_count"],
                 record["stage"],
                 "evaluate_by_metric_method",
                 "evaluation_method",
+                "",
+                "",
+                record["evaluation_method"],
+                "",
+            )
+        elif record["stage"] == "evaluate":
+            key = (
+                record["generation_count"],
+                record["stage"],
+                record["operation"],
+                "operation",
                 "",
                 "",
                 record["evaluation_method"],
@@ -781,7 +821,6 @@ def build_simulator_from_config(config, seed):
 
 def genotype_to_json(cell):
     return {
-        "node_id": cell.node_id,
         "cell_id": cell.cell_id,
         "generation": cell.generation,
         "genome": cell.genome,
@@ -825,6 +864,11 @@ def empty_distance_payload(input_case=None, *, distance_mode=None):
                 "ids": [],
                 "matrix": [],
                 "distance_mode": distance_mode,
+                "provenance": {
+                    "schema_version": "ctbf-distance-provenance-v1",
+                    "metric": distance_mode,
+                    "status": "not_computed",
+                },
             },
         },
     }
@@ -1315,20 +1359,15 @@ def load_split_evaluation_input_case(case_directory):
     case_directory = Path(case_directory)
     biopsy_payload = load_json(case_directory / BIOPSY_INPUT_FILE_NAME)
     true_tree_payload = load_json(case_directory / TRUE_TREE_INPUT_FILE_NAME)
-    genome_dict = read_genome_dict(case_directory / GENOME_DICT_FILE_NAME)
     input_case = {
         key: copy.deepcopy(value)
         for key, value in biopsy_payload.items()
         if key not in {"true_tree_file", "genome_dict_file", "biopsies"}
     }
     if input_case.get("status") == "ok":
-        input_case["true_tree"] = hydrate_tree_payload(
-            true_tree_payload["true_tree"],
-            genome_dict,
-            require_all=True,
-        )
+        input_case["true_tree"] = true_tree_payload["true_tree"]
     input_case["input_layout"] = SPLIT_INPUT_LAYOUT
-    return input_case, genome_dict
+    return input_case
 
 
 def load_input_case(case_directory_or_path, *, preferred_layout=None, hydrate=True):
@@ -1351,12 +1390,7 @@ def load_evaluation_input_case(case_directory_or_path, *, preferred_layout=None)
     if preferred_layout == "split" and split_input_exists(case_directory):
         return load_split_evaluation_input_case(case_directory)
     if legacy_path.exists():
-        input_case = load_json(legacy_path)
-        try:
-            genome_dict = genome_dict_from_input_case(input_case)
-        except ValueError:
-            genome_dict = None
-        return input_case, genome_dict
+        return load_json(legacy_path)
     if split_input_exists(case_directory):
         return load_split_evaluation_input_case(case_directory)
     raise FileNotFoundError(f"No input artifact found in {case_directory}")
@@ -1418,16 +1452,28 @@ def true_tree_from_input(input_case):
     return node_link_graph(input_case["true_tree"])
 
 
-def build_evaluation_case_context(input_case, genome_dict=None):
-    true_tree = true_tree_from_input(input_case)
-    true_root = root_id(true_tree)
+def tree_payload_cache_key(tree_payload):
+    return hashlib.sha256(
+        json.dumps(json_ready(tree_payload), sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def build_evaluation_case_context(input_case, true_context_cache=None):
+    cache_key = tree_payload_cache_key(input_case["true_tree"])
+    cached = true_context_cache.get(cache_key) if true_context_cache is not None else None
+    if cached is None:
+        true_eval_context = tree_evaluation_context_from_node_link(input_case["true_tree"])
+        true_cluster_context = cluster_evaluation_context(true_eval_context)
+        true_adf1_cache = RestrictedAdf1Cache()
+        cached = (true_eval_context, true_cluster_context, true_adf1_cache)
+        if true_context_cache is not None:
+            true_context_cache[cache_key] = cached
+    true_eval_context, true_cluster_context, true_adf1_cache = cached
     return EvaluationCaseContext(
         input_case=input_case,
-        genome_dict=genome_dict,
-        true_tree=true_tree,
-        true_eval_context=tree_evaluation_context(true_tree),
-        true_root=true_root,
-        true_cluster_context=cluster_evaluation_context(true_tree, true_root),
+        true_eval_context=true_eval_context,
+        true_cluster_context=true_cluster_context,
+        true_adf1_cache=true_adf1_cache,
     )
 
 
@@ -1449,9 +1495,17 @@ def compute_case_distances(input_case, *, distance_mode="cnp2cnp"):
     cell_lists = cell_lists_from_input(input_case)
     unique_cells = unique_cells_by_cell_id(cell_lists)
     if distance_mode == "cnp2cnp":
-        cnp_ids, cnp_matrix = cnp2cnp_distance_matrix(unique_cells)
+        cnp_ids, cnp_matrix, provenance = cnp2cnp_distance_matrix_with_provenance(
+            unique_cells
+        )
     elif distance_mode == "l1":
         cnp_ids, cnp_matrix = l1_distance_matrix(unique_cells)
+        provenance = {
+            "schema_version": "ctbf-distance-provenance-v1",
+            "metric": "l1",
+            "semantics_version": "ctbf-l1-profile-v1",
+            "formula": "sum(abs(u_i-v_i))",
+        }
     else:
         raise ValueError(f"Unsupported distance mode: {distance_mode}")
     return {
@@ -1468,6 +1522,7 @@ def compute_case_distances(input_case, *, distance_mode="cnp2cnp"):
                 "ids": cnp_ids,
                 "matrix": cnp_matrix,
                 "distance_mode": distance_mode,
+                "provenance": provenance,
             },
         },
     }
@@ -1525,107 +1580,163 @@ def metric_summary_with_timings(
     true_eval_context=None,
     true_root=None,
     true_cluster_context=None,
+    true_adf1_cache=None,
 ):
+    def timed_phase(phases, name, callback):
+        phase_started_at = utc_timestamp()
+        phase_start = time.perf_counter()
+        value = callback()
+        phases.append({
+            "phase": name,
+            "elapsed_seconds": time.perf_counter() - phase_start,
+            "started_at": phase_started_at,
+            "finished_at": utc_timestamp(),
+        })
+        return value
+
     timings = []
     adf1_started_at = utc_timestamp()
     adf1_start = time.perf_counter()
+    adf1_phases = []
     if true_eval_context is None:
-        true_eval_context = tree_evaluation_context(true_tree)
-    reconstructed_eval_context = tree_evaluation_context(reconstructed_tree)
-    restricted_labels = {
-        str(data.get("cell_id"))
-        for _, data in reconstructed_tree.nodes(data=True)
-        if data.get("cell_id") is not None
-    }
-    metrics = evaluate_4(
-        true_eval_context,
-        reconstructed_eval_context,
-        restrict_labels=restricted_labels,
+        true_eval_context = timed_phase(
+            adf1_phases,
+            "true_tree_context",
+            lambda: tree_evaluation_context(true_tree),
+        )
+    reconstructed_eval_context = timed_phase(
+        adf1_phases,
+        "reconstructed_tree_context",
+        lambda: tree_evaluation_context(reconstructed_tree),
+    )
+    restricted_labels = set(reconstructed_eval_context.labels.values())
+    restricted_metrics = timed_phase(
+        adf1_phases,
+        "adf1_unique_pairs",
+        lambda: adf1_restricted_metrics_from_contexts(
+            true_eval_context,
+            reconstructed_eval_context,
+            restrict_labels=restricted_labels,
+            cache=true_adf1_cache,
+        ),
     )
     timings.append({
         "evaluation_method": "adf1",
         "elapsed_seconds": time.perf_counter() - adf1_start,
         "started_at": adf1_started_at,
         "finished_at": utc_timestamp(),
+        "phases": adf1_phases,
     })
 
     grf_started_at = utc_timestamp()
     grf_start = time.perf_counter()
-    if true_root is None:
-        true_root = root_id(true_tree)
+    grf_phases = []
     if true_cluster_context is None:
-        true_cluster_context = cluster_evaluation_context(true_tree, true_root)
-    reconstructed_root = root_id(reconstructed_tree)
-    reconstructed_cluster_context = cluster_evaluation_context(
-        reconstructed_tree,
-        reconstructed_root,
+        true_cluster_context = timed_phase(
+            grf_phases,
+            "true_cluster_context",
+            lambda: cluster_evaluation_context(true_eval_context),
+        )
+    reconstructed_cluster_context = timed_phase(
+        grf_phases,
+        "reconstructed_cluster_context",
+        lambda: cluster_evaluation_context(reconstructed_eval_context),
     )
     jaccard_cache = {}
-    ext_grf = ext_grf_from_cluster_counts(
+    grf_work = timed_phase(
+        grf_phases,
+        "grf_shared_work",
+        lambda: cluster_comparison_work(
+            true_cluster_context.counts,
+            reconstructed_cluster_context.counts,
+        ),
+    )
+    grf_metadata = grf_comparison_metadata(
         true_cluster_context.counts,
         reconstructed_cluster_context.counts,
-        jaccard_cache=jaccard_cache,
+        true_cluster_context.cluster_set,
+        reconstructed_cluster_context.cluster_set,
     )
-    legacy_grf = legacy_set_grf_similarity_from_cluster_contexts(
-        true_cluster_context,
-        reconstructed_cluster_context,
-        jaccard_cache=jaccard_cache,
+    ext_grf = timed_phase(
+        grf_phases,
+        "exact_grf_weighted_sums",
+        lambda: ext_grf_from_cluster_counts(
+            true_cluster_context.counts,
+            reconstructed_cluster_context.counts,
+            jaccard_cache=jaccard_cache,
+            work=grf_work,
+            metadata=grf_metadata,
+        ),
+    )
+    legacy_grf = timed_phase(
+        grf_phases,
+        "legacy_set_grf_weighted_sums",
+        lambda: legacy_set_grf_similarity_from_cluster_contexts(
+            true_cluster_context,
+            reconstructed_cluster_context,
+            jaccard_cache=jaccard_cache,
+            work=grf_work,
+            metadata=grf_metadata,
+        ),
     )
     timings.append({
         "evaluation_method": "grf",
         "elapsed_seconds": time.perf_counter() - grf_start,
         "started_at": grf_started_at,
         "finished_at": utc_timestamp(),
+        "phases": grf_phases,
     })
 
     return {
-        "ancestors_unique_restricted": metrics["ancestors_unique_restricted"],
-        "ancestors_multiset": metrics["ancestors_multiset"],
-        "ancestors_unique": metrics["ancestors_unique"],
+        "ancestors_unique_restricted": restricted_metrics,
         "grf": 1 - ext_grf,
         EXT_GRF_METRIC_FIELD: ext_grf,
         LEGACY_GRF_SET_SIMILARITY_FIELD: legacy_grf,
     }, timings
 
 
-def evaluate_result(input_case, result, metric_timings=None, evaluation_context=None):
+def evaluate_result_metrics(input_case, result, metric_timings=None, evaluation_context=None):
     if result.get("status") == "failed":
-        return result
+        return {
+            "status": "failed",
+            "algorithm": result.get("algorithm"),
+            "mode": result.get("mode"),
+            "error": result.get("error", ""),
+        }
     if evaluation_context is None:
-        true_tree = true_tree_from_input(input_case)
-        try:
-            genome_dict = genome_dict_from_input_case(input_case)
-        except ValueError:
-            genome_dict = None
-        true_eval_context = None
-        true_root = None
-        true_cluster_context = None
-    else:
-        true_tree = evaluation_context.true_tree
-        genome_dict = evaluation_context.genome_dict
-        true_eval_context = evaluation_context.true_eval_context
-        true_root = evaluation_context.true_root
-        true_cluster_context = evaluation_context.true_cluster_context
+        evaluation_context = build_evaluation_case_context(input_case)
     reconstructed_payload = result["reconstructed_tree"]
-    if genome_dict is not None:
-        reconstructed_payload = hydrate_tree_payload(
-            reconstructed_payload,
-            genome_dict,
-            require_all=False,
-        )
-    reconstructed_tree = node_link_graph(reconstructed_payload)
-    result = copy.deepcopy(result)
     metrics, timings = metric_summary_with_timings(
-        true_tree,
-        reconstructed_tree,
-        true_eval_context=true_eval_context,
-        true_root=true_root,
-        true_cluster_context=true_cluster_context,
+        None,
+        reconstructed_payload,
+        true_eval_context=evaluation_context.true_eval_context,
+        true_cluster_context=evaluation_context.true_cluster_context,
+        true_adf1_cache=evaluation_context.true_adf1_cache,
     )
-    result["metrics"] = metrics
-    result["status"] = "evaluated"
+    evaluated = {
+        "status": "evaluated",
+        "algorithm": result.get("algorithm"),
+        "mode": result.get("mode"),
+        "metrics": metrics,
+        "error": "",
+    }
     if metric_timings is not None:
         metric_timings.extend(timings)
+    return evaluated
+
+
+def evaluate_result(input_case, result, metric_timings=None, evaluation_context=None):
+    evaluated_metrics = evaluate_result_metrics(
+        input_case,
+        result,
+        metric_timings=metric_timings,
+        evaluation_context=evaluation_context,
+    )
+    if result.get("status") == "failed":
+        return evaluated_metrics
+    result = copy.deepcopy(result)
+    result["metrics"] = evaluated_metrics["metrics"]
+    result["status"] = "evaluated"
     return result
 
 
@@ -2026,16 +2137,23 @@ def _check_distance_matrix(input_case, distance_payload, distance_file):
     expected_ids = [cell.get_id() for cell in unique_cells_by_cell_id(cell_lists)]
     matrix_payload = distance_matrices["cnp2cnp"]
     ids = matrix_payload.get("ids")
-    matrix = np.array(matrix_payload.get("matrix", []), dtype=float)
     if ids != expected_ids:
         errors.append(f"{distance_file}: cnp2cnp ids {ids} do not match unique biopsy cell ids {expected_ids}")
-    if matrix.shape != (len(ids), len(ids)):
-        errors.append(f"{distance_file}: cnp2cnp matrix shape {matrix.shape} does not match ids length {len(ids)}")
-    elif len(ids) > 0:
-        if not np.allclose(np.diag(matrix), 0.0):
-            errors.append(f"{distance_file}: cnp2cnp matrix diagonal is not zero")
-        if not np.allclose(matrix, matrix.T):
-            errors.append(f"{distance_file}: cnp2cnp matrix is not symmetric")
+    try:
+        validate_distance_matrix(ids, matrix_payload.get("matrix", []))
+    except ValueError as exc:
+        errors.append(f"{distance_file}: invalid cnp2cnp matrix: {exc}")
+
+    provenance = matrix_payload.get("provenance")
+    if provenance is not None:
+        expected_metric = distance_payload.get("distance_mode")
+        if provenance.get("metric") != expected_metric:
+            errors.append(
+                f"{distance_file}: provenance metric {provenance.get('metric')!r} "
+                f"does not match distance_mode {expected_metric!r}"
+            )
+        if not provenance.get("semantics_version"):
+            errors.append(f"{distance_file}: provenance semantics_version is missing")
     return errors
 
 
@@ -2096,7 +2214,7 @@ def _check_biopsy_order(input_case, input_file):
     return errors
 
 
-def _check_result_metrics(input_case, result_file, result_row):
+def _check_result_metrics(input_case, result_file, result_row, evaluation_context=None):
     result = load_json(result_file)
     if result.get("status") == "failed":
         return [f"{result_file}: reconstructed result status is failed"]
@@ -2104,7 +2222,11 @@ def _check_result_metrics(input_case, result_file, result_row):
         return [f"{result_file}: missing reconstructed_tree"]
 
     errors = []
-    recomputed = evaluate_result(input_case, result)
+    recomputed = evaluate_result_metrics(
+        input_case,
+        result,
+        evaluation_context=evaluation_context,
+    )
     if result_row is None:
         return [f"{result_file}: missing evaluated row in {CASE_RESULT_CSV_NAME}"]
     if result_row.get("status") != "evaluated":
@@ -2140,6 +2262,7 @@ def check_corpus(output_root, algorithms=None, modes=None, *, replay_reports=Tru
     failed_inputs = 0
     checked_results = 0
     missing_results = 0
+    true_context_cache = {}
     for case_directory in case_directories:
         input_file = input_reference_path(case_directory)
         try:
@@ -2185,6 +2308,10 @@ def check_corpus(output_root, algorithms=None, modes=None, *, replay_reports=Tru
             continue
 
         checked_inputs += 1
+        evaluation_context = build_evaluation_case_context(
+            input_case,
+            true_context_cache=true_context_cache,
+        )
         distance_file = case_directory / DISTANCE_FILE_NAME
         if not distance_file.exists():
             errors.append(f"{input_file}: missing {DISTANCE_FILE_NAME}")
@@ -2207,7 +2334,12 @@ def check_corpus(output_root, algorithms=None, modes=None, *, replay_reports=Tru
                     continue
                 checked_results += 1
                 result_row = evaluated_rows.get((mode, algorithm_name))
-                errors.extend(_check_result_metrics(input_case, result_file, result_row))
+                errors.extend(_check_result_metrics(
+                    input_case,
+                    result_file,
+                    result_row,
+                    evaluation_context=evaluation_context,
+                ))
 
     report_paths = []
     if replay_reports:
@@ -2593,6 +2725,7 @@ def run_evaluate_stage(specs, args, algorithms, modes, timing=None):
     missing = 0
     by_algorithm_mode = {}
     by_evaluation_method = {}
+    true_context_cache = {}
     input_layout = getattr(args, "input_layout", "legacy")
     for spec in specs:
         case_directory = case_dir(args.output_root, spec)
@@ -2607,7 +2740,7 @@ def run_evaluate_stage(specs, args, algorithms, modes, timing=None):
             skipped += 1
             continue
         read_start = time.perf_counter()
-        input_case, genome_dict = load_evaluation_input_case(
+        input_case = load_evaluation_input_case(
             case_directory,
             preferred_layout=input_layout,
         )
@@ -2618,7 +2751,7 @@ def run_evaluate_stage(specs, args, algorithms, modes, timing=None):
         core_start = time.perf_counter()
         evaluation_context = build_evaluation_case_context(
             input_case,
-            genome_dict=genome_dict,
+            true_context_cache=true_context_cache,
         )
         core_seconds += time.perf_counter() - core_start
         case_records = []
@@ -2649,7 +2782,7 @@ def run_evaluate_stage(specs, args, algorithms, modes, timing=None):
                 core_start = time.perf_counter()
                 try:
                     metric_timings = []
-                    evaluated = evaluate_result(
+                    evaluated = evaluate_result_metrics(
                         input_case,
                         result,
                         metric_timings=metric_timings,
@@ -2689,6 +2822,20 @@ def run_evaluate_stage(specs, args, algorithms, modes, timing=None):
                         evaluation_method=metric_timing["evaluation_method"],
                         error=evaluated.get("error", ""),
                     ))
+                    for phase_timing in metric_timing.get("phases", []):
+                        case_timing_records.append(case_timing_record(
+                            input_case,
+                            stage="evaluate",
+                            operation=f"evaluate_phase:{phase_timing['phase']}",
+                            elapsed_seconds=phase_timing["elapsed_seconds"],
+                            started_at=phase_timing["started_at"],
+                            finished_at=phase_timing["finished_at"],
+                            status=evaluated.get("status", "failed"),
+                            algorithm=algorithm_name,
+                            mode=mode,
+                            evaluation_method=metric_timing["evaluation_method"],
+                            error=evaluated.get("error", ""),
+                        ))
                 completed += 1
                 by_algorithm_mode[timing_key]["count"] += 1
         if case_records:

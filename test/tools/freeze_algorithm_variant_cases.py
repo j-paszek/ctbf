@@ -25,14 +25,20 @@ from algorithm_evaluation.tester import (  # noqa: E402
     load_seeds,
     select_algorithm_indices,
 )
-from ctbs import load_ctbs_runtime_config, use_cnp2cnp_to_compute_pairwise_distance  # noqa: E402
+from ctbs import (  # noqa: E402
+    compute_symmetric_cnp2cnp_distance,
+    distance_matrix_from_cnp2cnp_matrix_mode,
+    load_ctbs_runtime_config,
+)
+from distance_semantics import cnp2cnp_provenance  # noqa: E402
 from ctbs_utils import to_newick  # noqa: E402
 from evaluator import (  # noqa: E402
     cluster_evaluation_context,
-    ext_grf_from_cluster_counts,
-    jaccard_distance,
+    exact_and_legacy_grf_from_cluster_contexts,
+    legacy_set_grf_distance_from_cluster_contexts as evaluator_legacy_set_grf_distance_from_cluster_contexts,
+    legacy_set_grf_similarity_from_cluster_contexts as evaluator_legacy_set_grf_similarity_from_cluster_contexts,
 )
-from evaluator_full import evaluate_4, tree_evaluation_context  # noqa: E402
+from evaluator_full import ancestors_unique_restricted_metrics, tree_evaluation_context  # noqa: E402
 from reconstructor import build_evolution_tree  # noqa: E402
 from simulator import CancerCellEvolutionSimulator, Genotype  # noqa: E402
 
@@ -253,7 +259,6 @@ def result_path(output_root, variant_name, seed, mode, algorithm_name):
 
 def genotype_to_json(cell):
     return {
-        "node_id": cell.node_id,
         "cell_id": cell.cell_id,
         "generation": cell.generation,
         "genome": cell.genome,
@@ -264,7 +269,7 @@ def genotypes_from_json(cells):
     return [
         Genotype(
             genome=cell["genome"],
-            node_id=cell["node_id"],
+            node_id=cell.get("node_id", cell["cell_id"]),
             generation=cell.get("generation"),
             cell_id=cell.get("cell_id"),
         )
@@ -300,6 +305,27 @@ def write_cnp2cnp_input(path, cells):
 
 
 def cnp2cnp_distance_matrix(cells):
+    ids, matrix, _provenance = cnp2cnp_distance_matrix_with_provenance(cells)
+    return ids, matrix
+
+
+def cnp2cnp_distance_matrix_with_provenance(cells):
+    if len(cells) <= 1:
+        return (
+            [cell.get_id() for cell in cells],
+            np.zeros((len(cells), len(cells)), dtype=float),
+            cnp2cnp_provenance(None, construction="trivial_singleton"),
+        )
+    runtime_config = load_ctbs_runtime_config()
+    distance_matrix = distance_matrix_from_cnp2cnp_matrix_mode(
+        cells,
+        runtime_config=runtime_config,
+    )
+    return distance_matrix.ids, distance_matrix.matrix, distance_matrix.provenance
+
+
+def legacy_cnp2cnp_ordered_distance_matrix(cells):
+    """Reproduce historical one-order matrices; never use for new evidence."""
     if len(cells) <= 1:
         return [cell.get_id() for cell in cells], np.zeros((len(cells), len(cells)), dtype=float)
     cnp2cnp_file = load_ctbs_runtime_config().cnp2cnp_file
@@ -321,11 +347,7 @@ def cnp2cnp_pairwise_distance_matrix(cells):
     dist_matrix = np.zeros((n, n), dtype=float)
     for i in range(n):
         for j in range(i + 1, n):
-            input_str = (
-                f">{cells[i].get_id()}\n{cells[i].get_cnp()}\n"
-                f">{cells[j].get_id()}\n{cells[j].get_cnp()}\n"
-            )
-            dist = float(use_cnp2cnp_to_compute_pairwise_distance(input_str))
+            dist = compute_symmetric_cnp2cnp_distance(cells[i], cells[j])
             dist_matrix[i, j] = dist
             dist_matrix[j, i] = dist
     return ids, dist_matrix
@@ -358,52 +380,16 @@ def root_id(tree):
     return roots[0]
 
 
-def _cached_jaccard_distance(left_cluster, right_cluster, cache):
-    if cache is None:
-        return jaccard_distance(left_cluster, right_cluster)
-    key = (left_cluster, right_cluster)
-    if key in cache:
-        return cache[key]
-    reverse_key = (right_cluster, left_cluster)
-    if reverse_key in cache:
-        return cache[reverse_key]
-    distance = jaccard_distance(left_cluster, right_cluster)
-    cache[key] = distance
-    return distance
-
-
 def legacy_set_grf_distance_from_cluster_contexts(
     true_cluster_context,
     reconstructed_cluster_context,
     *,
     jaccard_cache=None,
 ):
-    true_cluster_set = true_cluster_context.cluster_set
-    reconstructed_cluster_set = reconstructed_cluster_context.cluster_set
-    union_size = len(true_cluster_set | reconstructed_cluster_set)
-    if union_size == 0:
-        return 0.0
-    if not true_cluster_context.clusters or not reconstructed_cluster_context.clusters:
-        return 1.0
-
-    numerator_1 = sum(
-        true_count
-        * reconstructed_count
-        * _cached_jaccard_distance(true_cluster, reconstructed_cluster, jaccard_cache)
-        for true_cluster, true_count in true_cluster_context.counts.items()
-        for reconstructed_cluster, reconstructed_count in reconstructed_cluster_context.counts.items()
-        if reconstructed_cluster not in true_cluster_set
-    )
-    numerator_2 = sum(
-        reconstructed_count
-        * true_count
-        * _cached_jaccard_distance(reconstructed_cluster, true_cluster, jaccard_cache)
-        for reconstructed_cluster, reconstructed_count in reconstructed_cluster_context.counts.items()
-        for true_cluster, true_count in true_cluster_context.counts.items()
-        if true_cluster not in reconstructed_cluster_set
-    )
-    return (numerator_1 / (len(true_cluster_context.clusters) * union_size)) + (
-        numerator_2 / (len(reconstructed_cluster_context.clusters) * union_size)
+    return evaluator_legacy_set_grf_distance_from_cluster_contexts(
+        true_cluster_context,
+        reconstructed_cluster_context,
+        jaccard_cache=jaccard_cache,
     )
 
 
@@ -413,7 +399,7 @@ def legacy_set_grf_similarity_from_cluster_contexts(
     *,
     jaccard_cache=None,
 ):
-    return 1 - legacy_set_grf_distance_from_cluster_contexts(
+    return evaluator_legacy_set_grf_similarity_from_cluster_contexts(
         true_cluster_context,
         reconstructed_cluster_context,
         jaccard_cache=jaccard_cache,
@@ -436,44 +422,35 @@ def legacy_set_grf_similarity_tree(true_tree, true_root, reconstructed_tree, rec
     )
 
 
-def metric_summary(true_tree, reconstructed_tree):
-    true_eval_context = tree_evaluation_context(true_tree)
-    reconstructed_eval_context = tree_evaluation_context(reconstructed_tree)
-    restricted_labels = {
-        str(data.get("cell_id"))
-        for _, data in reconstructed_tree.nodes(data=True)
-        if data.get("cell_id") is not None
-    }
-    metrics = evaluate_4(
+def metric_summary_from_contexts(true_eval_context, reconstructed_eval_context):
+    restricted_labels = set(reconstructed_eval_context.labels.values())
+    restricted_metrics = ancestors_unique_restricted_metrics(
         true_eval_context,
         reconstructed_eval_context,
         restrict_labels=restricted_labels,
     )
-    true_root = root_id(true_tree)
-    reconstructed_root = root_id(reconstructed_tree)
-    true_cluster_context = cluster_evaluation_context(true_tree, true_root)
+    true_cluster_context = cluster_evaluation_context(true_eval_context)
     reconstructed_cluster_context = cluster_evaluation_context(
-        reconstructed_tree,
-        reconstructed_root,
+        reconstructed_eval_context,
     )
-    jaccard_cache = {}
-    ext_grf = ext_grf_from_cluster_counts(
-        true_cluster_context.counts,
-        reconstructed_cluster_context.counts,
-        jaccard_cache=jaccard_cache,
+    ext_grf, legacy_grf = exact_and_legacy_grf_from_cluster_contexts(
+        true_cluster_context,
+        reconstructed_cluster_context,
+        jaccard_cache={},
     )
     return {
-        "ancestors_unique_restricted": metrics["ancestors_unique_restricted"],
-        "ancestors_multiset": metrics["ancestors_multiset"],
-        "ancestors_unique": metrics["ancestors_unique"],
+        "ancestors_unique_restricted": restricted_metrics,
         "grf": 1 - ext_grf,
         EXT_GRF_METRIC_FIELD: ext_grf,
-        LEGACY_GRF_SET_SIMILARITY_FIELD: legacy_set_grf_similarity_from_cluster_contexts(
-            true_cluster_context,
-            reconstructed_cluster_context,
-            jaccard_cache=jaccard_cache,
-        ),
+        LEGACY_GRF_SET_SIMILARITY_FIELD: legacy_grf,
     }
+
+
+def metric_summary(true_tree, reconstructed_tree):
+    return metric_summary_from_contexts(
+        tree_evaluation_context(true_tree),
+        tree_evaluation_context(reconstructed_tree),
+    )
 
 
 def build_simulator(config_path, bedfile, seed):
@@ -512,7 +489,9 @@ def input_case_from_simulation(variant_name, variant, seed, config_path, bedfile
         seed,
     )
     unique_cells = unique_cells_by_cell_id(cell_lists)
-    cnp_ids, cnp_matrix = cnp2cnp_distance_matrix(unique_cells)
+    cnp_ids, cnp_matrix, cnp_provenance = cnp2cnp_distance_matrix_with_provenance(
+        unique_cells
+    )
     true_ids, true_matrix = true_tree_distance_matrix(simulator.tree, cnp_ids)
     input_case = {
         "case_id": f"{variant_name}_seed{seed}",
@@ -530,6 +509,7 @@ def input_case_from_simulation(variant_name, variant, seed, config_path, bedfile
             "cnp2cnp": {
                 "ids": cnp_ids,
                 "matrix": cnp_matrix,
+                "provenance": cnp_provenance,
             },
             "true_tree": {
                 "ids": true_ids,

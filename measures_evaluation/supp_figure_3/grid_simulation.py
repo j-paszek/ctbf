@@ -23,17 +23,20 @@ from simulator import CancerCellEvolutionSimulator
 from simulation_utils import (
     export_tree_to_csv,
     compute_naive_distance_matrix,
-    write_distance_matrix
+    figure3_cnp2cnp_provenance as regular_cnp2cnp_provenance,
+    write_distance_matrix,
 )
 
 # Try to import optimized version, fall back to regular if not available
 try:
     from simulation_utils_optimized import (
-        distance_matrix_from_biopsy_optimized as distance_matrix_from_biopsy_fast
+        distance_matrix_from_biopsy_optimized as distance_matrix_from_biopsy_fast,
+        figure3_cnp2cnp_provenance as selected_cnp2cnp_provenance,
     )
     USE_OPTIMIZED = True
 except ImportError:
     from ctbs import distance_matrix_from_biopsy as distance_matrix_from_biopsy_fast
+    selected_cnp2cnp_provenance = regular_cnp2cnp_provenance
     USE_OPTIMIZED = False
 
 
@@ -448,6 +451,23 @@ def run_single_grid_simulation(config_dict, repetition, run_id, output_dir, base
                     'num_nodes': len(sim.tree.nodes()),
                     'num_leaves': len(leaf_nodes),
                 }
+                distance_provenance = selected_cnp2cnp_provenance()
+                metadata.update({
+                    'cnp2cnp_provenance_schema': distance_provenance['schema_version'],
+                    'cnp2cnp_semantics_version': distance_provenance['semantics_version'],
+                    'cnp2cnp_symmetrization': distance_provenance['symmetrization'],
+                    'cnp2cnp_formula': distance_provenance['formula'],
+                    'cnp2cnp_construction': distance_provenance['construction'],
+                    'cnp2cnp_source_revision': distance_provenance['cnp2cnp_source_revision'],
+                    'cnp2cnp_source_description': distance_provenance['cnp2cnp_source_description'],
+                    'cnp2cnp_source_sha256': json.dumps(
+                        distance_provenance['source_sha256'],
+                        sort_keys=True,
+                    ),
+                    'cnp2cnp_command_template': json.dumps(
+                        distance_provenance['command_template'],
+                    ),
+                })
                 
                 # Add all config parameters
                 for key, value in config_dict.items():

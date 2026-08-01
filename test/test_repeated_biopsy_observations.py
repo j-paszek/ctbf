@@ -21,13 +21,24 @@ from ctbs import (  # noqa: E402
     unique_cells_by_cell_id,
 )
 from evaluator import grf_tree, parse_newick_to_nx  # noqa: E402
-from evaluator_full import evaluate_4  # noqa: E402
+from evaluator_full import ancestors_unique_restricted_metrics  # noqa: E402
 from reconstructor import build_evolution_tree  # noqa: E402
+from reconstructor_temporal import uses_ordered_occurrence_input  # noqa: E402
 from simulator import Genotype  # noqa: E402
 
 
 SANITY_DIR = PROJECT_ROOT / "test" / "data" / "sanity"
 SANITY_CASE_PATHS = sorted(SANITY_DIR.glob("repeated_cell_id*.json"))
+FLAT_INPUT_ALGORITHMS = [
+    algorithm
+    for algorithm in get_algorithms_to_test()
+    if not uses_ordered_occurrence_input(algorithm)
+]
+ORDERED_OCCURRENCE_ALGORITHMS = [
+    algorithm
+    for algorithm in get_algorithms_to_test()
+    if uses_ordered_occurrence_input(algorithm)
+]
 
 
 def _load_case(path):
@@ -147,7 +158,7 @@ def test_pairwise_distance_helper_returns_zero_matrix_for_single_unique_genotype
     assert np.array_equal(matrix, np.array([[0.0]]))
 
 
-@pytest.mark.parametrize("algorithm", get_algorithms_to_test(), ids=lambda algorithm: algorithm.__name__)
+@pytest.mark.parametrize("algorithm", FLAT_INPUT_ALGORITHMS, ids=lambda algorithm: algorithm.__name__)
 def test_full_cnp_algorithms_accept_two_unique_biopsy_observations(algorithm):
     raw_cells = [
         Genotype([2, 2], node_id=50, generation=1, cell_id=5),
@@ -191,7 +202,7 @@ def test_biopsy_guided_algorithms_accept_two_raw_observations_with_one_unique_di
 
 
 @pytest.mark.parametrize("case_path", SANITY_CASE_PATHS, ids=_case_id)
-@pytest.mark.parametrize("algorithm", get_algorithms_to_test(), ids=lambda algorithm: algorithm.__name__)
+@pytest.mark.parametrize("algorithm", FLAT_INPUT_ALGORITHMS, ids=lambda algorithm: algorithm.__name__)
 def test_all_full_cnp_algorithms_accept_repeated_biopsy_observations(case_path, algorithm):
     case = _load_case(case_path)
     cell_lists = _cell_lists(case)
@@ -216,6 +227,40 @@ def test_all_full_cnp_algorithms_accept_repeated_biopsy_observations(case_path, 
     similarity = grf_tree(true_tree, true_root, tree, _actual_root(tree))
     assert 0.0 <= similarity <= 1.0
 
-    metrics = evaluate_4(true_tree, tree, restrict_labels=set(case["expected_unique_cell_ids"]))
-    adf1 = metrics["ancestors_unique_restricted"]["F1"]
+    metrics = ancestors_unique_restricted_metrics(
+        true_tree,
+        tree,
+        restrict_labels=set(case["expected_unique_cell_ids"]),
+    )
+    adf1 = metrics["F1"]
     assert 0.0 <= adf1 <= 1.0
+
+
+@pytest.mark.parametrize("case_path", SANITY_CASE_PATHS, ids=_case_id)
+@pytest.mark.parametrize(
+    "algorithm",
+    ORDERED_OCCURRENCE_ALGORITHMS,
+    ids=lambda algorithm: algorithm.__name__,
+)
+def test_temporal_algorithms_preserve_repeated_biopsy_occurrences(case_path, algorithm):
+    case = _load_case(case_path)
+    cell_lists = _cell_lists(case)
+    matrix = case["distance_matrices"]["cnp2cnp"]
+
+    tree, node_levels, returned_root = build_evolution_tree(
+        cell_lists,
+        inids=matrix["ids"],
+        indm=np.array(matrix["matrix"], dtype=float),
+        neighbor_joining=algorithm,
+        seed=7,
+    )
+
+    assert returned_root in tree
+    _assert_valid_rooted_tree(tree)
+    assert tree.number_of_nodes() == case["expected_raw_observation_count"]
+    assert node_levels == nx.get_node_attributes(tree, "biopsy_level")
+    assert sorted(data["cell_id"] for _, data in tree.nodes(data=True)) == sorted(
+        cell.cell_id
+        for level in cell_lists
+        for cell in level
+    )

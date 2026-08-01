@@ -117,22 +117,44 @@ class FakeSimulator:
         self.tree = nx.DiGraph()
         self.tree.add_node(0, genome=[2], generation=0, cell_id=0)
 
-    def perform_biopsy(self, generation, biopsy_size=0, biopsy_size_scalable=None, seed=None):
+    def perform_biopsy(
+        self,
+        generation,
+        biopsy_size=0,
+        biopsy_size_scalable=None,
+        seed=None,
+    ):
         count = 0 if self.population_size == 0 else max(
             MIN_BIOPSY_CELLS_FROM_BIOPSY,
             int(self.population_size * biopsy_size_scalable),
         )
-        return [
+        cells = [
             Genotype([2], node_id=generation * 100 + index, generation=generation, cell_id=generation * 100 + index)
             for index in range(count)
         ]
+        for cell in cells:
+            if cell.node_id not in self.tree:
+                self.tree.add_node(
+                    cell.node_id,
+                    genome=[2],
+                    generation=generation,
+                    cell_id=cell.cell_id,
+                )
+                self.tree.add_edge(0, cell.node_id)
+        return cells
 
 
 class GenerationSizedFakeSimulator:
     def __init__(self, population_sizes):
         self.population_sizes = population_sizes
 
-    def perform_biopsy(self, generation, biopsy_size=0, biopsy_size_scalable=None, seed=None):
+    def perform_biopsy(
+        self,
+        generation,
+        biopsy_size=0,
+        biopsy_size_scalable=None,
+        seed=None,
+    ):
         population_size = self.population_sizes.get(generation, 0)
         count = 0 if population_size == 0 else max(
             MIN_BIOPSY_CELLS_FROM_BIOPSY,
@@ -158,6 +180,14 @@ def test_perform_biopsies_preserves_ordered_distinct_generation_levels():
     assert [biopsy["generation"] for biopsy in biopsies] == generations
     assert all(
         cell["generation"] == biopsy["generation"]
+        for biopsy in biopsies
+        for cell in biopsy["cells"]
+    )
+    assert all(
+        "node_id" not in cell
+        and "observation_key" not in cell
+        and "occurrence_kind" not in cell
+        and "source_observation_key" not in cell
         for biopsy in biopsies
         for cell in biopsy["cells"]
     )
@@ -562,6 +592,10 @@ def test_split_input_layout_runs_distance_reconstruct_and_evaluate_stages(tmp_pa
     assert rows.iloc[0]["status"] == "evaluated"
     timing_rows = pd.read_csv(main_benchmark.case_timing_path(tmp_path, spec))
     assert {"distance_l1", "reconstruct", "evaluate_metric"} <= set(timing_rows["operation"])
+    assert any(
+        str(operation).startswith("evaluate_phase:")
+        for operation in timing_rows["operation"]
+    )
     assert {"adf1", "grf"} == set(timing_rows[timing_rows["stage"] == "evaluate"]["evaluation_method"])
     reconstruct_rows = timing_rows[timing_rows["stage"] == "reconstruct"]
     assert set(reconstruct_rows["algorithm"]) == {"neighbor_joining_baseline"}
@@ -605,6 +639,12 @@ def test_compute_case_distances_deduplicates_repeated_cell_ids_with_l1_matrix():
         np.array([[0.0, 1.0], [1.0, 0.0]]),
     )
     assert distance_payload["unique_distance_cell_ids"] == [5, 7]
+    assert distance_payload["distance_matrices"]["cnp2cnp"]["provenance"] == {
+        "schema_version": "ctbf-distance-provenance-v1",
+        "metric": "l1",
+        "semantics_version": "ctbf-l1-profile-v1",
+        "formula": "sum(abs(u_i-v_i))",
+    }
 
 
 def test_compute_case_distances_allows_two_raw_cells_with_one_unique_cell_id():
@@ -708,6 +748,85 @@ def test_reconstruction_result_has_tree_without_evaluating_metrics():
     assert "metrics" not in result
     assert 0.0 <= evaluated["metrics"]["ancestors_unique_restricted"]["F1"] <= 1.0
     assert 0.0 <= evaluated["metrics"]["grf"] <= 1.0
+
+
+def test_split_evaluation_loader_does_not_read_genome_dict(tmp_path, monkeypatch):
+    tree = nx.DiGraph()
+    tree.add_node(0, genome=[2, 2], generation=0, cell_id=0)
+    tree.add_node(5, genome=[3, 2], generation=1, cell_id=5)
+    tree.add_edge(0, 5, events="")
+    input_case = {
+        "case_id": "split_case",
+        "corpus": main_benchmark.CORPUS_NAME,
+        "status": "ok",
+        "genome_length": 10,
+        "NUMBER_OF_GENERATIONS": 10,
+        "seed": 7,
+        "r_dist": 4,
+        "biopsy_size_scalable": 0.5,
+        "biopsy_level_count": 2,
+        "biopsy_generations": [1],
+        "GENERAL_EVENT_PROB": 0.01,
+        "event_shape_label": "low",
+        "GENERAL_SINGLE_OR_MULTIPLE_EVENT_PROB": 0.01,
+        "GENERAL_DUPLICATION_MULTIPLICITY": 1,
+        "config_snapshot": {"genome_length": 10},
+        "biopsy_selection": {},
+        "true_tree": main_benchmark.node_link_data(tree),
+        "biopsies": [
+            {"level": "L1", "generation": 1, "cells": [{"node_id": 5, "cell_id": 5, "generation": 1, "genome": [3, 2]}]},
+        ],
+    }
+    case_dir = tmp_path / "case"
+    main_benchmark.write_input_case(case_dir, input_case, layout="split", overwrite=True)
+
+    def fail_read_genome_dict(_path):
+        raise AssertionError("evaluation loader should not read genome_dict.csv")
+
+    monkeypatch.setattr(main_benchmark, "read_genome_dict", fail_read_genome_dict)
+
+    loaded = main_benchmark.load_evaluation_input_case(case_dir, preferred_layout="split")
+
+    assert "biopsies" not in loaded
+    assert loaded["true_tree"]["nodes"]
+    assert all("genome" not in node for node in loaded["true_tree"]["nodes"])
+
+
+def test_evaluate_result_metrics_does_not_copy_full_result_payload():
+    tree = nx.DiGraph()
+    tree.add_node(0, genome=[2, 2], generation=0, cell_id=0)
+    tree.add_node(5, genome=[3, 2], generation=1, cell_id=5)
+    tree.add_edge(0, 5, events="")
+    input_case = {
+        "case_id": "case",
+        "corpus": main_benchmark.CORPUS_NAME,
+        "status": "ok",
+        "genome_length": 10,
+        "NUMBER_OF_GENERATIONS": 10,
+        "seed": 7,
+        "r_dist": 4,
+        "biopsy_size_scalable": 0.5,
+        "biopsy_level_count": 2,
+        "biopsy_generations": [1],
+        "GENERAL_EVENT_PROB": 0.01,
+        "event_shape_label": "low",
+        "GENERAL_SINGLE_OR_MULTIPLE_EVENT_PROB": 0.01,
+        "GENERAL_DUPLICATION_MULTIPLICITY": 1,
+        "true_tree": main_benchmark.node_link_data(tree),
+    }
+    result = {
+        "status": "reconstructed",
+        "algorithm": "alg",
+        "mode": "full_cnp",
+        "reconstructed_tree": main_benchmark.node_link_data(tree),
+    }
+
+    metric_only = main_benchmark.evaluate_result_metrics(input_case, result)
+    evaluated = main_benchmark.evaluate_result(input_case, result)
+
+    assert "metrics" not in result
+    assert metric_only["status"] == "evaluated"
+    assert metric_only["metrics"] == evaluated["metrics"]
 
 
 def _write_tiny_checked_corpus(tmp_path, *, corrupt_grf=False, biopsy_level_count=2):
@@ -1259,6 +1378,17 @@ def test_timing_report_groups_reconstruction_by_algorithm_and_evaluation_by_meth
             started_at="s",
             finished_at="f",
         ),
+        main_benchmark.case_timing_record(
+            spec,
+            stage="evaluate",
+            operation="evaluate_phase:exact_grf_weighted_sums",
+            algorithm="alg_a",
+            mode="full_cnp",
+            evaluation_method="grf",
+            elapsed_seconds=0.50,
+            started_at="s",
+            finished_at="f",
+        ),
     ])
     main_benchmark.write_single_stage_command_timing(
         tmp_path,
@@ -1281,6 +1411,16 @@ def test_timing_report_groups_reconstruction_by_algorithm_and_evaluation_by_meth
     assert reconstruct["core_seconds"] == pytest.approx(3.0)
     evaluate = rows[(rows["stage"] == "evaluate") & (rows["scope"] == "evaluation_method")]
     assert set(evaluate["evaluation_method"]) == {"adf1", "grf"}
+    assert evaluate.set_index("evaluation_method").loc["grf", "core_seconds"] == pytest.approx(0.75)
+    evaluate_total = rows[
+        (rows["stage"] == "evaluate") & (rows["scope"] == "stage_total")
+    ].iloc[0]
+    assert evaluate_total["core_seconds"] == pytest.approx(1.0)
+    evaluate_phase = rows[
+        (rows["stage"] == "evaluate") & (rows["scope"] == "evaluation_phase")
+    ].iloc[0]
+    assert evaluate_phase["operation"] == "evaluate_phase:exact_grf_weighted_sums"
+    assert evaluate_phase["core_seconds"] == pytest.approx(0.50)
     command = rows[(rows["stage"] == "reconstruct") & (rows["scope"] == "command_stage")].iloc[0]
     assert command["total_seconds"] == pytest.approx(5.0)
     assert detailed_path.name == "timing_summary_g14.csv"

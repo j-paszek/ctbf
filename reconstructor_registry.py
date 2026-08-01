@@ -1,6 +1,7 @@
 from reconstructor_algorithm_specs import (
     EXPERIMENTAL_ALGORITHM_SPECS,
     LEGACY_ALGORITHM_SPECS,
+    PUBLICATION_ALGORITHM_SPECS,
     build_algorithms,
 )
 
@@ -16,8 +17,16 @@ def get_experimental_algorithms():
     return build_algorithms(EXPERIMENTAL_ALGORITHM_SPECS)
 
 
+def get_publication_algorithms():
+    return build_algorithms(PUBLICATION_ALGORITHM_SPECS)
+
+
 def get_algorithms():
-    return get_legacy_algorithms() + get_experimental_algorithms()
+    return (
+        get_legacy_algorithms()
+        + get_experimental_algorithms()
+        + get_publication_algorithms()
+    )
 
 
 def get_algorithm_map(algorithms=None):
@@ -45,6 +54,7 @@ def resolve_reconstruction_algorithm(algorithm_name):
 
 get_legacy_algorithms_to_test = get_legacy_algorithms
 get_experimental_algorithms_to_test = get_experimental_algorithms
+get_publication_algorithms_to_test = get_publication_algorithms
 get_algorithms_to_test = get_algorithms
 
 
@@ -52,6 +62,7 @@ __all__ = [
     "LEGACY_ALGORITHM_NAMES",
     "EXPERIMENTAL_ALGORITHM_SPECS",
     "LEGACY_ALGORITHM_SPECS",
+    "PUBLICATION_ALGORITHM_SPECS",
     "get_algorithm_map",
     "get_algorithms",
     "get_algorithms_to_test",
@@ -59,5 +70,7 @@ __all__ = [
     "get_experimental_algorithms_to_test",
     "get_legacy_algorithms",
     "get_legacy_algorithms_to_test",
+    "get_publication_algorithms",
+    "get_publication_algorithms_to_test",
     "resolve_reconstruction_algorithm",
 ]

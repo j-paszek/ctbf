@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 
-from reconstructor_algorithm_specs import LEGACY_ALGORITHM_SPECS
+from reconstructor_algorithm_specs import (
+    LEGACY_ALGORITHM_SPECS,
+    PUBLICATION_ALGORITHM_SPECS,
+)
 
 
 @dataclass(frozen=True)
@@ -31,8 +34,8 @@ def _legacy(
     pair_selection,
     ancestor_selection,
     *,
-    distance_update="neighbor_joining",
-    merge_strategy="standard_nj_internal_node",
+    distance_update="drop child and retain parent representative row",
+    merge_strategy="copy parent state into a fresh internal occurrence",
     plausibility="none",
     groups=(),
 ):
@@ -47,7 +50,7 @@ def _legacy(
             merge_strategy=merge_strategy,
             plausibility=plausibility,
         ),
-        groups=("legacy", "publication") + tuple(groups),
+        groups=("legacy",) + tuple(groups),
     )
 
 
@@ -78,26 +81,97 @@ def _biopsy_preset(
 
 
 ALGORITHM_DISPLAY_CONFIGS = [
+    AlgorithmDisplayConfig(
+        name="neighbor_joining_classical",
+        label="classical NJ (partial)",
+        summary=(
+            "Classical neighbor joining with unlabeled latent internal nodes and "
+            "a synthetic final-join root for CTBF's rooted representation."
+        ),
+        procedure=AlgorithmProcedureConfig(
+            pair_selection="classical NJ Q criterion",
+            ancestor_selection="none; NJ topology is unrooted",
+            distance_update="classical NJ reduction",
+            merge_strategy="unlabeled latent internal node with NJ limb lengths",
+        ),
+        groups=("publication", "partial_tree_baseline", "recommended_core"),
+    ),
+    AlgorithmDisplayConfig(
+        name="rooted_labeled_nj",
+        label="rooted labeled Q-NJ baseline",
+        summary=(
+            "Fully labeled Q-guided baseline that directly contracts component "
+            "roots and retains the selected parent's representative distances."
+        ),
+        procedure=AlgorithmProcedureConfig(
+            pair_selection="minimum classical NJ Q score; seeded exact ties",
+            ancestor_selection="smaller original-matrix row sum; seeded exact tie",
+            distance_update="drop child and retain parent representative row",
+            merge_strategy="direct parent-root to child-root edge; no inferred node",
+        ),
+        groups=("publication", "full_tree_baseline", "recommended_core"),
+    ),
+    AlgorithmDisplayConfig(
+        name="temporal_cnp_arborescence",
+        label="temporal CNP arborescence",
+        summary=(
+            "Global fully labeled occurrence arborescence with ordered-biopsy "
+            "edge/root constraints and an exact lexicographic objective."
+        ),
+        procedure=AlgorithmProcedureConfig(
+            pair_selection="global directed minimum-arborescence optimization",
+            ancestor_selection=(
+                "time feasibility, then plausibility violations, CNP distance, "
+                "root score, and seeded exact ties"
+            ),
+            distance_update="immutable aligned state-level CNP matrix",
+            merge_strategy=(
+                "one vertex per observed (biopsy level, CNP state); no inferred node"
+            ),
+            plausibility="irreversible-zero violations minimized lexicographically",
+        ),
+        groups=("publication", "full_tree_primary", "temporal_arborescence_pair"),
+    ),
+    AlgorithmDisplayConfig(
+        name="temporal_cnp_arborescence_no_time",
+        label="temporal CNP arborescence (order ablation)",
+        summary=(
+            "Exact use_time=False ablation on the same occurrence vertices and "
+            "costs, with temporal edge and root restrictions removed."
+        ),
+        procedure=AlgorithmProcedureConfig(
+            pair_selection="global directed minimum-arborescence optimization",
+            ancestor_selection=(
+                "plausibility violations, CNP distance, root score, and seeded exact ties"
+            ),
+            distance_update="immutable aligned state-level CNP matrix",
+            merge_strategy=(
+                "same observed occurrence vertices as the ordered method; no inferred node"
+            ),
+            plausibility="irreversible-zero violations minimized lexicographically",
+        ),
+        groups=("publication", "full_tree_ablation", "temporal_arborescence_pair"),
+    ),
     _legacy(
         "neighbor_joining_baseline",
-        "baseline",
-        "Standard neighbor joining baseline used as the reference method.",
-        "minimum distance / NJ baseline pair selection",
-        "pair-order orientation",
-        groups=("recommended_core",),
+        "legacy directed closest-pair",
+        "Historical directed closest-pair comparator; this is not classical NJ.",
+        "minimum raw current distance",
+        "smaller residual current row sum; seeded exact tie",
+        groups=("historical_comparator",),
     ),
     _legacy(
         "neighbor_joining_full_full",
         "full_full",
-        "Full-matrix NJ variant with full ancestor-selection information.",
-        "full NJ Q-matrix pair selection",
+        "Raw-distance plausible-pair variant with original-matrix ancestor-selection fallback.",
+        "minimum raw distance among plausible pairs when available",
         "full-distance ancestor selector",
     ),
     _legacy(
         "neighbor_joining_full_partial",
         "full_partial",
-        "Full-matrix NJ pair selection with partial ancestor-selection information.",
-        "full NJ Q-matrix pair selection",
+        "Raw-distance plausible-pair variant with current-matrix ancestor-selection fallback.",
+        "minimum raw distance among plausible pairs when available",
         "partial-distance ancestor selector",
     ),
     _legacy(
@@ -325,11 +399,16 @@ ALGORITHM_CONFIG_BY_NAME = {
 }
 
 COMPARISON_GROUPS = {
-    "publication": tuple(spec.name for spec in LEGACY_ALGORITHM_SPECS),
+    "publication": tuple(spec.name for spec in PUBLICATION_ALGORITHM_SPECS),
+    "historical_legacy": tuple(spec.name for spec in LEGACY_ALGORITHM_SPECS),
     "recommended_core": (
-        "neighbor_joining_baseline",
-        "neighbor_joining_hybrid_opt",
+        "neighbor_joining_classical",
+        "rooted_labeled_nj",
         "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
+    ),
+    "temporal_arborescence_pair": (
+        "temporal_cnp_arborescence",
+        "temporal_cnp_arborescence_no_time",
     ),
     "biopsy_preset_comparison": (
         "neighbor_joining_baseline",

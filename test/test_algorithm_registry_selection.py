@@ -77,14 +77,19 @@ def test_format_algorithm_listing_marks_legacy_and_experimental_algorithms():
     def experimental_algorithm():
         return None
 
+    def publication_algorithm():
+        return None
+
     listing = format_algorithm_listing(
-        algorithms + [experimental_algorithm],
+        algorithms + [experimental_algorithm, publication_algorithm],
         legacy_count=len(algorithms),
+        publication_names={"publication_algorithm"},
     )
 
     assert "0: neighbor_joining_baseline [legacy]" in listing
     assert "20: neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony [legacy]" in listing
     assert "21: experimental_algorithm [experimental]" in listing
+    assert "22: publication_algorithm [publication]" in listing
 
 
 def test_format_run_plan_shows_resolved_seeds_and_algorithms():

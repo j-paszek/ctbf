@@ -11,8 +11,9 @@ TEST_DATA_DIR = PROJECT_ROOT / "test" / "data"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from ctbs import run_single_test
+from ctbs import load_ctbs_runtime_config, run_single_test
 from ctbs_utils import get_biopsy_nodes_ids
+from distance_semantics import cnp2cnp_provenance
 from evaluator_full import evaluate_4
 from evaluator import grf_tree
 from reconstructor import build_evolution_tree, visualize_tree_plotly
@@ -21,6 +22,7 @@ from reconstructor_registry import (
     get_algorithms_to_test,
     get_experimental_algorithms_to_test,
     get_legacy_algorithms_to_test,
+    get_publication_algorithms_to_test,
 )
 
 CONFIG_BY_PROFILE = {
@@ -157,7 +159,8 @@ def select_algorithm_indices(algorithms, algorithm_indexes=None, algorithm_names
     return list(dict.fromkeys(selected))
 
 
-def format_algorithm_listing(algorithms, legacy_count=None):
+def format_algorithm_listing(algorithms, legacy_count=None, publication_names=()):
+    publication_names = set(publication_names)
     lines = []
     for index, algorithm in enumerate(algorithms):
         name = getattr(algorithm, "__name__", str(algorithm))
@@ -165,6 +168,8 @@ def format_algorithm_listing(algorithms, legacy_count=None):
             category = "algorithm"
         elif index < legacy_count:
             category = "legacy"
+        elif name in publication_names:
+            category = "publication"
         else:
             category = "experimental"
         lines.append(f"{index}: {name} [{category}]")
@@ -292,7 +297,20 @@ def check_one_alg(algo, counter, *, seeds, config_path, bedfile, biopsy_size_sca
     name3 = output_dir / f"{counter}nj.csv"
     df_nj.to_csv(name3, index=False)
 
-    print("Results saved: ", name1, name2, name3)
+    runtime_config = load_ctbs_runtime_config()
+    provenance_path = output_dir / f"{counter}distance_provenance.json"
+    with open(provenance_path, "w") as destination:
+        json.dump(
+            cnp2cnp_provenance(
+                runtime_config.cnp2cnp_file,
+                construction="opposite_order_matrix_mode",
+            ),
+            destination,
+            indent=2,
+            sort_keys=True,
+        )
+
+    print("Results saved: ", name1, name2, name3, provenance_path)
 
 
 if __name__ == "__main__":
@@ -302,7 +320,14 @@ if __name__ == "__main__":
     output_dir = Path(args.output_dir) if args.output_dir else SCRIPT_DIR / "results" / variant_name
     algorithms = get_algorithms_to_test()
     if args.list_algorithms:
-        print(format_algorithm_listing(algorithms, legacy_count=len(get_legacy_algorithms_to_test())))
+        print(format_algorithm_listing(
+            algorithms,
+            legacy_count=len(get_legacy_algorithms_to_test()),
+            publication_names={
+                algorithm.__name__
+                for algorithm in get_publication_algorithms_to_test()
+            },
+        ))
         sys.exit(0)
     selected_seeds = args.seed if args.seed else load_seeds(args.seeds_file)
 

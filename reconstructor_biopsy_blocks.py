@@ -5,7 +5,6 @@ from typing import Callable
 
 import networkx as nx
 import numpy as np
-
 from reconstructor_engine import Orientation, PairChoice, run_agglomerative_reconstruction
 from reconstructor_pair_selection import _best_pair_from_score_matrix
 from reconstructor_plausibility import is_biologically_plausible_ancestor
@@ -91,9 +90,10 @@ def normalize_biopsy_guided_config(config=None):
 
 
 def clone_reconstruction_cell(cell):
+    """Copy observable state while discarding simulator-local graph identity."""
     return Genotype(
         np.array(cell.genome, copy=True),
-        cell.node_id,
+        cell.cell_id,
         generation=getattr(cell, "generation", None),
         cell_id=cell.cell_id,
     )
@@ -102,13 +102,16 @@ def clone_reconstruction_cell(cell):
 def copy_reconstruction_cell_lists(cell_lists):
     clones = {}
 
-    def copy_cell(cell):
-        key = id(cell)
+    def copy_cell(cell, level_index):
+        key = (id(cell), level_index)
         if key not in clones:
             clones[key] = clone_reconstruction_cell(cell)
         return clones[key]
 
-    return [[copy_cell(cell) for cell in cell_list] for cell_list in cell_lists]
+    return [
+        [copy_cell(cell, level_index) for cell in cell_list]
+        for level_index, cell_list in enumerate(cell_lists)
+    ]
 
 
 def extend_biopsy_levels(cell_lists):

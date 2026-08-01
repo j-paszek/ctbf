@@ -24,7 +24,11 @@ from reconstructor import (
     make_default_biopsy_guided_config,
     resolve_biopsy_guided_config,
 )
-from reconstructor_algorithm_specs import LEGACY_ALGORITHM_SPECS, ReconstructionAlgorithmSpec
+from reconstructor_algorithm_specs import (
+    LEGACY_ALGORITHM_SPECS,
+    PUBLICATION_ALGORITHM_SPECS,
+    ReconstructionAlgorithmSpec,
+)
 from reconstructor_algorithm_config import (
     ALGORITHM_CONFIG_BY_NAME,
     COMPARISON_GROUPS,
@@ -35,7 +39,13 @@ from reconstructor_plausibility import (
     is_biologically_plausible_ancestor,
     is_biologically_plausible_pair,
 )
-from reconstructor_registry import LEGACY_ALGORITHM_NAMES, get_legacy_algorithms
+from reconstructor_registry import (
+    LEGACY_ALGORITHM_NAMES,
+    get_algorithms,
+    get_legacy_algorithms,
+    get_publication_algorithms,
+    resolve_reconstruction_algorithm,
+)
 from simulator import Genotype
 
 
@@ -56,6 +66,39 @@ def test_algorithm_specs_are_registry_source_of_truth():
     assert all(isinstance(spec, ReconstructionAlgorithmSpec) for spec in LEGACY_ALGORITHM_SPECS)
     assert LEGACY_ALGORITHM_NAMES[0] == "neighbor_joining_baseline"
     assert LEGACY_ALGORITHM_NAMES[20] == "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony"
+    assert [spec.name for spec in PUBLICATION_ALGORITHM_SPECS] == [
+        "neighbor_joining_classical",
+        "rooted_labeled_nj",
+        "temporal_cnp_arborescence",
+        "temporal_cnp_arborescence_no_time",
+    ]
+    assert [algorithm.__name__ for algorithm in get_publication_algorithms()] == [
+        "neighbor_joining_classical",
+        "rooted_labeled_nj",
+        "temporal_cnp_arborescence",
+        "temporal_cnp_arborescence_no_time",
+    ]
+    assert all(spec.legacy is False for spec in PUBLICATION_ALGORITHM_SPECS)
+    assert [algorithm.__name__ for algorithm in get_algorithms()][21:] == [
+        "new_alg",
+        "neighbor_joining_classical",
+        "rooted_labeled_nj",
+        "temporal_cnp_arborescence",
+        "temporal_cnp_arborescence_no_time",
+    ]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "neighbor_joining_classical",
+        "rooted_labeled_nj",
+        "temporal_cnp_arborescence",
+        "temporal_cnp_arborescence_no_time",
+    ],
+)
+def test_publication_algorithms_resolve_by_stable_name(name):
+    assert resolve_reconstruction_algorithm(name).__name__ == name
 
 
 def _metric_tree(edges):
@@ -112,6 +155,10 @@ def test_evaluate_4_metadata_identifies_similarity_modes_and_ad_f1():
 
 def test_algorithm_display_config_explains_legacy_and_fast_benchmark_rows():
     expected_names = set(LEGACY_ALGORITHM_NAMES) | {
+        "neighbor_joining_classical",
+        "rooted_labeled_nj",
+        "temporal_cnp_arborescence",
+        "temporal_cnp_arborescence_no_time",
         "new_alg",
         "biopsy_preset_default",
         "biopsy_preset_anticentral_tie",
@@ -123,9 +170,27 @@ def test_algorithm_display_config_explains_legacy_and_fast_benchmark_rows():
     assert all(isinstance(ALGORITHM_CONFIG_BY_NAME[name], AlgorithmDisplayConfig) for name in expected_names)
     assert ALGORITHM_CONFIG_BY_NAME["neighbor_joining_baseline"].procedure.pair_selection
     assert ALGORITHM_CONFIG_BY_NAME["neighbor_joining_baseline"].summary
+    assert ALGORITHM_CONFIG_BY_NAME["neighbor_joining_baseline"].label == (
+        "legacy directed closest-pair"
+    )
+    assert "classical NJ" in ALGORITHM_CONFIG_BY_NAME["neighbor_joining_classical"].label
+    assert "no inferred node" in (
+        ALGORITHM_CONFIG_BY_NAME["rooted_labeled_nj"].procedure.merge_strategy
+    )
+    assert COMPARISON_GROUPS["publication"] == (
+        "neighbor_joining_classical",
+        "rooted_labeled_nj",
+        "temporal_cnp_arborescence",
+        "temporal_cnp_arborescence_no_time",
+    )
+    assert COMPARISON_GROUPS["temporal_arborescence_pair"] == (
+        "temporal_cnp_arborescence",
+        "temporal_cnp_arborescence_no_time",
+    )
+    assert COMPARISON_GROUPS["historical_legacy"] == tuple(LEGACY_ALGORITHM_NAMES)
     assert COMPARISON_GROUPS["recommended_core"] == (
-        "neighbor_joining_baseline",
-        "neighbor_joining_hybrid_opt",
+        "neighbor_joining_classical",
+        "rooted_labeled_nj",
         "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
     )
     assert set(HIGHLIGHTED_HEATMAP_ALGORITHMS) == {"new_alg"}
@@ -193,8 +258,12 @@ def test_ctbs_pairwise_distance_uses_explicit_runtime_config(monkeypatch):
         run_single_test=runtime_config.run_single_test,
     )
 
-    assert ctbs.use_cnp2cnp_to_compute_pairwise_distance(">1\n2,2\n", runtime_config=runtime_config) == "7"
+    assert ctbs.use_cnp2cnp_to_compute_pairwise_distance(
+        ">1\n2,2\n",
+        runtime_config=runtime_config,
+    ) == 7.0
     assert calls[0][1] == "/tmp/runtime_cnp2cnp.py"
+    assert calls[0][2:6] == ["-m", "dist", "-d", "any"]
 
 
 def test_ctbs_distance_matrix_validates_id_alignment():
@@ -208,6 +277,15 @@ def test_ctbs_distance_matrix_validates_id_alignment():
 
     with pytest.raises(ValueError, match="diagonal"):
         ctbs.DistanceMatrix(ids=[1, 2], matrix=np.array([[1.0, 0.0], [0.0, 0.0]]))
+
+    with pytest.raises(ValueError, match="Duplicate"):
+        ctbs.DistanceMatrix(ids=[1, 1], matrix=np.zeros((2, 2)))
+
+    with pytest.raises(ValueError, match="nonnegative"):
+        ctbs.DistanceMatrix(ids=[1, 2], matrix=np.array([[0.0, -1.0], [-1.0, 0.0]]))
+
+    with pytest.raises(ValueError, match="finite"):
+        ctbs.DistanceMatrix(ids=[1, 2], matrix=np.array([[0.0, np.inf], [np.inf, 0.0]]))
 
 
 def test_ctbs_supplied_distance_provider_returns_validated_matrix():
@@ -230,27 +308,41 @@ def test_ctbs_supplied_distance_provider_returns_validated_matrix():
     assert np.array_equal(distance_matrix.build_tree_kwargs()["indm"], provider.matrix)
 
 
-def test_ctbs_file_distance_provider_preserves_configured_file_mode(monkeypatch):
+def test_ctbs_file_distance_provider_uses_validated_two_order_matrix_mode(monkeypatch):
     import ctbs
 
     runtime_config = ctbs.default_ctbs_runtime_config()
     calls = []
 
-    monkeypatch.setattr(ctbs, "to_file", lambda path, cells: calls.append(("to_file", path, len(cells))))
     monkeypatch.setattr(
         ctbs,
-        "use_cnp2cnp_to_compute_dist_matrix",
-        lambda sample, runtime_config: calls.append(("cnp2cnp", sample, runtime_config.out_file_name)),
+        "distance_matrix_from_cnp2cnp_matrix_mode",
+        lambda cells, runtime_config: (
+            calls.append(("cnp2cnp", len(cells), runtime_config.out_file_name))
+            or ctbs.DistanceMatrix(
+                ids=[1, 2],
+                matrix=np.array([[0.0, 3.0], [3.0, 0.0]]),
+                provenance={"semantics_version": "test"},
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        ctbs,
+        "_write_labeled_distance_matrix",
+        lambda path, ids, matrix: calls.append(("write", path, ids, matrix.copy())),
     )
 
     provider = ctbs.Cnp2CnpFileDistanceProvider(runtime_config)
     distance_matrix = provider.compute([Genotype([2], 1), Genotype([2], 2)])
 
-    assert distance_matrix.build_tree_kwargs() == {"dist_matrix_path": runtime_config.out_file_name}
-    assert calls == [
-        ("to_file", runtime_config.in_file_name, 2),
-        ("cnp2cnp", runtime_config.in_file_name, runtime_config.out_file_name),
-    ]
+    assert distance_matrix.build_tree_kwargs()["inids"] == [1, 2]
+    assert np.array_equal(
+        distance_matrix.build_tree_kwargs()["indm"],
+        np.array([[0.0, 3.0], [3.0, 0.0]]),
+    )
+    assert distance_matrix.provenance == {"semantics_version": "test"}
+    assert calls[0] == ("cnp2cnp", 2, runtime_config.out_file_name)
+    assert calls[1][0:3] == ("write", runtime_config.out_file_name, [1, 2])
 
 
 def test_reconstructor_accepts_distance_matrix_adapter(monkeypatch):

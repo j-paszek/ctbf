@@ -15,7 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from algorithm_evaluation.tester import CONFIG_BY_PROFILE, get_legacy_algorithms_to_test
 from ctbs import distance_matrix_from_biopsy, use_cnp2cnp_to_compute_pairwise_distance
 from ctbs_utils import get_biopsy_nodes_ids, to_newick
-from evaluator_full import evaluate_4
+from evaluator_full import ancestors_unique_restricted_metrics
 from reconstructor import build_evolution_tree
 from simulator import CancerCellEvolutionSimulator
 
@@ -104,10 +104,16 @@ def _distance_matrix_from_biopsy_serial(cells):
 
 def _metric_summary(true_tree, rec_tree, nj_tree):
     biopsy_cell_ids = get_biopsy_nodes_ids(rec_tree, nj_tree)
-    rec_eval = evaluate_4(true_tree, rec_tree, restrict_labels=biopsy_cell_ids)
-    nj_eval = evaluate_4(true_tree, nj_tree, restrict_labels=biopsy_cell_ids)
-    rec_restricted = rec_eval["ancestors_unique_restricted"]
-    nj_restricted = nj_eval["ancestors_unique_restricted"]
+    rec_restricted = ancestors_unique_restricted_metrics(
+        true_tree,
+        rec_tree,
+        restrict_labels=biopsy_cell_ids,
+    )
+    nj_restricted = ancestors_unique_restricted_metrics(
+        true_tree,
+        nj_tree,
+        restrict_labels=biopsy_cell_ids,
+    )
     return {
         "rec_ancestors_unique_restricted": {
             "precision": rec_restricted["precision"],

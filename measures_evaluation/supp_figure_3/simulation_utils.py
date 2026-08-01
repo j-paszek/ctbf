@@ -10,10 +10,12 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from ctbs import distance_matrix_from_biopsy, use_cnp2cnp_to_compute_pairwise_distance
+from ctbs import (
+    compute_symmetric_cnp2cnp_distance,
+    load_ctbs_runtime_config,
+)
+from distance_semantics import cnp2cnp_provenance, validate_distance_matrix
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import subprocess
-import tempfile
 
 try:
     from tqdm import tqdm
@@ -75,16 +77,16 @@ def _compute_pair_wrapper(args):
     This replicates the logic from ctbs._compute_pair.
     """
     c, d, i, j = args
-    # Try to use cnp2cnp tool, fall back to pure Python if not available
-    try:
-        input_str = f">{c.get_id()}\n{c.get_cnp()}\n>{d.get_id()}\n{d.get_cnp()}\n"
-        dist = use_cnp2cnp_to_compute_pairwise_distance(input_str)
-    except (FileNotFoundError, subprocess.CalledProcessError, OSError):
-        # Fallback: simple Manhattan distance on CNP profiles
-        cnp_c = np.array([int(x) for x in c.get_cnp().split(',')])
-        cnp_d = np.array([int(x) for x in d.get_cnp().split(',')])
-        dist = float(np.sum(np.abs(cnp_c - cnp_d)))
+    dist = compute_symmetric_cnp2cnp_distance(c, d)
     return i, j, dist
+
+
+def figure3_cnp2cnp_provenance():
+    runtime_config = load_ctbs_runtime_config()
+    return cnp2cnp_provenance(
+        runtime_config.cnp2cnp_file,
+        construction="bidirectional_pair_mode",
+    )
 
 
 def distance_matrix_from_biopsy_with_progress(cells, max_threads=None, desc="Computing cnp2cnp distance matrix"):
@@ -124,7 +126,7 @@ def distance_matrix_from_biopsy_with_progress(cells, max_threads=None, desc="Com
             dist_matrix[i, j] = dist
             dist_matrix[j, i] = dist
     
-    return ids, dist_matrix
+    return validate_distance_matrix(ids, dist_matrix)
 
 
 def compute_naive_distance_matrix(cells, desc="Computing naive distance matrix", show_progress=True):

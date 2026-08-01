@@ -10,6 +10,8 @@ from reconstructor_biopsy_blocks import (
     reconstruct_biopsy_layers,
 )
 from reconstructor_utils import parse_distance_matrix
+from reconstructor_temporal import uses_ordered_occurrence_input
+from distance_semantics import validate_distance_matrix
 
 
 def build_evolution_tree_impl(
@@ -23,7 +25,6 @@ def build_evolution_tree_impl(
     neighbor_joining=None,
     biopsy_guided_config=None,
 ):
-    biopsy_guided_config = normalize_biopsy_guided_config(biopsy_guided_config)
     cell_lists = copy_reconstruction_cell_lists(cell_lists)
 
     if dist_matrix_path:
@@ -33,6 +34,33 @@ def build_evolution_tree_impl(
     else:
         print("Please provide either dist_matrix_path or inids and indm")
         return None
+
+    ids, full_dist_matrix = validate_distance_matrix(ids, full_dist_matrix)
+
+    if uses_ordered_occurrence_input(neighbor_joining):
+        if only_nj:
+            raise ValueError(
+                "Occurrence-level reconstruction does not use only_nj pooling; "
+                "select temporal_cnp_arborescence_no_time for the exact order ablation."
+            )
+        if biopsy_guided_config is not None:
+            raise ValueError(
+                "Occurrence-level reconstruction cannot be combined with a "
+                "biopsy-guided interpolation preset."
+            )
+        tree, _new_nodes, final_root = neighbor_joining(
+            full_dist_matrix,
+            cell_lists,
+            ids,
+            seed=seed,
+        )
+        node_levels = {
+            node_id: data["biopsy_level"]
+            for node_id, data in tree.nodes(data=True)
+        }
+        return tree, node_levels, final_root
+
+    biopsy_guided_config = normalize_biopsy_guided_config(biopsy_guided_config)
 
     cell_lists = biopsy_guided_config.level_extender(cell_lists)
 

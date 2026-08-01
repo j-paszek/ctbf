@@ -1,0 +1,96 @@
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Local Python environments and package builds
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+
+# Editor and notebook metadata
+.idea/
+.vscode/
+.ipynb_checkpoints/
+.DS_Store
+*.ipynb
+/.agents/
+/.codex/
+
+# AI memory and project/paper documentation are maintained outside the
+# scripts-only CTBF code repository.
+/AGENTS.md
+/docs/
+/ai_summary/
+/technical_description/
+/experimental_description/
+/manuals/
+/legacy/
+*.md
+
+# Manuscript, authoring-template, presentation, and historical paper material
+/paper/
+/oup-authoring-template/
+/presentation/
+/version 1.0.0/
+*.tex
+*.bib
+*.pdf
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.lot
+*.nav
+*.out
+*.run.xml
+*.snm
+*.synctex.gz
+*.toc
+
+# Benchmark corpora and generated experiment results
+/test/data/
+/algorithm_evaluation/results/
+/measures_evaluation/**/generated*/
+/measures_evaluation/**/outputs*/
+/measures_evaluation/supp_figure_3/published_figure_3_data/
+
+# CTBF generated scratch outputs
+/biopsy.txt
+/cnp_distance_matrix.txt
+/sim_dm.txt
+/test/biopsy.txt
+/test/cnp_distance_matrix.txt
+/*.csv
+/*.html
+/*.png
+/*.svg
+/*.txt
+!/requirements*.txt
+/test/*.csv
+/test/*.html
+/test/*.png
+/test/*.svg
+/test/*.txt
+
+# Generic generated visual and serialized scratch artifacts
+*.log
+*.pickle
+*.pkl
+*.npy
+*.npz
+
+# Manually added
+/test/tools/omlta_distance.py
+/test/test_omlta_distance.py

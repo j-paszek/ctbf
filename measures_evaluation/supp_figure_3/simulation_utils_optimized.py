@@ -11,15 +11,18 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from _ctbs_config import configured_cnp2cnp_module_dir
+from _ctbs_config import configured_cnp2cnp_file, configured_cnp2cnp_module_dir
 
 configured_cnp2cnp = str(configured_cnp2cnp_module_dir())
 if configured_cnp2cnp not in sys.path:
     sys.path.insert(0, configured_cnp2cnp)
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import subprocess
-import tempfile
+from distance_semantics import (
+    cnp2cnp_provenance,
+    minimum_bidirectional_distance,
+    validate_distance_matrix,
+)
 
 try:
     from tqdm import tqdm
@@ -76,6 +79,24 @@ def compute_cnp2cnp_distance_direct(cnp1, cnp2, use_dbl=False):
     return len(evs)
 
 
+def compute_symmetric_cnp2cnp_distance_direct(cnp1, cnp2, use_dbl=False):
+    """Compute the paper-facing min of both directional direct calls."""
+    forward = compute_cnp2cnp_distance_direct(cnp1, cnp2, use_dbl=use_dbl)
+    reverse = compute_cnp2cnp_distance_direct(cnp2, cnp1, use_dbl=use_dbl)
+    return minimum_bidirectional_distance(forward, reverse)
+
+
+def figure3_cnp2cnp_provenance():
+    return cnp2cnp_provenance(
+        configured_cnp2cnp_file(),
+        construction=(
+            "direct_bidirectional_api"
+            if CNP2CNP_AVAILABLE
+            else "bidirectional_pair_mode"
+        ),
+    )
+
+
 def _compute_pair_optimized(args):
     """
     Optimized version that calls Python functions directly instead of subprocess.
@@ -83,29 +104,19 @@ def _compute_pair_optimized(args):
     """
     c, d, i, j = args
     
-    try:
-        # Get CNP strings
-        cnp1_str = c.get_cnp()
-        cnp2_str = d.get_cnp()
-        
-        # Convert to lists
-        cnp1 = [int(x) for x in cnp1_str.split(',')]
-        cnp2 = [int(x) for x in cnp2_str.split(',')]
-        
-        # Compute distance directly using Python functions
-        if CNP2CNP_AVAILABLE:
-            dist = compute_cnp2cnp_distance_direct(cnp1, cnp2, use_dbl=False)
-        else:
-            # Fallback to subprocess if direct import failed
-            input_str = f">{c.get_id()}\n{cnp1_str}\n>{d.get_id()}\n{cnp2_str}\n"
-            from ctbs import use_cnp2cnp_to_compute_pairwise_distance
-            dist = float(use_cnp2cnp_to_compute_pairwise_distance(input_str))
-            
-    except Exception as e:
-        # Fallback: simple Manhattan distance on CNP profiles
-        cnp_c = np.array([int(x) for x in c.get_cnp().split(',')])
-        cnp_d = np.array([int(x) for x in d.get_cnp().split(',')])
-        dist = float(np.sum(np.abs(cnp_c - cnp_d)))
+    cnp1 = [int(x) for x in c.get_cnp().split(',')]
+    cnp2 = [int(x) for x in d.get_cnp().split(',')]
+
+    if CNP2CNP_AVAILABLE:
+        dist = compute_symmetric_cnp2cnp_distance_direct(
+            cnp1,
+            cnp2,
+            use_dbl=False,
+        )
+    else:
+        from ctbs import compute_symmetric_cnp2cnp_distance
+
+        dist = compute_symmetric_cnp2cnp_distance(c, d)
     
     return i, j, dist
 
@@ -160,7 +171,7 @@ def distance_matrix_from_biopsy_optimized(cells, max_threads=None, desc="Computi
             dist_matrix[i, j] = dist
             dist_matrix[j, i] = dist
     
-    return ids, dist_matrix
+    return validate_distance_matrix(ids, dist_matrix)
 
 
 def export_tree_to_csv(tree, output_path):

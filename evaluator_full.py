@@ -1,6 +1,6 @@
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Tuple, Dict, Iterable, Optional, Any
 import networkx as nx
 
@@ -54,12 +54,20 @@ EVALUATE_4_MODE_SPECS = {
 
 @dataclass(frozen=True)
 class TreeEvaluationContext:
-    graph: nx.DiGraph
+    graph: Optional[nx.DiGraph]
     labels: Dict[Any, str]
     parents: Dict[Any, Optional[Any]]
     children: Dict[Any, Tuple[Any, ...]]
     named_nodes: Tuple[Any, ...]
     roots: Tuple[Any, ...]
+
+
+@dataclass
+class RestrictedAdf1Cache:
+    label_to_id: Dict[str, int] = field(default_factory=dict)
+    true_pair_ids_by_restricted_labels: Dict[Optional[Tuple[Any, ...]], set] = field(
+        default_factory=dict
+    )
 
 
 # ---------------------------
@@ -187,12 +195,14 @@ def named_label(tree: nx.DiGraph, node: Any) -> Optional[str]:
     Node may be node id (hashable).
     If label is missing/None/empty return None.
     """
-    data = tree.nodes[node]
-    label = data.get("cell_id")
+    return normalize_cell_label(tree.nodes[node].get("cell_id"))
+
+
+def normalize_cell_label(label: Any) -> Optional[str]:
     if label is None:
         return None
-    s = str(label).strip()
-    return s if s else None
+    label = str(label).strip()
+    return label if label else None
 
 
 def parent_of(tree: nx.DiGraph, node: Any) -> Optional[Any]:
@@ -201,15 +211,61 @@ def parent_of(tree: nx.DiGraph, node: Any) -> Optional[Any]:
     return next(iter(tree.predecessors(node)), None)
 
 
+def _node_link_edges(data):
+    if "links" in data:
+        return data.get("links", [])
+    return data.get("edges", [])
+
+
+def tree_evaluation_context_from_node_link(data: Dict[str, Any]) -> TreeEvaluationContext:
+    labels = {}
+    parents = {}
+    children = {}
+    named_nodes = []
+
+    for node in data.get("nodes", []):
+        node_id = node.get("id")
+        parents[node_id] = None
+        children[node_id] = []
+        label = normalize_cell_label(node.get("cell_id"))
+        if label is not None:
+            labels[node_id] = label
+            named_nodes.append(node_id)
+
+    for edge in _node_link_edges(data):
+        source = edge.get("source")
+        target = edge.get("target")
+        if source not in children:
+            children[source] = []
+            parents.setdefault(source, None)
+        if target not in parents:
+            parents[target] = None
+            children.setdefault(target, [])
+        children[source].append(target)
+        if parents[target] is None:
+            parents[target] = source
+
+    roots = tuple(node for node, parent in parents.items() if parent is None)
+    return TreeEvaluationContext(
+        graph=None,
+        labels=labels,
+        parents=parents,
+        children={node: tuple(values) for node, values in children.items()},
+        named_nodes=tuple(named_nodes),
+        roots=roots,
+    )
+
+
 def tree_evaluation_context(tree_in: Any) -> TreeEvaluationContext:
+    if isinstance(tree_in, TreeEvaluationContext):
+        return tree_in
+    if isinstance(tree_in, dict) and "nodes" in tree_in:
+        return tree_evaluation_context_from_node_link(tree_in)
     G = ensure_nx(tree_in)
     labels = {}
     named_nodes = []
     for node, data in G.nodes(data=True):
-        label = data.get("cell_id")
-        if label is None:
-            continue
-        label = str(label).strip()
+        label = normalize_cell_label(data.get("cell_id"))
         if label:
             labels[node] = label
             named_nodes.append(node)
@@ -294,6 +350,136 @@ def _label_multiset_ancestor_pairs_by_parent_chain(context, allowed):
             if ancestor_label is not None and (allowed is None or ancestor_label in allowed):
                 pairs[(ancestor_label, descendant_label)] += 1
             cur = context.parents.get(cur)
+    return pairs
+
+
+def _intern_label(label, label_to_id):
+    if label_to_id is None:
+        return label
+    existing = label_to_id.get(label)
+    if existing is not None:
+        return existing
+    label_id = len(label_to_id)
+    label_to_id[label] = label_id
+    return label_id
+
+
+def _ancestor_pair_id(ancestor_id, descendant_id):
+    pair_sum = ancestor_id + descendant_id
+    return (pair_sum * (pair_sum + 1) // 2) + descendant_id
+
+
+def _restricted_labels_cache_key(restrict_labels: Optional[Iterable[str]]):
+    if restrict_labels is None:
+        return None
+    allowed = set(restrict_labels)
+    return tuple(sorted(allowed, key=lambda value: (type(value).__name__, repr(value))))
+
+
+def unique_ancestor_pair_set(tree_in: Any,
+                             restrict_labels: Optional[Iterable[str]] = None,
+                             *,
+                             label_to_id: Optional[Dict[str, int]] = None):
+    context = ensure_tree_evaluation_context(tree_in)
+    allowed = set(restrict_labels) if restrict_labels is not None else None
+
+    if not context.roots:
+        pairs = set()
+        nodes = context.named_nodes
+        if allowed is not None:
+            nodes = [node for node in nodes if context.labels[node] in allowed]
+        for desc in nodes:
+            descendant_label = context.labels[desc]
+            current = context.parents.get(desc)
+            while current is not None:
+                ancestor_label = context.labels.get(current)
+                if ancestor_label is not None and (allowed is None or ancestor_label in allowed):
+                    pairs.add((
+                        _intern_label(ancestor_label, label_to_id),
+                        _intern_label(descendant_label, label_to_id),
+                    ))
+                current = context.parents.get(current)
+        return pairs
+
+    pairs = set()
+    ancestor_labels = Counter()
+    for root in context.roots:
+        stack = [(root, None, False)]
+        while stack:
+            node, added_label, leaving = stack.pop()
+            if leaving:
+                if added_label is not None:
+                    ancestor_labels[added_label] -= 1
+                    if ancestor_labels[added_label] == 0:
+                        del ancestor_labels[added_label]
+                continue
+
+            label = context.labels.get(node)
+            active_label = label if label is not None and (allowed is None or label in allowed) else None
+            if active_label is not None:
+                active_label_id = _intern_label(active_label, label_to_id)
+                for ancestor_label in ancestor_labels:
+                    pairs.add((
+                        _intern_label(ancestor_label, label_to_id),
+                        active_label_id,
+                    ))
+                ancestor_labels[active_label] += 1
+
+            stack.append((node, active_label, True))
+            for child in reversed(context.children.get(node, ())):
+                stack.append((child, None, False))
+    return pairs
+
+
+def unique_ancestor_pair_id_set(tree_in: Any,
+                                restrict_labels: Optional[Iterable[str]] = None,
+                                *,
+                                label_to_id: Optional[Dict[str, int]] = None):
+    context = ensure_tree_evaluation_context(tree_in)
+    allowed = set(restrict_labels) if restrict_labels is not None else None
+    if label_to_id is None:
+        label_to_id = {}
+
+    if not context.roots:
+        pairs = set()
+        nodes = context.named_nodes
+        if allowed is not None:
+            nodes = [node for node in nodes if context.labels[node] in allowed]
+        for desc in nodes:
+            descendant_id = _intern_label(context.labels[desc], label_to_id)
+            current = context.parents.get(desc)
+            while current is not None:
+                ancestor_label = context.labels.get(current)
+                if ancestor_label is not None and (allowed is None or ancestor_label in allowed):
+                    ancestor_id = _intern_label(ancestor_label, label_to_id)
+                    pairs.add(_ancestor_pair_id(ancestor_id, descendant_id))
+                current = context.parents.get(current)
+        return pairs
+
+    pairs = set()
+    ancestor_label_ids = Counter()
+    for root in context.roots:
+        stack = [(root, None, False)]
+        while stack:
+            node, added_label_id, leaving = stack.pop()
+            if leaving:
+                if added_label_id is not None:
+                    ancestor_label_ids[added_label_id] -= 1
+                    if ancestor_label_ids[added_label_id] == 0:
+                        del ancestor_label_ids[added_label_id]
+                continue
+
+            label = context.labels.get(node)
+            active_label_id = None
+            if label is not None and (allowed is None or label in allowed):
+                active_label_id = _intern_label(label, label_to_id)
+                for ancestor_label_id in ancestor_label_ids:
+                    pairs.add(_ancestor_pair_id(ancestor_label_id, active_label_id))
+                ancestor_label_ids[active_label_id] += 1
+
+            stack.append((node, active_label_id, True))
+            for child in reversed(context.children.get(node, ())):
+                stack.append((child, None, False))
     return pairs
 
 
@@ -512,6 +698,71 @@ def _unique_mode_from_sets(true_set, rec_set, true_count_key, rec_count_key, res
         true_count_key: len(filtered_true_set),
         rec_count_key: len(filtered_rec_set),
     }, filtered_true_set, filtered_rec_set
+
+
+def _intersection_size(left_set, right_set):
+    if len(left_set) > len(right_set):
+        left_set, right_set = right_set, left_set
+    return sum(1 for item in left_set if item in right_set)
+
+
+def _unique_mode_counts_from_sets(true_set, rec_set, true_count_key, rec_count_key):
+    tp = _intersection_size(true_set, rec_set)
+    fp = len(rec_set) - tp
+    fn = len(true_set) - tp
+    precision, recall, f1, iou = prf1_iou(tp, fp, fn)
+    return {
+        "TP": tp, "FP": fp, "FN": fn,
+        "precision": precision, "recall": recall, "F1": f1, "IoU": iou,
+        true_count_key: len(true_set),
+        rec_count_key: len(rec_set),
+    }
+
+
+def adf1_restricted_metrics_from_contexts(true_tree: Any,
+                                          rec_tree: Any,
+                                          restrict_labels: Optional[Iterable[str]] = None,
+                                          *,
+                                          cache: Optional[RestrictedAdf1Cache] = None):
+    true_context = ensure_tree_evaluation_context(true_tree)
+    rec_context = ensure_tree_evaluation_context(rec_tree)
+    restricted_label_set = set(restrict_labels) if restrict_labels is not None else None
+    if cache is None:
+        label_to_id = {}
+        true_pairs = unique_ancestor_pair_id_set(
+            true_context,
+            restrict_labels=restricted_label_set,
+            label_to_id=label_to_id,
+        )
+    else:
+        label_to_id = cache.label_to_id
+        cache_key = _restricted_labels_cache_key(restricted_label_set)
+        true_pairs = cache.true_pair_ids_by_restricted_labels.get(cache_key)
+        if true_pairs is None:
+            true_pairs = unique_ancestor_pair_id_set(
+                true_context,
+                restrict_labels=restricted_label_set,
+                label_to_id=label_to_id,
+            )
+            cache.true_pair_ids_by_restricted_labels[cache_key] = true_pairs
+
+    rec_pairs = unique_ancestor_pair_id_set(rec_context, label_to_id=label_to_id)
+    return _unique_mode_counts_from_sets(
+        true_pairs,
+        rec_pairs,
+        "num_unique_pairs_true",
+        "num_unique_pairs_rec",
+    )
+
+
+def ancestors_unique_restricted_metrics(true_tree: Any,
+                                        rec_tree: Any,
+                                        restrict_labels: Optional[Iterable[str]] = None):
+    return adf1_restricted_metrics_from_contexts(
+        true_tree,
+        rec_tree,
+        restrict_labels=restrict_labels,
+    )
 
 
 def evaluate_4(true_tree: Any,

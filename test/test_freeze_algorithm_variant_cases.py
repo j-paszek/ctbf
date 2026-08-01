@@ -155,6 +155,12 @@ def test_observation_dropout_stress_perturbs_observed_genomes_consistently_by_ce
         perturbed["distance_matrices"]["cnp2cnp"]["matrix"],
         np.zeros((2, 2)),
     )
+    assert perturbed["distance_matrices"]["cnp2cnp"]["provenance"] == {
+        "schema_version": "ctbf-distance-provenance-v1",
+        "metric": "l1",
+        "semantics_version": "ctbf-l1-profile-v1",
+        "formula": "sum(abs(u_i-v_i))",
+    }
     assert source_case["biopsies"][0]["cells"][0]["genome"] == [2, 1, 0]
 
 
@@ -212,14 +218,39 @@ def test_metric_summary_stores_exact_ext_grf_and_legacy_set_similarity():
     )
 
 
-def test_genotype_to_json_stores_reconstructable_cell_data():
+def test_genotype_to_json_omits_truth_node_id_and_round_trips_from_cell_id():
     cell = Genotype([2, 0, 2], node_id=14, generation=8, cell_id=7)
     data = genotype_to_json(cell)
 
-    assert data["node_id"] == 14
+    assert "node_id" not in data
     assert data["cell_id"] == 7
     assert data["generation"] == 8
     assert np.array_equal(data["genome"], np.array([2, 0, 2]))
+
+    restored = freeze_algorithm_variant_cases.genotypes_from_json([data])[0]
+    assert restored.node_id == 7
+    assert restored.cell_id == 7
+    assert np.array_equal(restored.genome, np.array([2, 0, 2]))
+
+
+def test_legacy_biopsy_json_retains_node_id_loader_compatibility():
+    legacy = {
+        "node_id": 14,
+        "cell_id": 7,
+        "generation": 8,
+        "genome": [2, 0, 2],
+        "observation_key": "withdrawn-legacy-field",
+        "occurrence_kind": "observed",
+        "source_observation_key": None,
+    }
+
+    restored = freeze_algorithm_variant_cases.genotypes_from_json([legacy])[0]
+
+    assert restored.node_id == 14
+    assert restored.cell_id == 7
+    assert not hasattr(restored, "observation_key")
+    assert not hasattr(restored, "occurrence_kind")
+    assert not hasattr(restored, "source_observation_key")
 
 
 def test_unique_cells_by_cell_id_preserves_first_repeated_observation():
@@ -245,6 +276,19 @@ def test_cnp2cnp_distance_matrix_returns_singleton_zero_without_runtime_config(m
 
     assert ids == [5]
     assert np.array_equal(matrix, np.array([[0.0]]))
+
+    ids, matrix, provenance = (
+        freeze_algorithm_variant_cases.cnp2cnp_distance_matrix_with_provenance(
+            [Genotype([2, 2], node_id=50, generation=1, cell_id=5)]
+        )
+    )
+    assert ids == [5]
+    assert np.array_equal(matrix, np.array([[0.0]]))
+    assert provenance["semantics_version"] == (
+        "ctbf-cnp2cnp-any-min-bidirectional-v1"
+    )
+    assert provenance["construction"] == "trivial_singleton"
+    assert provenance["directional_calls_per_unordered_pair"] == 0
 
 
 def test_fast_biopsy_preset_benchmark_writes_preset_result_from_frozen_input(tmp_path):

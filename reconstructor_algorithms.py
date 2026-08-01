@@ -26,7 +26,9 @@ from reconstructor_nj import (
     make_nj_hybrid_variant,
     neighbour_joining_core,
     neighbor_joining_baseline,
+    neighbor_joining_classical,
     neighbor_joining_standard,
+    rooted_labeled_nj,
 )
 from reconstructor_pair_selection import (
     make_anticentral_adaptive_v2_pair_selector,
@@ -40,6 +42,10 @@ from reconstructor_pair_selection import (
     make_hybrid_opt_pair_selector,
     make_hybrid_opt_refined_pair_selector,
     make_hybrid_opt_v2_pair_selector,
+)
+from reconstructor_temporal import (
+    temporal_cnp_arborescence,
+    temporal_cnp_arborescence_no_time,
 )
 
 
@@ -518,6 +524,7 @@ __all__ = [
     "neighbor_joining_adaptive_centrality_nonlinear",
     "neighbor_joining_adaptive_centrality_reversed",
     "neighbor_joining_baseline",
+    "neighbor_joining_classical",
     "neighbor_joining_hybrid_anticentral_adaptive_v2",
     "neighbor_joining_hybrid_anticentral_adaptive_v3",
     "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible",
@@ -529,4 +536,7 @@ __all__ = [
     "neighbor_joining_hybrid_opt_refined",
     "neighbor_joining_hybrid_opt_v2",
     "neighbor_joining_standard",
+    "rooted_labeled_nj",
+    "temporal_cnp_arborescence",
+    "temporal_cnp_arborescence_no_time",
 ]

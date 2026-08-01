@@ -29,6 +29,7 @@ from reconstructor_algorithms import (
     neighbor_joining_baseline,
     neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony,
     neighbor_joining_hybrid_opt,
+    temporal_cnp_arborescence,
 )
 from simulator import CancerCellEvolutionSimulator, Genotype
 
@@ -127,6 +128,7 @@ def test_scalable_biopsy_keeps_empty_generation_empty():
         neighbor_joining_baseline,
         neighbor_joining_hybrid_opt,
         neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony,
+        temporal_cnp_arborescence,
     ],
     ids=lambda algorithm: algorithm.__name__,
 )
@@ -140,7 +142,13 @@ def test_run_single_test_accepts_two_biopsy_cells_and_uses_actual_grf_roots(monk
             self.tree.add_edge(0, 5, events="")
             self.tree.add_edge(5, 7, events="duplication(pos=0, copies=1)")
 
-        def perform_biopsy(self, generation, biopsy_size=0, biopsy_size_scalable=None, seed=None):
+        def perform_biopsy(
+            self,
+            generation,
+            biopsy_size=0,
+            biopsy_size_scalable=None,
+            seed=None,
+        ):
             if generation == 1:
                 return [Genotype([2, 2], node_id=5, generation=1, cell_id=5)]
             if generation == 2:
@@ -282,13 +290,11 @@ def test_use_cnp2cnp_to_compute_pairwise_distance(instr, res):
     assert res == int(use_cnp2cnp_to_compute_pairwise_distance(instr))
 
 
-def test_distance_matrix_from_biopsy():
+def test_distance_matrix_from_biopsy_rejects_duplicate_distance_ids():
     b, b1, njb, njb1 = generate_biopsy_sets()
     cells = [x for x in flatten(b)]
-    a, b = distance_matrix_from_biopsy(cells)
-    print(a, b)
-    assert np.array_equal(a, [7, 7, 13])
-    assert np.array_equal(b, [[0., 0., 0.], [0., 0., 0.], [0., 0., 0.]])
+    with pytest.raises(ValueError, match="Duplicate distance-matrix id 7"):
+        distance_matrix_from_biopsy(cells)
 
 
 def test_reconstructor_with_parallel():

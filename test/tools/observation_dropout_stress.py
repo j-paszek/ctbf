@@ -21,7 +21,7 @@ from freeze_algorithm_variant_cases import (  # noqa: E402
     DEFAULT_OUTPUT_ROOT,
     LEGACY_VARIANT_NAMES,
     VARIANT_PRESETS,
-    cnp2cnp_distance_matrix,
+    cnp2cnp_distance_matrix_with_provenance,
     genotypes_from_json,
     get_algorithms_to_test,
     input_path,
@@ -86,9 +86,15 @@ def l1_distance_matrix(cells):
 def recompute_observed_distance_matrix(input_case, distance_mode):
     cells = unique_cells_from_biopsies(input_case)
     if distance_mode == "cnp2cnp":
-        return cnp2cnp_distance_matrix(genotypes_from_json(cells))
+        return cnp2cnp_distance_matrix_with_provenance(genotypes_from_json(cells))
     if distance_mode == "l1":
-        return l1_distance_matrix(cells)
+        ids, matrix = l1_distance_matrix(cells)
+        return ids, matrix, {
+            "schema_version": "ctbf-distance-provenance-v1",
+            "metric": "l1",
+            "semantics_version": "ctbf-l1-profile-v1",
+            "formula": "sum(abs(u_i-v_i))",
+        }
     raise ValueError(f"Unsupported distance mode: {distance_mode}")
 
 
@@ -116,10 +122,14 @@ def perturb_input_case(source_input_case, *, dropout_rate, stress_seed, distance
         for cell in biopsy["cells"]:
             cell["genome"] = list(genome_by_cell_id[int(cell["cell_id"])])
 
-    ids, matrix = recompute_observed_distance_matrix(input_case, distance_mode)
+    ids, matrix, provenance = recompute_observed_distance_matrix(
+        input_case,
+        distance_mode,
+    )
     input_case["distance_matrices"]["cnp2cnp"] = {
         "ids": ids,
         "matrix": matrix,
+        "provenance": provenance,
     }
     input_case["case_id"] = f"{source_input_case['case_id']}_{stress_label}"
     input_case["source_case_id"] = source_input_case["case_id"]

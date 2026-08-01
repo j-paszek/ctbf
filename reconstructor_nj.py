@@ -23,11 +23,37 @@ from reconstructor_engine import (
     PairChoice,
     run_agglomerative_reconstruction,
 )
-from reconstructor_metrics import sum_distance_centrality
+from reconstructor_metrics import nj_q_matrix, sum_distance_centrality, upper_triangle_indices
 from simulator import Genotype
 
 
 NJ_REC_TR_ROOT_ID = -1
+ROOTED_LABELED_GLOBAL_ROW_SUM_CONTEXT_KEY = "rooted_labeled_global_row_sum"
+
+
+def _validated_distance_copy(dist_matrix, cells):
+    D = np.asarray(dist_matrix, dtype=float)
+    if D.ndim != 2 or D.shape[0] != D.shape[1]:
+        raise ValueError("Distance matrix must be square.")
+    if D.shape[0] != len(cells):
+        raise ValueError(
+            "Distance matrix size must match the number of reconstruction cells."
+        )
+    if len(cells) == 0:
+        raise ValueError("Reconstruction requires at least one cell.")
+    if len({cell.node_id for cell in cells}) != len(cells):
+        raise ValueError("Reconstruction cells must have unique node_id values.")
+    return D.copy()
+
+
+def _next_available_node_id(tree, preferred_id, fallback_id):
+    if preferred_id not in tree:
+        return preferred_id
+
+    candidate = fallback_id
+    while candidate in tree:
+        candidate += 1
+    return candidate
 
 
 def _select_min_distance_pair(state):
@@ -113,8 +139,14 @@ def _legacy_parent_selector(select_ancestor_func, full_information):
 
 
 def neighbor_joining_standard(dist_matrix, cells, max_id, seed=7, existing_tree=None):
-    D = dist_matrix.copy()
-    tree = existing_tree or nx.DiGraph()
+    """Classical NJ with unlabeled latent nodes and a synthetic final-join root.
+
+    The topology and limb-length recurrence are classical NJ. The returned
+    directed tree is a rooted rendering used by CTBF's rooted evaluators; NJ
+    itself does not infer a biological root.
+    """
+    D = _validated_distance_copy(dist_matrix, cells)
+    tree = existing_tree if existing_tree is not None else nx.DiGraph()
     new_nodes = {}
     id_map = {i: cells[i] for i in range(len(cells))}
     next_id = max_id + 1
@@ -125,8 +157,7 @@ def neighbor_joining_standard(dist_matrix, cells, max_id, seed=7, existing_tree=
     while len(D) > 2:
         n = len(D)
         total_dist = sum_distance_centrality(D)
-        Q = ((n - 2) * D - total_dist[:, None] - total_dist[None, :]).astype(float, copy=False)
-        np.fill_diagonal(Q, 0.0)
+        Q = nj_q_matrix(D)
 
         i, j = divmod(np.argmin(Q), n)
         if j < i:
@@ -137,6 +168,7 @@ def neighbor_joining_standard(dist_matrix, cells, max_id, seed=7, existing_tree=
         limb_len_j = 0.5 * (D[i][j] - delta)
 
         id_i, id_j = id_map[i], id_map[j]
+        next_id = _next_available_node_id(tree, next_id, next_id + 1)
         new_cell = Genotype(None, next_id)
         next_id += 1
 
@@ -161,15 +193,109 @@ def neighbor_joining_standard(dist_matrix, cells, max_id, seed=7, existing_tree=
 
     if len(id_map) == 2:
         id1, id2 = id_map[0], id_map[1]
-        root_cell = Genotype(None, NJ_REC_TR_ROOT_ID)
+        root_id = _next_available_node_id(tree, NJ_REC_TR_ROOT_ID, next_id)
+        root_cell = Genotype(None, root_id)
         tree.add_node(root_cell.node_id, genome=root_cell.genome, cell_id=None)
         tree.add_edge(root_cell.node_id, id1.node_id, weight=D[0][1] / 2)
         tree.add_edge(root_cell.node_id, id2.node_id, weight=D[0][1] / 2)
         new_nodes[root_cell] = (id1, id2)
     elif len(id_map) == 1:
-        return tree, new_nodes, id_map[0].cell_id
+        return tree, new_nodes, id_map[0].node_id
 
-    return tree, new_nodes, NJ_REC_TR_ROOT_ID
+    return tree, new_nodes, root_cell.node_id
+
+
+def neighbor_joining_classical(dist_matrix, cells, max_id, seed=7, existing_tree=None):
+    """Publication-facing name for the partial-output classical NJ routine."""
+    return neighbor_joining_standard(
+        dist_matrix,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+    )
+
+
+def _configure_rooted_labeled_state(state):
+    state.context[ROOTED_LABELED_GLOBAL_ROW_SUM_CONTEXT_KEY] = (
+        sum_distance_centrality(state.D_full)
+    )
+
+
+def _select_rooted_labeled_q_pair(state):
+    n = len(state.D)
+    tri_i, tri_j = upper_triangle_indices(n)
+    if len(tri_i) == 0:
+        raise ValueError("No pair is available for rooted labeled NJ.")
+
+    if n == 2:
+        return PairChoice(int(tri_i[0]), int(tri_j[0]), score=state.D[0, 1])
+
+    Q = nj_q_matrix(state.D)
+    values = Q[tri_i, tri_j]
+    best_value = np.min(values)
+    best_offsets = np.flatnonzero(values == best_value)
+    selected_offset = int(best_offsets[state.rng.randrange(len(best_offsets))])
+    return PairChoice(
+        int(tri_i[selected_offset]),
+        int(tri_j[selected_offset]),
+        score=float(best_value),
+    )
+
+
+def _select_rooted_labeled_parent(state, pair):
+    global_row_sum = state.context[ROOTED_LABELED_GLOBAL_ROW_SUM_CONTEXT_KEY]
+    node_i = state.node_list[pair.i]
+    node_j = state.node_list[pair.j]
+    score_i = global_row_sum[state.origin_index[node_i]]
+    score_j = global_row_sum[state.origin_index[node_j]]
+
+    if score_i < score_j:
+        return Orientation(pair.i, pair.j)
+    if score_j < score_i:
+        return Orientation(pair.j, pair.i)
+    if state.rng.random() < 0.5:
+        return Orientation(pair.i, pair.j)
+    return Orientation(pair.j, pair.i)
+
+
+def _connect_rooted_labeled_components(state, orientation):
+    parent = state.node_list[orientation.parent_idx]
+    child = state.node_list[orientation.child_idx]
+    state.tree.add_edge(
+        parent.node_id,
+        child.node_id,
+        weight=float(state.D[orientation.parent_idx, orientation.child_idx]),
+    )
+    return parent
+
+
+def _remaining_component_node_root(state):
+    root = state.node_list[0]
+    return state.tree, state.new_nodes, root.node_id
+
+
+def rooted_labeled_nj(dist_matrix, cells, max_id, seed=7, existing_tree=None):
+    """Q-guided rooted baseline whose vertices are the labeled input occurrences.
+
+    Q selects an active component pair. Original-matrix row-sum centrality
+    orients the pair, the child component root is attached to the parent root,
+    and the parent's representative distance row is retained. No latent or
+    copied internal occurrence is created.
+    """
+    D = _validated_distance_copy(dist_matrix, cells)
+    return run_agglomerative_reconstruction(
+        D,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        pair_selector=_select_rooted_labeled_q_pair,
+        ancestor_selector=_select_rooted_labeled_parent,
+        merge_strategy=_connect_rooted_labeled_components,
+        root_strategy=_remaining_component_node_root,
+        configure_state=_configure_rooted_labeled_state,
+    )
 
 
 def neighbor_joining_baseline(dist_matrix, cells, max_id, seed=7, existing_tree=None):

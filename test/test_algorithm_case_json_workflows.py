@@ -168,7 +168,11 @@ def test_json_biopsies_recompute_cnp2cnp_matrix():
     cell_lists = freeze_algorithm_variant_cases.cell_lists_from_input(input_case)
     unique_cells = freeze_algorithm_variant_cases.unique_cells_by_cell_id(cell_lists)
 
-    ids, matrix = freeze_algorithm_variant_cases.cnp2cnp_distance_matrix(unique_cells)
+    ids, matrix = (
+        freeze_algorithm_variant_cases.legacy_cnp2cnp_ordered_distance_matrix(
+            unique_cells
+        )
+    )
 
     expected = input_case["distance_matrices"]["cnp2cnp"]
     assert ids == expected["ids"]
@@ -187,7 +191,11 @@ def test_all_json_biopsies_recompute_cnp2cnp_matrix(case):
     cell_lists = freeze_algorithm_variant_cases.cell_lists_from_input(input_case)
     unique_cells = freeze_algorithm_variant_cases.unique_cells_by_cell_id(cell_lists)
 
-    ids, matrix = freeze_algorithm_variant_cases.cnp2cnp_distance_matrix(unique_cells)
+    ids, matrix = (
+        freeze_algorithm_variant_cases.legacy_cnp2cnp_ordered_distance_matrix(
+            unique_cells
+        )
+    )
 
     expected = input_case["distance_matrices"]["cnp2cnp"]
     assert ids == expected["ids"]

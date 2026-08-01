@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from algorithm_evaluation.tester import get_legacy_algorithms_to_test
 from ctbs_utils import get_biopsy_nodes_ids, to_newick
-from evaluator_full import evaluate_4
+from evaluator_full import ancestors_unique_restricted_metrics
 from reconstructor import build_evolution_tree
 from simulator import CancerCellEvolutionSimulator
 
@@ -78,16 +78,16 @@ def reconstruct_frozen_case(case, algorithm):
         **build_kwargs,
     )
     biopsy_labels = get_biopsy_nodes_ids(rec_tree, nj_tree)
-    rec_metrics = evaluate_4(
+    rec_metrics = ancestors_unique_restricted_metrics(
         simulator.tree,
         rec_tree,
         restrict_labels=biopsy_labels,
-    )["ancestors_unique_restricted"]
-    nj_metrics = evaluate_4(
+    )
+    nj_metrics = ancestors_unique_restricted_metrics(
         simulator.tree,
         nj_tree,
         restrict_labels=biopsy_labels,
-    )["ancestors_unique_restricted"]
+    )
 
     return {
         "rec_root": rec_root,

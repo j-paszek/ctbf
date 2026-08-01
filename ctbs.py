@@ -1,6 +1,4 @@
-import shutil
 import subprocess
-import os.path
 import sys
 import tempfile
 import time
@@ -16,6 +14,15 @@ from ctbf_constraints import MIN_TOTAL_BIOPSY_CELLS
 from simulator import CancerCellEvolutionSimulator, Genotype
 from reconstructor import build_evolution_tree, resolve_biopsy_guided_config, visualize_tree_plotly
 from reconstructor_registry import get_algorithm_map, resolve_reconstruction_algorithm
+from reconstructor_temporal import uses_ordered_occurrence_input
+from distance_semantics import (
+    CNP2CNP_DISTANCE,
+    cnp2cnp_provenance,
+    combine_ordered_cnp2cnp_matrices,
+    minimum_bidirectional_distance,
+    parse_cnp2cnp_directional_distance,
+    validate_distance_matrix as _validate_distance_matrix,
+)
 from evaluator import grf_tree
 from evaluator_full import evaluate_4, named_label
 from ctbs_utils import to_newick, vizualize_nx_tree, get_biopsy_nodes_ids
@@ -105,21 +112,7 @@ def _coerce_runtime_config(runtime_config=None):
 
 
 def validate_distance_matrix(ids, matrix):
-    matrix = np.asarray(matrix, dtype=float)
-    if matrix.ndim != 2:
-        raise ValueError("Distance matrix must be two-dimensional.")
-    rows, cols = matrix.shape
-    if rows != cols:
-        raise ValueError(f"Distance matrix must be square, got shape {matrix.shape}.")
-    if ids is None:
-        raise ValueError("Distance matrix ids are required for in-memory matrices.")
-    if len(ids) != rows:
-        raise ValueError(f"Distance matrix has {rows} rows but {len(ids)} ids.")
-    if not np.allclose(matrix, matrix.T):
-        raise ValueError("Distance matrix must be symmetric.")
-    if not np.allclose(np.diag(matrix), np.zeros(rows)):
-        raise ValueError("Distance matrix diagonal must be zero.")
-    return list(ids), matrix
+    return _validate_distance_matrix(ids, matrix)
 
 
 @dataclass(frozen=True)
@@ -127,6 +120,7 @@ class DistanceMatrix:
     ids: list | None = None
     matrix: object | None = None
     path: str | None = None
+    provenance: dict | None = None
 
     def __post_init__(self):
         if self.path is None and self.matrix is None:
@@ -135,6 +129,8 @@ class DistanceMatrix:
             ids, matrix = validate_distance_matrix(self.ids, self.matrix)
             object.__setattr__(self, "ids", ids)
             object.__setattr__(self, "matrix", matrix)
+        if self.provenance is not None:
+            object.__setattr__(self, "provenance", deepcopy(self.provenance))
 
     def build_tree_kwargs(self):
         if self.matrix is not None:
@@ -154,9 +150,13 @@ def unique_cells_by_cell_id(cells):
     return list(unique.values())
 
 
-def _trivial_distance_matrix(cells):
+def _trivial_distance_matrix(cells, provenance=None):
     ids = [cell.get_id() for cell in cells]
-    return DistanceMatrix(ids=ids, matrix=np.zeros((len(ids), len(ids)), dtype=float))
+    return DistanceMatrix(
+        ids=ids,
+        matrix=np.zeros((len(ids), len(ids)), dtype=float),
+        provenance=provenance,
+    )
 
 
 class DistanceProvider:
@@ -179,14 +179,20 @@ class Cnp2CnpPairwiseDistanceProvider(DistanceProvider):
     max_threads: int | None = None
 
     def compute(self, cells):
+        provenance = cnp2cnp_provenance(
+            self.runtime_config.cnp2cnp_file,
+            construction=(
+                "trivial_singleton" if len(cells) <= 1 else "bidirectional_pair_mode"
+            ),
+        )
         if len(cells) <= 1:
-            return _trivial_distance_matrix(cells)
+            return _trivial_distance_matrix(cells, provenance=provenance)
         ids, matrix = distance_matrix_from_biopsy(
             cells,
             max_threads=self.max_threads,
             runtime_config=self.runtime_config,
         )
-        return DistanceMatrix(ids=ids, matrix=matrix)
+        return DistanceMatrix(ids=ids, matrix=matrix, provenance=provenance)
 
 
 @dataclass(frozen=True)
@@ -195,13 +201,23 @@ class Cnp2CnpFileDistanceProvider(DistanceProvider):
 
     def compute(self, cells):
         if len(cells) <= 1:
-            return _trivial_distance_matrix(cells)
-        to_file(self.runtime_config.in_file_name, cells)
-        use_cnp2cnp_to_compute_dist_matrix(
-            self.runtime_config.in_file_name,
+            return _trivial_distance_matrix(
+                cells,
+                provenance=cnp2cnp_provenance(
+                    self.runtime_config.cnp2cnp_file,
+                    construction="trivial_singleton",
+                ),
+            )
+        distance_matrix = distance_matrix_from_cnp2cnp_matrix_mode(
+            cells,
             runtime_config=self.runtime_config,
         )
-        return DistanceMatrix(path=self.runtime_config.out_file_name)
+        _write_labeled_distance_matrix(
+            self.runtime_config.out_file_name,
+            distance_matrix.ids,
+            distance_matrix.matrix,
+        )
+        return distance_matrix
 
 
 def default_distance_provider(parallel=False, runtime_config=None, max_threads=None):
@@ -238,8 +254,7 @@ def to_file(file, cells):
 
 def _compute_pair(args):
     c, d, i, j, runfile = args
-    input_str = f">{c.get_id()}\n{c.get_cnp()}\n>{d.get_id()}\n{d.get_cnp()}\n"
-    dist = use_cnp2cnp_to_compute_pairwise_distance(input_str, runfile=runfile)
+    dist = compute_symmetric_cnp2cnp_distance(c, d, runfile=runfile)
     return i, j, dist
 
 
@@ -250,6 +265,7 @@ def distance_matrix_from_biopsy(cells, max_threads=None, runtime_config=None):
     n = len(cells)
     ids = [c.get_id() for c in cells]
     dist_matrix = np.zeros((n, n), dtype=float)
+    ids, dist_matrix = validate_distance_matrix(ids, dist_matrix)
     if n <= 1:
         return ids, dist_matrix
     runtime_config = _coerce_runtime_config(runtime_config)
@@ -265,7 +281,7 @@ def distance_matrix_from_biopsy(cells, max_threads=None, runtime_config=None):
             dist_matrix[i, j] = dist
             dist_matrix[j, i] = dist
 
-    return ids, dist_matrix
+    return validate_distance_matrix(ids, dist_matrix)
 
 
 def use_cnp2cnp_to_compute_pairwise_distance(str_in, runfile=None, runtime_config=None):
@@ -273,16 +289,166 @@ def use_cnp2cnp_to_compute_pairwise_distance(str_in, runfile=None, runtime_confi
         runfile = _coerce_runtime_config(runtime_config).cnp2cnp_file
     pypath = str(sys.executable)
 
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
-        tmp.write(str_in)
-        tmp.flush()
-        infile_path = tmp.name
+    with tempfile.TemporaryDirectory(prefix="ctbf-cnp2cnp-pair-") as tmpdir:
+        infile_path = Path(tmpdir) / "pair.fa"
+        infile_path.write_text(str_in)
+        out = subprocess.run(
+            [
+                pypath,
+                runfile,
+                "-m",
+                "dist",
+                "-d",
+                CNP2CNP_DISTANCE,
+                "-i",
+                str(infile_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    return parse_cnp2cnp_directional_distance(out.stdout)
 
-    out = subprocess.run(
-        [pypath, runfile, "-m", "dist", "-i", infile_path],
-        capture_output=True, text=True, check=True
+
+def compute_symmetric_cnp2cnp_distance(left, right, runfile=None, runtime_config=None):
+    """Compute min(d(left,right), d(right,left)) with two explicit calls."""
+    forward_input = (
+        f">{left.get_id()}\n{left.get_cnp()}\n"
+        f">{right.get_id()}\n{right.get_cnp()}\n"
     )
-    return out.stdout
+    reverse_input = (
+        f">{right.get_id()}\n{right.get_cnp()}\n"
+        f">{left.get_id()}\n{left.get_cnp()}\n"
+    )
+    forward = use_cnp2cnp_to_compute_pairwise_distance(
+        forward_input,
+        runfile=runfile,
+        runtime_config=runtime_config,
+    )
+    reverse = use_cnp2cnp_to_compute_pairwise_distance(
+        reverse_input,
+        runfile=runfile,
+        runtime_config=runtime_config,
+    )
+    return minimum_bidirectional_distance(forward, reverse)
+
+
+def _parse_distance_label(value):
+    try:
+        return int(value)
+    except ValueError:
+        return value
+
+
+def _parse_labeled_distance_matrix(path):
+    with open(path) as source:
+        try:
+            size = int(source.readline().strip())
+        except ValueError as exc:
+            raise ValueError("cnp2cnp matrix is missing a valid size line.") from exc
+        ids = []
+        rows = []
+        for row_index in range(size):
+            parts = source.readline().strip().split()
+            if len(parts) != size + 1:
+                raise ValueError(
+                    f"cnp2cnp matrix row {row_index} has {max(len(parts) - 1, 0)} "
+                    f"values; expected {size}."
+                )
+            ids.append(_parse_distance_label(parts[0]))
+            rows.append(parts[1:])
+        if any(line.strip() for line in source):
+            raise ValueError("cnp2cnp matrix contains unexpected extra rows.")
+    return validate_distance_matrix(ids, rows)
+
+
+def _write_cnp2cnp_records(path, records):
+    with open(path, "w") as destination:
+        for cell_id, cnp in records:
+            destination.write(f">{cell_id}\n{cnp}\n")
+
+
+def _write_labeled_distance_matrix(path, ids, matrix):
+    ids, matrix = validate_distance_matrix(ids, matrix)
+    with open(path, "w") as destination:
+        destination.write(f"{len(ids)}\n")
+        for cell_id, row in zip(ids, matrix):
+            values = " ".join(str(value) for value in row)
+            destination.write(f"{str(cell_id).ljust(10)} {values}\n")
+
+
+def _cnp2cnp_matrix_from_records(records, runfile):
+    if not records:
+        raise ValueError("cnp2cnp matrix construction requires at least one profile.")
+    record_ids = [_parse_distance_label(str(record[0])) for record in records]
+    record_ids, _ = validate_distance_matrix(
+        record_ids,
+        np.zeros((len(records), len(records)), dtype=float),
+    )
+    if len(records) == 1:
+        provenance = cnp2cnp_provenance(
+            runfile,
+            construction="trivial_singleton",
+        )
+        return DistanceMatrix(
+            ids=record_ids,
+            matrix=np.zeros((1, 1), dtype=float),
+            provenance=provenance,
+        )
+
+    with tempfile.TemporaryDirectory(prefix="ctbf-cnp2cnp-matrix-") as tmpdir:
+        tmpdir = Path(tmpdir)
+        forward_input = tmpdir / "forward.fa"
+        reverse_input = tmpdir / "reverse.fa"
+        forward_output = tmpdir / "forward.phy"
+        reverse_output = tmpdir / "reverse.phy"
+        _write_cnp2cnp_records(forward_input, records)
+        _write_cnp2cnp_records(reverse_input, list(reversed(records)))
+
+        command_prefix = [
+            str(sys.executable),
+            runfile,
+            "-m",
+            "matrix",
+            "-d",
+            CNP2CNP_DISTANCE,
+        ]
+        subprocess.run(
+            command_prefix + ["-i", str(forward_input), "-o", str(forward_output)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        subprocess.run(
+            command_prefix + ["-i", str(reverse_input), "-o", str(reverse_output)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        forward_ids, forward_matrix = _parse_labeled_distance_matrix(forward_output)
+        reverse_ids, reverse_matrix = _parse_labeled_distance_matrix(reverse_output)
+
+    ids, matrix = combine_ordered_cnp2cnp_matrices(
+        forward_ids,
+        forward_matrix,
+        reverse_ids,
+        reverse_matrix,
+    )
+    return DistanceMatrix(
+        ids=ids,
+        matrix=matrix,
+        provenance=cnp2cnp_provenance(
+            runfile,
+            construction="opposite_order_matrix_mode",
+        ),
+    )
+
+
+def distance_matrix_from_cnp2cnp_matrix_mode(cells, runtime_config=None):
+    """Run cnp2cnp matrix mode in both global orders and take pairwise minima."""
+    runtime_config = _coerce_runtime_config(runtime_config)
+    records = [(cell.get_id(), cell.get_cnp()) for cell in cells]
+    return _cnp2cnp_matrix_from_records(records, runtime_config.cnp2cnp_file)
 
 
 def use_cnp2cnp_to_compute_dist_matrix(sample=None, folder=None, runfile=None,
@@ -320,18 +486,30 @@ def use_cnp2cnp_to_compute_dist_matrix(sample=None, folder=None, runfile=None,
     """
     runtime_config = _coerce_runtime_config(runtime_config)
     sample = runtime_config.in_file_name if sample is None else sample
-    folder = runtime_config.cnp2cnp_folder if folder is None else folder
     runfile = runtime_config.cnp2cnp_file if runfile is None else runfile
     output = runtime_config.out_file_name if output is None else output
+    _ = folder  # Retained only for call compatibility with the historical API.
 
-    shutil.copy(sample, folder)     # copy file to the cnp2cnp project
-    cnp2cnp_in = os.path.join(folder, sample)
-    cnp2cnp_out = os.path.join(folder, output)
-    pypath = str(sys.executable)
-    # compute distance matrix for cnps using cnp2cnp
-    subprocess.run([pypath, runfile, "-m", "matrix", "-i", cnp2cnp_in, "-o", cnp2cnp_out])
-    # sample use: python cnp2cnp.py -m matrix -i examples/probka1.txt -o examples/o.txt
-    shutil.copy(cnp2cnp_out, os.getcwd())   # copy file with results back
+    records = []
+    with open(sample) as source:
+        current_id = None
+        for raw_line in source:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                current_id = line[1:]
+            elif current_id is None:
+                raise ValueError("cnp2cnp input contains a profile before its id.")
+            else:
+                records.append((current_id, line))
+                current_id = None
+    if current_id is not None:
+        raise ValueError("cnp2cnp input ends before the final profile line.")
+
+    distance_matrix = _cnp2cnp_matrix_from_records(records, runfile)
+    _write_labeled_distance_matrix(output, distance_matrix.ids, distance_matrix.matrix)
+    return distance_matrix.provenance
 
 
 def get_cell_manualy(cell_list, value):
@@ -377,7 +555,7 @@ def _perform_biopsies(sim, biopsy_generations, biopsy_size, biopsy_size_scalable
             biopsy_size=biopsy_size,
             biopsy_size_scalable=biopsy_size_scalable,
             generation=b_gen,
-            seed=seed
+            seed=seed,
         )
         if biopsy: # we assume biopsy has at least one cell
             cell_lists.append(biopsy)
@@ -422,6 +600,16 @@ def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, 
         else:
             distance_matrix = DistanceMatrix(path=runtime_config.out_file_name)
     cl, osl = deepcopy(cell_lists), deepcopy(all_in_one_sample)
+    ordered_occurrence_algorithm = uses_ordered_occurrence_input(reconstruction_algorithm)
+    if ordered_occurrence_algorithm and clear_cnps:
+        raise ValueError(
+            "Temporal CNP arborescence requires biopsy genomes for plausibility; "
+            "clear_cnps is not supported."
+        )
+    if ordered_occurrence_algorithm and biopsy_guided_config is not None:
+        raise ValueError(
+            "Temporal CNP arborescence cannot be combined with a biopsy-guided preset."
+        )
     show_cells(cell_lists)
 
     # Optional visualization
@@ -477,11 +665,29 @@ def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, 
         build_kwargs["neighbor_joining"] = reconstruction_algorithm
 
     # --- build trees ---
-    njtree, nj_info, _returned_root_nj = build_evolution_tree(osl, only_nj=True, **build_kwargs)
-    rec_build_kwargs = build_kwargs.copy()
-    if biopsy_guided_config is not None:
-        rec_build_kwargs["biopsy_guided_config"] = biopsy_guided_config
-    tree, rt_info, _returned_root_rt = build_evolution_tree(cl, **rec_build_kwargs)
+    if ordered_occurrence_algorithm:
+        order_ablation = getattr(
+            reconstruction_algorithm,
+            "ctbf_order_ablation",
+            None,
+        ) or reconstruction_algorithm
+        ablation_build_kwargs = build_kwargs.copy()
+        ablation_build_kwargs["neighbor_joining"] = order_ablation
+        njtree, nj_info, _returned_root_nj = build_evolution_tree(
+            cl,
+            **ablation_build_kwargs,
+        )
+        tree, rt_info, _returned_root_rt = build_evolution_tree(cl, **build_kwargs)
+    else:
+        njtree, nj_info, _returned_root_nj = build_evolution_tree(
+            osl,
+            only_nj=True,
+            **build_kwargs,
+        )
+        rec_build_kwargs = build_kwargs.copy()
+        if biopsy_guided_config is not None:
+            rec_build_kwargs["biopsy_guided_config"] = biopsy_guided_config
+        tree, rt_info, _returned_root_rt = build_evolution_tree(cl, **rec_build_kwargs)
     actual_root_nj = _actual_root(njtree)
     actual_root_rt = _actual_root(tree)
 

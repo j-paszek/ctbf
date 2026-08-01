@@ -4,17 +4,26 @@ import random
 import networkx as nx
 import pytest
 
+import evaluator
 from evaluator import (
     EXT_GRF_HIGHER_IS_BETTER,
     EXT_GRF_METRIC_KIND,
     EXT_GRF_METRIC_NAME,
+    cluster_comparison_work,
+    cluster_evaluation_context,
     compute_all_clusters,
+    exact_and_legacy_grf_from_cluster_contexts,
     ext_grf,
+    ext_grf_from_cluster_counts,
     ext_grf_tree,
+    grf_comparison_metadata,
     grf,
     grf_tree,
+    legacy_set_grf_similarity_from_cluster_contexts,
     parse_newick_to_nx,
+    weighted_jaccard_distance_sum,
 )
+from evaluator_full import tree_evaluation_context
 
 
 LEAF_COUNTS = (5, 10, 20, 50, 100)
@@ -275,6 +284,124 @@ def test_ext_grf_uses_outer_multiset_counts_for_recurrent_labels():
     assert _legacy_set_based_distance(left_tree, left_root, right_tree, right_root) == pytest.approx(
         41 / 72
     )
+
+
+def test_weighted_jaccard_sum_uses_compact_views_without_changing_values():
+    left_counts = Counter({
+        (("a", 2), ("b", 1)): 3,
+        (("c", 4),): 2,
+        tuple(): 1,
+    })
+    right_counts = Counter({
+        (("a", 1), ("b", 3)): 5,
+        (("d", 2),): 7,
+        tuple(): 2,
+    })
+
+    assert weighted_jaccard_distance_sum(left_counts, right_counts) == pytest.approx(
+        _reference_weighted_sum(left_counts, right_counts)
+    )
+    assert weighted_jaccard_distance_sum(
+        left_counts,
+        right_counts,
+        work=cluster_comparison_work(left_counts, right_counts),
+    ) == pytest.approx(_reference_weighted_sum(left_counts, right_counts))
+
+
+def test_dense_weighted_jaccard_kernel_matches_reference(monkeypatch):
+    def cluster(offset):
+        labels = ((f"L{(offset + step) % 7}", step + 1) for step in range(3))
+        return tuple(sorted(labels))
+
+    left_counts = Counter({cluster(index): (index % 3) + 1 for index in range(12)})
+    right_counts = Counter({cluster(index + 4): (index % 5) + 1 for index in range(14)})
+
+    monkeypatch.setattr(evaluator, "_DENSE_PAIR_THRESHOLD", 1)
+
+    assert weighted_jaccard_distance_sum(left_counts, right_counts) == pytest.approx(
+        _reference_weighted_sum(left_counts, right_counts)
+    )
+    assert weighted_jaccard_distance_sum(
+        left_counts,
+        right_counts,
+        work=cluster_comparison_work(left_counts, right_counts),
+    ) == pytest.approx(_reference_weighted_sum(left_counts, right_counts))
+
+
+def test_ext_grf_uses_adaptive_weighted_jaccard_sum(monkeypatch):
+    left_counts = Counter({
+        (("a", 2),): 2,
+        (("a", 1), ("b", 1)): 1,
+    })
+    right_counts = Counter({
+        (("a", 1),): 3,
+        (("b", 2),): 1,
+    })
+
+    monkeypatch.setattr(evaluator, "_DENSE_PAIR_THRESHOLD", 1)
+
+    union_size = _reference_union_size(left_counts, right_counts)
+    expected = (
+        _reference_weighted_sum(left_counts, _reference_difference_counts(right_counts, left_counts))
+        / (sum(left_counts.values()) * union_size)
+    ) + (
+        _reference_weighted_sum(_reference_difference_counts(left_counts, right_counts), right_counts)
+        / (sum(right_counts.values()) * union_size)
+    )
+
+    assert ext_grf_from_cluster_counts(left_counts, right_counts) == pytest.approx(expected)
+
+
+def test_context_cluster_construction_matches_networkx_reference_after_counter_reuse():
+    tree, root = parse_newick_to_nx("((a,a)c,(b,(a,b)c)d)e;", prefix="ctx")
+    context = tree_evaluation_context(tree)
+
+    assert Counter(evaluator.compute_all_clusters_from_context(context, root)) == Counter(
+        _reference_clusters(tree, root)
+    )
+
+
+def test_shared_grf_work_matches_exact_and_legacy_references(monkeypatch):
+    left_tree, left_root = parse_newick_to_nx("((a,a)c,(b,b)d)e;", prefix="left")
+    right_tree, right_root = parse_newick_to_nx("((a,b)c,(b,b)d)e;", prefix="right")
+    left_context = cluster_evaluation_context(left_tree, left_root)
+    right_context = cluster_evaluation_context(right_tree, right_root)
+    work = cluster_comparison_work(left_context.counts, right_context.counts)
+    metadata = grf_comparison_metadata(
+        left_context.counts,
+        right_context.counts,
+        left_context.cluster_set,
+        right_context.cluster_set,
+    )
+
+    monkeypatch.setattr(evaluator, "_DENSE_PAIR_THRESHOLD", 1)
+
+    ext_value = ext_grf_from_cluster_counts(
+        left_context.counts,
+        right_context.counts,
+        work=work,
+        metadata=metadata,
+        jaccard_cache={},
+    )
+    legacy_similarity = legacy_set_grf_similarity_from_cluster_contexts(
+        left_context,
+        right_context,
+        work=work,
+        metadata=metadata,
+        jaccard_cache={},
+    )
+    combined_ext, combined_legacy = exact_and_legacy_grf_from_cluster_contexts(
+        left_context,
+        right_context,
+        jaccard_cache={},
+    )
+
+    assert ext_value == pytest.approx(_reference_ext_grf_tree(left_tree, left_root, right_tree, right_root))
+    assert legacy_similarity == pytest.approx(
+        1 - _legacy_set_based_distance(left_tree, left_root, right_tree, right_root)
+    )
+    assert combined_ext == pytest.approx(ext_value)
+    assert combined_legacy == pytest.approx(legacy_similarity)
 
 
 @pytest.mark.parametrize("case", BUG_EXPOSING_NEWICK_CASES, ids=lambda case: case["id"])

@@ -21,6 +21,19 @@ References:
 The `measures_evaluation/supp_figure_3` code now resolves `cnp2cnp` from the same
 `ctbs_config.json` file used by the main CTBF codebase.
 
+Newly generated matrices use G0-03 semantics
+`ctbf-cnp2cnp-any-min-bidirectional-v1`:
+
+```text
+min(d_any(u, v), d_any(v, u))
+```
+
+Both the direct optimized helper and subprocess helper evaluate both profile
+orders. A cnp2cnp failure stops/skips that matrix; it is never replaced by L1
+under the cnp2cnp label. New `metadata.csv` rows include the semantic version,
+formula, construction path, command/API template, source revision, and source
+hashes.
+
 ## Exact reproduction
 
 Frozen input data is included in
@@ -37,6 +50,10 @@ The generated files are written to:
 - `measures_evaluation/supp_figure_3/figures/subfigure_a.png`
 - `measures_evaluation/supp_figure_3/figures/subfigure_b.png`
 - `measures_evaluation/supp_figure_3/figures/subfigure_c.png`
+
+The frozen bundle predates G0-03. Redrawing it reproduces the historical
+figures; it does not retroactively establish bidirectional-minimum semantics
+or provenance for those stored matrices.
 
 ## Re-run from scratch
 

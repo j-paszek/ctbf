@@ -4,6 +4,8 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+import numpy as np
+
 
 GRF_METRIC_NAME = "grf"
 GRF_METRIC_KIND = "similarity"
@@ -28,6 +30,40 @@ class ClusterEvaluationContext:
     clusters: tuple
     counts: Counter
     cluster_set: frozenset
+
+
+@dataclass(frozen=True)
+class _CompactClusterView:
+    items: tuple
+    counts: dict
+    size: int
+
+
+@dataclass(frozen=True)
+class ClusterComparisonWork:
+    label_to_id: dict
+    view_cache: dict
+
+
+@dataclass(frozen=True)
+class GrfComparisonMetadata:
+    left_size: int
+    right_size: int
+    multiset_union_size: int
+    left_minus_right: Counter
+    right_minus_left: Counter
+    set_union_size: int
+    left_only_counts: Counter
+    right_only_counts: Counter
+
+
+_DENSE_PAIR_THRESHOLD = 8192
+_DENSE_LABEL_LIMIT = 512
+_DENSE_WORK_LIMIT = 20_000_000
+
+
+def _looks_like_tree_context(value):
+    return all(hasattr(value, name) for name in ("labels", "children", "roots"))
 
 def parse_newick_to_nx(newick_str, prefix="node"):
     """
@@ -100,8 +136,63 @@ def compute_all_clusters(G, root):
     return list(clusters.values())
 
 
-def cluster_evaluation_context(G, root):
-    clusters = tuple(compute_all_clusters(G, root))
+def _single_context_root(context, root=None):
+    if root is not None:
+        return root
+    roots = tuple(context.roots)
+    if len(roots) != 1:
+        raise ValueError(f"Tree must have exactly one root, found {len(roots)}")
+    return roots[0]
+
+
+def compute_all_clusters_from_context(context, root=None):
+    root = _single_context_root(context, root)
+    clusters = []
+    counters = {}
+    stack = [(root, False)]
+    while stack:
+        node, visited = stack.pop()
+        if visited:
+            counter = Counter()
+            child_counters = [
+                counters.pop(child)
+                for child in context.children.get(node, ())
+                if child in counters
+            ]
+            if child_counters:
+                largest_index = max(
+                    range(len(child_counters)),
+                    key=lambda index: len(child_counters[index]),
+                )
+                if counter:
+                    counter += child_counters.pop(largest_index)
+                else:
+                    counter = child_counters.pop(largest_index)
+            for child_counter in child_counters:
+                counter += child_counter
+            label = context.labels.get(node)
+            if label is not None:
+                counter[label] += 1
+            cluster = tuple(sorted(counter.items()))
+            clusters.append(cluster)
+            counters[node] = counter
+            continue
+        stack.append((node, True))
+        for child in reversed(context.children.get(node, ())):
+            stack.append((child, False))
+    return clusters
+
+
+def cluster_evaluation_context(G, root=None):
+    if _looks_like_tree_context(G):
+        clusters = tuple(compute_all_clusters_from_context(G, root))
+    elif isinstance(G, dict) and "nodes" in G:
+        from evaluator_full import tree_evaluation_context_from_node_link
+
+        context = tree_evaluation_context_from_node_link(G)
+        clusters = tuple(compute_all_clusters_from_context(context, root))
+    else:
+        clusters = tuple(compute_all_clusters(G, root))
     return ClusterEvaluationContext(
         clusters=clusters,
         counts=Counter(clusters),
@@ -122,6 +213,155 @@ def _cached_jaccard_distance(left_cluster, right_cluster, cache):
     distance = jaccard_distance(left_cluster, right_cluster)
     cache[key] = distance
     return distance
+
+
+def _intern_cluster_label(label, label_to_id):
+    label_id = label_to_id.get(label)
+    if label_id is not None:
+        return label_id
+    label_id = len(label_to_id)
+    label_to_id[label] = label_id
+    return label_id
+
+
+def _compact_cluster_view(cluster, label_to_id, view_cache):
+    view = view_cache.get(cluster)
+    if view is not None:
+        return view
+
+    counts = {}
+    size = 0
+    for label, count in cluster:
+        label_id = _intern_cluster_label(label, label_to_id)
+        counts[label_id] = counts.get(label_id, 0) + count
+        size += count
+    view = _CompactClusterView(
+        items=tuple(sorted(counts.items())),
+        counts=counts,
+        size=size,
+    )
+    view_cache[cluster] = view
+    return view
+
+
+def _populate_compact_cluster_views(label_to_id, view_cache, *cluster_count_maps):
+    for count_map in cluster_count_maps:
+        for cluster in count_map:
+            _compact_cluster_view(cluster, label_to_id, view_cache)
+
+
+def _prepare_compact_cluster_views(*cluster_count_maps):
+    label_to_id = {}
+    view_cache = {}
+    _populate_compact_cluster_views(label_to_id, view_cache, *cluster_count_maps)
+    return label_to_id, view_cache
+
+
+def cluster_comparison_work(left_counts, right_counts):
+    label_to_id, view_cache = _prepare_compact_cluster_views(left_counts, right_counts)
+    return ClusterComparisonWork(label_to_id=label_to_id, view_cache=view_cache)
+
+
+def _jaccard_distance_from_views(left_view, right_view):
+    union_seed = left_view.size + right_view.size
+    if union_seed == 0:
+        return 0
+
+    if len(left_view.counts) <= len(right_view.counts):
+        smaller = left_view.counts
+        larger = right_view.counts
+    else:
+        smaller = right_view.counts
+        larger = left_view.counts
+    intersection = 0
+    for label_id, count in smaller.items():
+        other_count = larger.get(label_id, 0)
+        if other_count:
+            intersection += min(count, other_count)
+    union = union_seed - intersection
+    return 1 - (intersection / union) if union else 0
+
+
+def _cached_compact_jaccard_distance(left_cluster, right_cluster, cache, view_cache):
+    if cache is not None:
+        key = (left_cluster, right_cluster)
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        reverse_key = (right_cluster, left_cluster)
+        cached = cache.get(reverse_key)
+        if cached is not None:
+            return cached
+
+    distance = _jaccard_distance_from_views(
+        view_cache[left_cluster],
+        view_cache[right_cluster],
+    )
+    if cache is not None:
+        cache[key] = distance
+    return distance
+
+
+def _cluster_count_matrix(clusters, view_cache, label_count):
+    matrix = np.zeros((len(clusters), label_count), dtype=np.int64)
+    sizes = np.zeros(len(clusters), dtype=np.int64)
+    for row_index, cluster in enumerate(clusters):
+        view = view_cache[cluster]
+        sizes[row_index] = view.size
+        for label_id, count in view.items:
+            matrix[row_index, label_id] = count
+    return matrix, sizes
+
+
+def _should_use_dense_jaccard_kernel(left_counts, right_counts, label_count):
+    pair_count = len(left_counts) * len(right_counts)
+    return (
+        pair_count >= _DENSE_PAIR_THRESHOLD
+        and label_count <= _DENSE_LABEL_LIMIT
+        and pair_count * max(label_count, 1) <= _DENSE_WORK_LIMIT
+    )
+
+
+def _weighted_jaccard_distance_sum_sparse(left_counts, right_counts, jaccard_cache, view_cache):
+    total = 0.0
+    for left_cluster, left_multiplicity in left_counts.items():
+        for right_cluster, right_multiplicity in right_counts.items():
+            total += (
+                left_multiplicity
+                * right_multiplicity
+                * _cached_compact_jaccard_distance(
+                    left_cluster,
+                    right_cluster,
+                    jaccard_cache,
+                    view_cache,
+                )
+            )
+    return total
+
+
+def _weighted_jaccard_distance_sum_dense(left_counts, right_counts, view_cache, label_count):
+    left_clusters = tuple(left_counts)
+    right_clusters = tuple(right_counts)
+    left_matrix, left_sizes = _cluster_count_matrix(left_clusters, view_cache, label_count)
+    right_matrix, right_sizes = _cluster_count_matrix(right_clusters, view_cache, label_count)
+    right_multiplicities = np.fromiter(
+        (right_counts[cluster] for cluster in right_clusters),
+        dtype=float,
+        count=len(right_clusters),
+    )
+
+    total = 0.0
+    for left_index, left_cluster in enumerate(left_clusters):
+        if label_count:
+            intersections = np.minimum(left_matrix[left_index], right_matrix).sum(axis=1)
+        else:
+            intersections = np.zeros(len(right_clusters), dtype=np.int64)
+        unions = left_sizes[left_index] + right_sizes - intersections
+        with np.errstate(divide="ignore", invalid="ignore"):
+            distances = np.where(unions > 0, 1 - (intersections / unions), 0.0)
+        left_multiplicity = left_counts[left_cluster]
+        total += float(left_multiplicity) * float(distances @ right_multiplicities)
+    return total
 
 def jaccard_distance(ms1, ms2):
     """
@@ -172,33 +412,180 @@ def _multiset_difference_counts(left_counts, right_counts):
     )
 
 
-def _weighted_jaccard_distance_sum(left_counts, right_counts, jaccard_cache=None):
-    return sum(
-        left_multiplicity
-        * right_multiplicity
-        * _cached_jaccard_distance(left_cluster, right_cluster, jaccard_cache)
-        for left_cluster, left_multiplicity in left_counts.items()
-        for right_cluster, right_multiplicity in right_counts.items()
+def grf_comparison_metadata(left_counts, right_counts, left_cluster_set=None, right_cluster_set=None):
+    if left_cluster_set is None:
+        left_cluster_set = frozenset(left_counts)
+    if right_cluster_set is None:
+        right_cluster_set = frozenset(right_counts)
+    return GrfComparisonMetadata(
+        left_size=sum(left_counts.values()),
+        right_size=sum(right_counts.values()),
+        multiset_union_size=_multiset_union_size(left_counts, right_counts),
+        left_minus_right=_multiset_difference_counts(left_counts, right_counts),
+        right_minus_left=_multiset_difference_counts(right_counts, left_counts),
+        set_union_size=len(left_cluster_set | right_cluster_set),
+        left_only_counts=Counter(
+            {
+                cluster: count
+                for cluster, count in left_counts.items()
+                if cluster not in right_cluster_set
+            }
+        ),
+        right_only_counts=Counter(
+            {
+                cluster: count
+                for cluster, count in right_counts.items()
+                if cluster not in left_cluster_set
+            }
+        ),
     )
 
 
-def ext_grf_from_cluster_counts(A_counts, B_counts, jaccard_cache=None):
-    len_A = sum(A_counts.values())
-    len_B = sum(B_counts.values())
-    union_size = _multiset_union_size(A_counts, B_counts)
-
-    if union_size == 0:
+def weighted_jaccard_distance_sum(left_counts, right_counts, jaccard_cache=None, *, work=None):
+    if not left_counts or not right_counts:
         return 0.0
-    if len_A == 0 or len_B == 0:
+
+    if work is None:
+        label_to_id, view_cache = _prepare_compact_cluster_views(left_counts, right_counts)
+    else:
+        label_to_id = work.label_to_id
+        view_cache = work.view_cache
+        _populate_compact_cluster_views(label_to_id, view_cache, left_counts, right_counts)
+    if _should_use_dense_jaccard_kernel(left_counts, right_counts, len(label_to_id)):
+        return _weighted_jaccard_distance_sum_dense(
+            left_counts,
+            right_counts,
+            view_cache,
+            len(label_to_id),
+        )
+    return _weighted_jaccard_distance_sum_sparse(
+        left_counts,
+        right_counts,
+        jaccard_cache,
+        view_cache,
+    )
+
+
+def _weighted_jaccard_distance_sum(left_counts, right_counts, jaccard_cache=None):
+    return weighted_jaccard_distance_sum(
+        left_counts,
+        right_counts,
+        jaccard_cache=jaccard_cache,
+    )
+
+
+def ext_grf_from_cluster_counts(A_counts, B_counts, jaccard_cache=None, *, work=None, metadata=None):
+    if metadata is None:
+        metadata = grf_comparison_metadata(A_counts, B_counts)
+
+    if metadata.multiset_union_size == 0:
+        return 0.0
+    if metadata.left_size == 0 or metadata.right_size == 0:
         return 1.0
 
-    b_minus_a = _multiset_difference_counts(B_counts, A_counts)
-    a_minus_b = _multiset_difference_counts(A_counts, B_counts)
+    num1 = weighted_jaccard_distance_sum(
+        A_counts,
+        metadata.right_minus_left,
+        jaccard_cache,
+        work=work,
+    )
+    num2 = weighted_jaccard_distance_sum(
+        metadata.left_minus_right,
+        B_counts,
+        jaccard_cache,
+        work=work,
+    )
 
-    num1 = _weighted_jaccard_distance_sum(A_counts, b_minus_a, jaccard_cache)
-    num2 = _weighted_jaccard_distance_sum(a_minus_b, B_counts, jaccard_cache)
+    return (num1 / (metadata.left_size * metadata.multiset_union_size)) + (
+        num2 / (metadata.right_size * metadata.multiset_union_size)
+    )
 
-    return (num1 / (len_A * union_size)) + (num2 / (len_B * union_size))
+
+def legacy_set_grf_distance_from_cluster_contexts(
+    true_cluster_context,
+    reconstructed_cluster_context,
+    *,
+    jaccard_cache=None,
+    work=None,
+    metadata=None,
+):
+    if metadata is None:
+        metadata = grf_comparison_metadata(
+            true_cluster_context.counts,
+            reconstructed_cluster_context.counts,
+            true_cluster_context.cluster_set,
+            reconstructed_cluster_context.cluster_set,
+        )
+    if metadata.set_union_size == 0:
+        return 0.0
+    if metadata.left_size == 0 or metadata.right_size == 0:
+        return 1.0
+
+    numerator_1 = weighted_jaccard_distance_sum(
+        true_cluster_context.counts,
+        metadata.right_only_counts,
+        jaccard_cache=jaccard_cache,
+        work=work,
+    )
+    numerator_2 = weighted_jaccard_distance_sum(
+        reconstructed_cluster_context.counts,
+        metadata.left_only_counts,
+        jaccard_cache=jaccard_cache,
+        work=work,
+    )
+    return (numerator_1 / (metadata.left_size * metadata.set_union_size)) + (
+        numerator_2 / (metadata.right_size * metadata.set_union_size)
+    )
+
+
+def legacy_set_grf_similarity_from_cluster_contexts(
+    true_cluster_context,
+    reconstructed_cluster_context,
+    *,
+    jaccard_cache=None,
+    work=None,
+    metadata=None,
+):
+    return 1 - legacy_set_grf_distance_from_cluster_contexts(
+        true_cluster_context,
+        reconstructed_cluster_context,
+        jaccard_cache=jaccard_cache,
+        work=work,
+        metadata=metadata,
+    )
+
+
+def exact_and_legacy_grf_from_cluster_contexts(
+    true_cluster_context,
+    reconstructed_cluster_context,
+    *,
+    jaccard_cache=None,
+):
+    work = cluster_comparison_work(
+        true_cluster_context.counts,
+        reconstructed_cluster_context.counts,
+    )
+    metadata = grf_comparison_metadata(
+        true_cluster_context.counts,
+        reconstructed_cluster_context.counts,
+        true_cluster_context.cluster_set,
+        reconstructed_cluster_context.cluster_set,
+    )
+    ext_grf_value = ext_grf_from_cluster_counts(
+        true_cluster_context.counts,
+        reconstructed_cluster_context.counts,
+        jaccard_cache=jaccard_cache,
+        work=work,
+        metadata=metadata,
+    )
+    legacy_similarity = legacy_set_grf_similarity_from_cluster_contexts(
+        true_cluster_context,
+        reconstructed_cluster_context,
+        jaccard_cache=jaccard_cache,
+        work=work,
+        metadata=metadata,
+    )
+    return ext_grf_value, legacy_similarity
 
 
 def ext_grf_from_clusters(A, B, jaccard_cache=None):

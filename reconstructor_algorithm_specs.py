@@ -11,6 +11,7 @@ from reconstructor_algorithms import (
     neighbor_joining_adaptive_centrality_reversed,
     new_alg,
     neighbor_joining_baseline,
+    neighbor_joining_classical,
     neighbor_joining_hybrid_anticentral_adaptive_v3,
     neighbor_joining_hybrid_anticentral_adaptive_v3_plausible,
     neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony,
@@ -20,6 +21,9 @@ from reconstructor_algorithms import (
     neighbor_joining_hybrid_opt_adaptive,
     neighbor_joining_hybrid_opt_refined,
     neighbor_joining_hybrid_opt_v2,
+    rooted_labeled_nj,
+    temporal_cnp_arborescence,
+    temporal_cnp_arborescence_no_time,
 )
 
 
@@ -117,6 +121,30 @@ EXPERIMENTAL_ALGORITHM_SPECS = [
 ]
 
 
+PUBLICATION_ALGORITHM_SPECS = [
+    ReconstructionAlgorithmSpec(
+        "neighbor_joining_classical",
+        _constant_algorithm(neighbor_joining_classical),
+        legacy=False,
+    ),
+    ReconstructionAlgorithmSpec(
+        "rooted_labeled_nj",
+        _constant_algorithm(rooted_labeled_nj),
+        legacy=False,
+    ),
+    ReconstructionAlgorithmSpec(
+        "temporal_cnp_arborescence",
+        _constant_algorithm(temporal_cnp_arborescence),
+        legacy=False,
+    ),
+    ReconstructionAlgorithmSpec(
+        "temporal_cnp_arborescence_no_time",
+        _constant_algorithm(temporal_cnp_arborescence_no_time),
+        legacy=False,
+    ),
+]
+
+
 def build_algorithms(specs):
     return [spec.build() for spec in specs]
 
@@ -124,6 +152,7 @@ def build_algorithms(specs):
 __all__ = [
     "EXPERIMENTAL_ALGORITHM_SPECS",
     "LEGACY_ALGORITHM_SPECS",
+    "PUBLICATION_ALGORITHM_SPECS",
     "ReconstructionAlgorithmSpec",
     "build_algorithms",
 ]
