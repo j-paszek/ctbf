@@ -62,6 +62,7 @@ dist/
 # Benchmark corpora and generated experiment results
 /test/data/
 /algorithm_evaluation/results/
+/experimental_results/
 /measures_evaluation/**/generated*/
 /measures_evaluation/**/outputs*/
 /measures_evaluation/supp_figure_3/published_figure_3_data/
