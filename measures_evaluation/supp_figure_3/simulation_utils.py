@@ -11,11 +11,10 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from ctbs import (
-    compute_symmetric_cnp2cnp_distance,
+    distance_matrix_from_biopsy,
     load_ctbs_runtime_config,
 )
 from distance_semantics import cnp2cnp_provenance, validate_distance_matrix
-from concurrent.futures import ProcessPoolExecutor, as_completed
 
 try:
     from tqdm import tqdm
@@ -71,16 +70,6 @@ def export_tree_to_csv(tree, output_path):
             writer.writerow(['edge', '', '', '', '', parent_id, child_id, events])
 
 
-def _compute_pair_wrapper(args):
-    """
-    Wrapper for computing pairwise distance that can be used with ProcessPoolExecutor.
-    This replicates the logic from ctbs._compute_pair.
-    """
-    c, d, i, j = args
-    dist = compute_symmetric_cnp2cnp_distance(c, d)
-    return i, j, dist
-
-
 def figure3_cnp2cnp_provenance():
     runtime_config = load_ctbs_runtime_config()
     return cnp2cnp_provenance(
@@ -109,24 +98,8 @@ def distance_matrix_from_biopsy_with_progress(cells, max_threads=None, desc="Com
     dist_matrix : np.ndarray
         Distance matrix (symmetric, n x n)
     """
-    n = len(cells)
-    ids = [c.get_id() for c in cells]
-    dist_matrix = np.zeros((n, n), dtype=float)
-    
-    pairs = [(cells[i], cells[j], i, j) for i in range(n) for j in range(i + 1, n)]
-    total_pairs = len(pairs)
-    
-    with ProcessPoolExecutor(max_workers=max_threads) as executor:
-        # Submit all tasks
-        future_to_pair = {executor.submit(_compute_pair_wrapper, pair): pair for pair in pairs}
-        
-        # Process results with progress bar
-        for future in tqdm(as_completed(future_to_pair), total=total_pairs, desc=desc, unit="pairs"):
-            i, j, dist = future.result()
-            dist_matrix[i, j] = dist
-            dist_matrix[j, i] = dist
-    
-    return validate_distance_matrix(ids, dist_matrix)
+    _ = desc  # The shared provider owns bounded scheduling and checked calls.
+    return distance_matrix_from_biopsy(cells, max_threads=max_threads)
 
 
 def compute_naive_distance_matrix(cells, desc="Computing naive distance matrix", show_progress=True):

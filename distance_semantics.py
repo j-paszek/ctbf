@@ -19,6 +19,7 @@ CNP2CNP_ORDERED_TRIANGLE_FAST_SEMANTICS_VERSION = (
 )
 DIRECTED_DISTANCE_BUNDLE_SCHEMA_VERSION = "ctbf-directed-distance-bundle-v1"
 DISTANCE_PROVENANCE_SCHEMA_VERSION = "ctbf-distance-provenance-v1"
+DISTANCE_INPUT_CACHE_KEY_SCHEMA_VERSION = "ctbf-distance-input-cache-key-v1"
 
 
 def _validated_ids(ids):
@@ -61,6 +62,61 @@ def validate_distance_matrix(ids, matrix):
     if not np.all(np.diag(array) == 0):
         raise ValueError("Distance matrix diagonal must be exactly zero.")
     return values, np.array(array, copy=True)
+
+
+def parse_distance_label(value):
+    """Parse the integer labels emitted by cnp2cnp, preserving other text."""
+    text = str(value).strip()
+    try:
+        return int(text)
+    except ValueError:
+        return text
+
+
+def parse_labeled_distance_matrix(path):
+    """Parse and validate the PHYLIP-like matrix format accepted by CTBF."""
+    with open(path) as source:
+        size_line = source.readline().strip()
+        try:
+            size = int(size_line)
+        except ValueError as exc:
+            raise ValueError("Distance matrix is missing a valid size line.") from exc
+        if size < 0:
+            raise ValueError("Distance matrix size must be nonnegative.")
+
+        ids = []
+        rows = []
+        for row_index in range(size):
+            parts = source.readline().strip().split()
+            if len(parts) != size + 1:
+                raise ValueError(
+                    f"Distance matrix row {row_index} has "
+                    f"{max(len(parts) - 1, 0)} values; expected {size}."
+                )
+            ids.append(parse_distance_label(parts[0]))
+            rows.append(parts[1:])
+        if any(line.strip() for line in source):
+            raise ValueError("Distance matrix contains unexpected extra rows.")
+    if size == 0:
+        rows = np.zeros((0, 0), dtype=float)
+    return validate_distance_matrix(ids, rows)
+
+
+def validate_distance_label_coverage(ids, required_ids, *, allow_extra=True):
+    """Require every observed CNP label to have a distance-matrix row."""
+    matrix_ids = _validated_ids(ids)
+    observed_ids = _validated_ids(required_ids)
+    matrix_set = set(matrix_ids)
+    observed_set = set(observed_ids)
+    missing = sorted(observed_set - matrix_set, key=stable_distance_label_key)
+    extra = sorted(matrix_set - observed_set, key=stable_distance_label_key)
+    if missing or (extra and not allow_extra):
+        qualifier = "cover" if allow_extra else "match"
+        raise ValueError(
+            f"Distance-matrix ids must {qualifier} the observed CNP labels "
+            f"(missing={missing!r}, extra={extra!r})."
+        )
+    return matrix_ids
 
 
 def validate_directed_distance_matrix(ids, matrix):
@@ -277,6 +333,57 @@ def stable_row_order_digest(row_order):
     return sha256(payload).hexdigest()
 
 
+def distance_input_cache_key(records, provenance):
+    """Return a deterministic key for profiles plus distance semantics/tool identity."""
+    normalized_records = []
+    record_ids = []
+    for record in records:
+        try:
+            cell_id, cnp = record
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Distance cache records must be (id, CNP) pairs.") from exc
+        record_ids.append(cell_id)
+        normalized_records.append(
+            {
+                "id": _stable_label_record(cell_id),
+                "cnp": str(cnp),
+            }
+        )
+    _validated_ids(record_ids)
+
+    identity_fields = (
+        "metric",
+        "distance_mode",
+        "semantics_version",
+        "symmetrization",
+        "formula",
+        "construction",
+        "python_executable",
+        "cnp2cnp_executable",
+        "cnp2cnp_source_revision",
+        "source_sha256",
+        "row_order_sha256",
+        "retains_directed_counts",
+    )
+    identity = {
+        field: provenance.get(field)
+        for field in identity_fields
+        if field in provenance
+    }
+    payload = {
+        "schema_version": DISTANCE_INPUT_CACHE_KEY_SCHEMA_VERSION,
+        "tool_and_semantics": identity,
+        "ordered_profiles": normalized_records,
+    }
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(serialized).hexdigest()
+
+
 def _file_sha256(path):
     digest = sha256()
     with open(path, "rb") as source:
@@ -349,6 +456,7 @@ def cnp2cnp_provenance(
         "cnp2cnp_source_description": None,
         "source_sha256": {},
         "command_template": None,
+        "tool_identity_policy": "source_sha256_plus_git_revision",
     }
     if profile_count is not None:
         profile_count = int(profile_count)
@@ -462,15 +570,20 @@ __all__ = [
     "CNP2CNP_SEMANTICS_VERSION",
     "CNP2CNP_SYMMETRIZATION",
     "DIRECTED_DISTANCE_BUNDLE_SCHEMA_VERSION",
+    "DISTANCE_INPUT_CACHE_KEY_SCHEMA_VERSION",
     "DISTANCE_PROVENANCE_SCHEMA_VERSION",
     "DirectedDistanceBundle",
     "cnp2cnp_provenance",
     "combine_ordered_cnp2cnp_matrices",
     "directed_bundle_from_ordered_cnp2cnp_matrices",
+    "distance_input_cache_key",
     "minimum_bidirectional_distance",
     "parse_cnp2cnp_directional_distance",
+    "parse_distance_label",
+    "parse_labeled_distance_matrix",
     "stable_distance_label_key",
     "stable_row_order_digest",
     "validate_directed_distance_matrix",
+    "validate_distance_label_coverage",
     "validate_distance_matrix",
 ]

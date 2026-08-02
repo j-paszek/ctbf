@@ -3,7 +3,11 @@ import sys
 import tempfile
 import time
 import json
+import os
+from collections import deque
 from dataclasses import dataclass
+from hashlib import sha256
+from numbers import Integral
 from pathlib import Path
 from copy import deepcopy
 import numpy as np
@@ -22,10 +26,14 @@ from distance_semantics import (
     DirectedDistanceBundle,
     cnp2cnp_provenance,
     combine_ordered_cnp2cnp_matrices,
+    distance_input_cache_key,
     directed_bundle_from_ordered_cnp2cnp_matrices,
     minimum_bidirectional_distance,
     parse_cnp2cnp_directional_distance,
+    parse_distance_label,
+    parse_labeled_distance_matrix,
     stable_distance_label_key,
+    validate_distance_label_coverage,
     validate_distance_matrix as _validate_distance_matrix,
 )
 from evaluator import grf_tree
@@ -64,6 +72,262 @@ CNP2CNP_DISTANCE_CONSTRUCTIONS = frozenset({
     CNP2CNP_DISTANCE_CONSTRUCTION_FAST,
     CNP2CNP_DISTANCE_CONSTRUCTION_DIRECTED,
 })
+DEFAULT_DISTANCE_MAX_WORKERS = 4
+MAX_DISTANCE_MAX_WORKERS = 32
+CNP2CNP_EXECUTION_RECORD_SCHEMA_VERSION = "ctbf-cnp2cnp-execution-record-v1"
+CNP2CNP_EXECUTION_SUMMARY_SCHEMA_VERSION = "ctbf-cnp2cnp-execution-summary-v1"
+_CAPTURE_PREVIEW_CHARACTERS = 4096
+
+
+class Cnp2CnpExecutionError(RuntimeError):
+    """Checked cnp2cnp failure carrying a JSON-safe execution record."""
+
+    def __init__(self, message, record=None):
+        super().__init__(message, record)
+        self.record = record
+
+    def __str__(self):
+        return str(self.args[0])
+
+
+def _sha256_file(path):
+    digest = sha256()
+    with open(path, "rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _captured_stream(value):
+    text = "" if value is None else str(value)
+    encoded = text.encode("utf-8")
+    return {
+        "character_count": len(text),
+        "sha256": sha256(encoded).hexdigest(),
+        "preview": text[:_CAPTURE_PREVIEW_CHARACTERS],
+        "preview_truncated": len(text) > _CAPTURE_PREVIEW_CHARACTERS,
+    }
+
+
+def _execution_record(command, workdir, completed, *, status, output_path=None):
+    workdir = Path(workdir).resolve()
+    workdir_prefix = str(workdir)
+    normalized_command = []
+    for value in command:
+        text = str(value)
+        if text == workdir_prefix:
+            text = "<temporary-workdir>"
+        elif text.startswith(workdir_prefix + os.sep):
+            text = "<temporary-workdir>/" + Path(text).name
+        normalized_command.append(text)
+
+    record = {
+        "schema_version": CNP2CNP_EXECUTION_RECORD_SCHEMA_VERSION,
+        "status": status,
+        "returncode": getattr(completed, "returncode", None),
+        "command": normalized_command,
+        "working_directory": "isolated_temporary_directory",
+        "stdout": _captured_stream(getattr(completed, "stdout", "")),
+        "stderr": _captured_stream(getattr(completed, "stderr", "")),
+    }
+    if output_path is not None and Path(output_path).is_file():
+        record["output_sha256"] = _sha256_file(output_path)
+    return record
+
+
+def _run_checked_cnp2cnp(command, workdir, *, output_path=None):
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(workdir),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        record = _execution_record(
+            command,
+            workdir,
+            exc,
+            status="failed",
+            output_path=output_path,
+        )
+        raise Cnp2CnpExecutionError(
+            f"cnp2cnp exited with status {exc.returncode}.",
+            record,
+        ) from exc
+    except OSError as exc:
+        completed = type(
+            "LaunchFailure",
+            (),
+            {"returncode": None, "stdout": "", "stderr": str(exc)},
+        )()
+        record = _execution_record(
+            command,
+            workdir,
+            completed,
+            status="launch_failed",
+            output_path=output_path,
+        )
+        raise Cnp2CnpExecutionError("cnp2cnp could not be started.", record) from exc
+
+    if output_path is not None and not Path(output_path).is_file():
+        record = _execution_record(
+            command,
+            workdir,
+            completed,
+            status="missing_output",
+        )
+        raise Cnp2CnpExecutionError(
+            "cnp2cnp completed without creating its matrix output.",
+            record,
+        )
+    return completed, _execution_record(
+        command,
+        workdir,
+        completed,
+        status="success",
+        output_path=output_path,
+    )
+
+
+def _invalid_output_record(record, message):
+    invalid = deepcopy(record)
+    invalid["status"] = "invalid_output"
+    invalid["validation_error"] = str(message)
+    return invalid
+
+
+class _ExecutionSummaryAccumulator:
+    def __init__(self):
+        self.command_count = 0
+        self.status_counts = {}
+        self.nonempty_stderr_count = 0
+        self._digest = sha256()
+        self._first_two = []
+        self._last = None
+
+    def add(self, record):
+        serialized = json.dumps(
+            record,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if self.command_count:
+            self._digest.update(b"\n")
+        self._digest.update(serialized)
+        self.command_count += 1
+        status = record["status"]
+        self.status_counts[status] = self.status_counts.get(status, 0) + 1
+        self.nonempty_stderr_count += (
+            record["stderr"]["character_count"] > 0
+        )
+        if len(self._first_two) < 2:
+            self._first_two.append(deepcopy(record))
+        self._last = deepcopy(record)
+
+    def finish(self):
+        summary = {
+            "schema_version": CNP2CNP_EXECUTION_SUMMARY_SCHEMA_VERSION,
+            "command_count": self.command_count,
+            "status_counts": dict(self.status_counts),
+            "records_sha256": self._digest.hexdigest(),
+            "nonempty_stderr_count": self.nonempty_stderr_count,
+        }
+        if self.command_count <= 2:
+            summary["records"] = self._first_two
+        elif self.command_count:
+            summary["record_samples"] = [self._first_two[0], self._last]
+            summary["omitted_record_count"] = self.command_count - 2
+        return summary
+
+
+def _execution_summary(records):
+    accumulator = _ExecutionSummaryAccumulator()
+    for record in records:
+        accumulator.add(record)
+    return accumulator.finish()
+
+
+def _provenance_for_records(
+    runfile,
+    records,
+    *,
+    construction,
+    execution_records=(),
+    execution_summary=None,
+    **kwargs,
+):
+    provenance = cnp2cnp_provenance(
+        runfile,
+        construction=construction,
+        profile_count=len(records),
+        **kwargs,
+    )
+    provenance["input_cache_key"] = distance_input_cache_key(records, provenance)
+    provenance["external_execution"] = (
+        _execution_summary(execution_records)
+        if execution_summary is None
+        else deepcopy(execution_summary)
+    )
+    return provenance
+
+
+def resolve_distance_worker_count(max_threads, task_count):
+    """Resolve an explicit, machine-bounded worker count for distance tasks."""
+    if isinstance(task_count, bool) or not isinstance(task_count, Integral):
+        raise ValueError("task_count must be a nonnegative integer.")
+    task_count = int(task_count)
+    if task_count < 0:
+        raise ValueError("task_count must be nonnegative.")
+    if task_count == 0:
+        return 0
+    if max_threads is None:
+        requested = DEFAULT_DISTANCE_MAX_WORKERS
+    else:
+        if isinstance(max_threads, bool) or not isinstance(max_threads, Integral):
+            raise ValueError("max_threads must be a positive integer.")
+        requested = int(max_threads)
+        if requested <= 0:
+            raise ValueError("max_threads must be a positive integer.")
+        if requested > MAX_DISTANCE_MAX_WORKERS:
+            raise ValueError(
+                f"max_threads may not exceed {MAX_DISTANCE_MAX_WORKERS}."
+            )
+    return min(requested, os.cpu_count() or 1, task_count)
+
+
+def bounded_process_map(function, tasks, *, max_workers, task_count):
+    """Yield process results in input order with a bounded pending queue."""
+    worker_count = resolve_distance_worker_count(max_workers, task_count)
+    if worker_count == 0:
+        return
+    task_iterator = iter(tasks)
+    if worker_count == 1:
+        for task in task_iterator:
+            yield function(task)
+        return
+    pending = deque()
+    pending_limit = worker_count * 2
+
+    with ProcessPoolExecutor(max_workers=worker_count) as executor:
+        for _ in range(pending_limit):
+            try:
+                pending.append(executor.submit(function, next(task_iterator)))
+            except StopIteration:
+                break
+        try:
+            while pending:
+                future = pending.popleft()
+                yield future.result()
+                try:
+                    pending.append(executor.submit(function, next(task_iterator)))
+                except StopIteration:
+                    pass
+        except BaseException:
+            for future in pending:
+                future.cancel()
+            raise
 
 
 @dataclass(frozen=True)
@@ -164,6 +428,10 @@ def unique_cells_by_cell_id(cells):
     return list(unique.values())
 
 
+def _distance_records(cells):
+    return [(cell.get_id(), cell.get_cnp()) for cell in cells]
+
+
 def _trivial_distance_matrix(cells, provenance=None):
     ids = [cell.get_id() for cell in cells]
     return DistanceMatrix(
@@ -184,7 +452,14 @@ class SuppliedDistanceProvider(DistanceProvider):
     matrix: object
 
     def compute(self, cells):
-        return DistanceMatrix(ids=self.ids, matrix=self.matrix)
+        distance_matrix = DistanceMatrix(ids=self.ids, matrix=self.matrix)
+        observed_ids = [cell.get_id() for cell in unique_cells_by_cell_id(cells)]
+        validate_distance_label_coverage(
+            distance_matrix.ids,
+            observed_ids,
+            allow_extra=True,
+        )
+        return distance_matrix
 
 
 @dataclass(frozen=True)
@@ -193,19 +468,25 @@ class Cnp2CnpPairwiseDistanceProvider(DistanceProvider):
     max_threads: int | None = None
 
     def compute(self, cells):
-        provenance = cnp2cnp_provenance(
-            self.runtime_config.cnp2cnp_file,
-            construction=(
-                "trivial_singleton" if len(cells) <= 1 else "bidirectional_pair_mode"
-            ),
-            profile_count=len(cells),
-        )
+        records = _distance_records(cells)
         if len(cells) <= 1:
+            provenance = _provenance_for_records(
+                self.runtime_config.cnp2cnp_file,
+                records,
+                construction="trivial_singleton",
+            )
             return _trivial_distance_matrix(cells, provenance=provenance)
-        ids, matrix = distance_matrix_from_biopsy(
+        ids, matrix, execution_summary = distance_matrix_from_biopsy(
             cells,
             max_threads=self.max_threads,
             runtime_config=self.runtime_config,
+            return_execution_summary=True,
+        )
+        provenance = _provenance_for_records(
+            self.runtime_config.cnp2cnp_file,
+            records,
+            construction="bidirectional_pair_mode",
+            execution_summary=execution_summary,
         )
         return DistanceMatrix(ids=ids, matrix=matrix, provenance=provenance)
 
@@ -216,24 +497,19 @@ class Cnp2CnpFileDistanceProvider(DistanceProvider):
 
     def compute(self, cells):
         if len(cells) <= 1:
+            records = _distance_records(cells)
             return _trivial_distance_matrix(
                 cells,
-                provenance=cnp2cnp_provenance(
+                provenance=_provenance_for_records(
                     self.runtime_config.cnp2cnp_file,
+                    records,
                     construction="trivial_singleton",
-                    profile_count=len(cells),
                 ),
             )
-        distance_matrix = distance_matrix_from_cnp2cnp_matrix_mode(
+        return distance_matrix_from_cnp2cnp_matrix_mode(
             cells,
             runtime_config=self.runtime_config,
         )
-        _write_labeled_distance_matrix(
-            self.runtime_config.out_file_name,
-            distance_matrix.ids,
-            distance_matrix.matrix,
-        )
-        return distance_matrix
 
 
 def _ordered_cells(cells, requested_order=None):
@@ -268,26 +544,21 @@ class Cnp2CnpOrderedTriangleFastDistanceProvider(DistanceProvider):
         ordered_cells = _ordered_cells(cells, self.row_order)
         if len(ordered_cells) <= 1:
             row_order = [cell.get_id() for cell in ordered_cells]
+            records = _distance_records(ordered_cells)
             return _trivial_distance_matrix(
                 ordered_cells,
-                provenance=cnp2cnp_provenance(
+                provenance=_provenance_for_records(
                     self.runtime_config.cnp2cnp_file,
+                    records,
                     construction="trivial_singleton",
                     semantic_mode=CNP2CNP_ORDERED_TRIANGLE_FAST,
                     row_order=row_order,
-                    profile_count=len(ordered_cells),
                 ),
             )
-        distance_matrix = distance_matrix_from_cnp2cnp_ordered_triangle(
+        return distance_matrix_from_cnp2cnp_ordered_triangle(
             ordered_cells,
             runtime_config=self.runtime_config,
         )
-        _write_labeled_distance_matrix(
-            self.runtime_config.out_file_name,
-            distance_matrix.ids,
-            distance_matrix.matrix,
-        )
-        return distance_matrix
 
 
 @dataclass(frozen=True)
@@ -300,26 +571,21 @@ class Cnp2CnpDirectedFileDistanceProvider(DistanceProvider):
         ordered_cells = _ordered_cells(cells)
         if len(ordered_cells) <= 1:
             ids = [cell.get_id() for cell in ordered_cells]
+            records = _distance_records(ordered_cells)
             return DirectedDistanceBundle(
                 ids,
                 np.zeros((len(ids), len(ids)), dtype=float),
-                provenance=cnp2cnp_provenance(
+                provenance=_provenance_for_records(
                     self.runtime_config.cnp2cnp_file,
+                    records,
                     construction="trivial_singleton",
-                    profile_count=len(ordered_cells),
                     retains_directed=True,
                 ),
             )
-        bundle = directed_distance_bundle_from_cnp2cnp_matrix_mode(
+        return directed_distance_bundle_from_cnp2cnp_matrix_mode(
             ordered_cells,
             runtime_config=self.runtime_config,
         )
-        _write_labeled_distance_matrix(
-            self.runtime_config.out_file_name,
-            bundle.ids,
-            bundle.minimum_matrix,
-        )
-        return bundle
 
 
 def default_distance_provider(
@@ -381,11 +647,22 @@ def to_file(file, cells):
 
 def _compute_pair(args):
     c, d, i, j, runfile = args
-    dist = compute_symmetric_cnp2cnp_distance(c, d, runfile=runfile)
-    return i, j, dist
+    dist, execution_records = compute_symmetric_cnp2cnp_distance(
+        c,
+        d,
+        runfile=runfile,
+        return_execution_records=True,
+    )
+    return i, j, dist, execution_records
 
 
-def distance_matrix_from_biopsy(cells, max_threads=None, runtime_config=None):
+def distance_matrix_from_biopsy(
+    cells,
+    max_threads=None,
+    runtime_config=None,
+    *,
+    return_execution_summary=False,
+):
     """
     Build a distance matrix for a list of cells using cnp2cnp.
     """
@@ -394,50 +671,96 @@ def distance_matrix_from_biopsy(cells, max_threads=None, runtime_config=None):
     dist_matrix = np.zeros((n, n), dtype=float)
     ids, dist_matrix = validate_distance_matrix(ids, dist_matrix)
     if n <= 1:
-        return ids, dist_matrix
+        result = (ids, dist_matrix)
+        if return_execution_summary:
+            summary = _execution_summary([])
+            summary.update({"pair_count": 0, "effective_worker_count": 0})
+            return (*result, summary)
+        return result
     runtime_config = _coerce_runtime_config(runtime_config)
 
-    pairs = [
+    pair_count = n * (n - 1) // 2
+    worker_count = resolve_distance_worker_count(max_threads, pair_count)
+    pairs = (
         (cells[i], cells[j], i, j, runtime_config.cnp2cnp_file)
         for i in range(n)
         for j in range(i + 1, n)
-    ]
+    )
+    execution = _ExecutionSummaryAccumulator()
+    for i, j, dist, execution_records in bounded_process_map(
+        _compute_pair,
+        pairs,
+        max_workers=worker_count,
+        task_count=pair_count,
+    ):
+        dist_matrix[i, j] = dist
+        dist_matrix[j, i] = dist
+        for record in execution_records:
+            execution.add(record)
 
-    with ProcessPoolExecutor(max_workers=max_threads) as executor:
-        for i, j, dist in executor.map(_compute_pair, pairs):
-            dist_matrix[i, j] = dist
-            dist_matrix[j, i] = dist
+    ids, dist_matrix = validate_distance_matrix(ids, dist_matrix)
+    if return_execution_summary:
+        summary = execution.finish()
+        summary.update(
+            {
+                "pair_count": pair_count,
+                "effective_worker_count": worker_count,
+                "pending_task_limit": 1 if worker_count == 1 else worker_count * 2,
+            }
+        )
+        return ids, dist_matrix, summary
+    return ids, dist_matrix
 
-    return validate_distance_matrix(ids, dist_matrix)
 
-
-def use_cnp2cnp_to_compute_pairwise_distance(str_in, runfile=None, runtime_config=None):
+def use_cnp2cnp_to_compute_pairwise_distance(
+    str_in,
+    runfile=None,
+    runtime_config=None,
+    *,
+    return_execution_record=False,
+):
     if runfile is None:
         runfile = _coerce_runtime_config(runtime_config).cnp2cnp_file
-    pypath = str(sys.executable)
+    runfile = str(Path(runfile).expanduser().resolve())
 
     with tempfile.TemporaryDirectory(prefix="ctbf-cnp2cnp-pair-") as tmpdir:
         infile_path = Path(tmpdir) / "pair.fa"
         infile_path.write_text(str_in)
-        out = subprocess.run(
-            [
-                pypath,
-                runfile,
-                "-m",
-                "dist",
-                "-d",
-                CNP2CNP_DISTANCE,
-                "-i",
-                str(infile_path),
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
+        command = [
+            str(sys.executable),
+            runfile,
+            "-m",
+            "dist",
+            "-d",
+            CNP2CNP_DISTANCE,
+            "-i",
+            str(infile_path),
+        ]
+        out, execution_record = _run_checked_cnp2cnp(
+            command,
+            tmpdir,
         )
-    return parse_cnp2cnp_directional_distance(out.stdout)
+        try:
+            distance = parse_cnp2cnp_directional_distance(out.stdout)
+        except ValueError as exc:
+            invalid_record = _invalid_output_record(execution_record, exc)
+            raise Cnp2CnpExecutionError(
+                "cnp2cnp returned an invalid directional scalar.",
+                invalid_record,
+            ) from exc
+    if return_execution_record:
+        return distance, execution_record
+    return distance
 
 
-def compute_symmetric_cnp2cnp_distance(left, right, runfile=None, runtime_config=None):
+def compute_symmetric_cnp2cnp_distance(
+    left,
+    right,
+    runfile=None,
+    runtime_config=None,
+    *,
+    return_execution_records=False,
+):
     """Compute min(d(left,right), d(right,left)) with two explicit calls."""
     forward_input = (
         f">{left.get_id()}\n{left.get_cnp()}\n"
@@ -447,6 +770,24 @@ def compute_symmetric_cnp2cnp_distance(left, right, runfile=None, runtime_config
         f">{right.get_id()}\n{right.get_cnp()}\n"
         f">{left.get_id()}\n{left.get_cnp()}\n"
     )
+    if return_execution_records:
+        forward, forward_record = use_cnp2cnp_to_compute_pairwise_distance(
+            forward_input,
+            runfile=runfile,
+            runtime_config=runtime_config,
+            return_execution_record=True,
+        )
+        reverse, reverse_record = use_cnp2cnp_to_compute_pairwise_distance(
+            reverse_input,
+            runfile=runfile,
+            runtime_config=runtime_config,
+            return_execution_record=True,
+        )
+        return minimum_bidirectional_distance(forward, reverse), [
+            forward_record,
+            reverse_record,
+        ]
+
     forward = use_cnp2cnp_to_compute_pairwise_distance(
         forward_input,
         runfile=runfile,
@@ -458,35 +799,6 @@ def compute_symmetric_cnp2cnp_distance(left, right, runfile=None, runtime_config
         runtime_config=runtime_config,
     )
     return minimum_bidirectional_distance(forward, reverse)
-
-
-def _parse_distance_label(value):
-    try:
-        return int(value)
-    except ValueError:
-        return value
-
-
-def _parse_labeled_distance_matrix(path):
-    with open(path) as source:
-        try:
-            size = int(source.readline().strip())
-        except ValueError as exc:
-            raise ValueError("cnp2cnp matrix is missing a valid size line.") from exc
-        ids = []
-        rows = []
-        for row_index in range(size):
-            parts = source.readline().strip().split()
-            if len(parts) != size + 1:
-                raise ValueError(
-                    f"cnp2cnp matrix row {row_index} has {max(len(parts) - 1, 0)} "
-                    f"values; expected {size}."
-                )
-            ids.append(_parse_distance_label(parts[0]))
-            rows.append(parts[1:])
-        if any(line.strip() for line in source):
-            raise ValueError("cnp2cnp matrix contains unexpected extra rows.")
-    return validate_distance_matrix(ids, rows)
 
 
 def _write_cnp2cnp_records(path, records):
@@ -507,36 +819,33 @@ def _write_labeled_distance_matrix(path, ids, matrix):
 def _run_cnp2cnp_ordered_matrix(
     records,
     runfile,
-    *,
-    temporary_directory=None,
-    stem="ordered",
 ):
     if not records:
         raise ValueError("cnp2cnp matrix construction requires at least one profile.")
-    record_ids = [_parse_distance_label(str(record[0])) for record in records]
+    raw_record_ids = [record[0] for record in records]
+    record_ids = [parse_distance_label(value) for value in raw_record_ids]
+    for raw_id, serialized_id in zip(raw_record_ids, record_ids):
+        if stable_distance_label_key(raw_id) != stable_distance_label_key(
+            serialized_id
+        ):
+            raise ValueError(
+                "cnp2cnp input ids must round-trip through their text label "
+                f"without changing type/value; {raw_id!r} becomes "
+                f"{serialized_id!r}."
+            )
     record_ids, _ = validate_distance_matrix(
         record_ids,
         np.zeros((len(records), len(records)), dtype=float),
     )
     if len(records) == 1:
-        return record_ids, np.zeros((1, 1), dtype=float)
+        return record_ids, np.zeros((1, 1), dtype=float), None
 
-    if temporary_directory is None:
-        with tempfile.TemporaryDirectory(prefix="ctbf-cnp2cnp-matrix-") as tmpdir:
-            return _run_cnp2cnp_ordered_matrix(
-                records,
-                runfile,
-                temporary_directory=tmpdir,
-                stem=stem,
-            )
-
-    temporary_directory = Path(temporary_directory)
-    ordered_input = temporary_directory / f"{stem}.fa"
-    ordered_output = temporary_directory / f"{stem}.phy"
-    _write_cnp2cnp_records(ordered_input, records)
-
-    subprocess.run(
-        [
+    runfile = str(Path(runfile).expanduser().resolve())
+    with tempfile.TemporaryDirectory(prefix="ctbf-cnp2cnp-matrix-") as tmpdir:
+        ordered_input = Path(tmpdir) / "ordered.fa"
+        ordered_output = Path(tmpdir) / "ordered.phy"
+        _write_cnp2cnp_records(ordered_input, records)
+        command = [
             str(sys.executable),
             runfile,
             "-m",
@@ -547,12 +856,30 @@ def _run_cnp2cnp_ordered_matrix(
             str(ordered_input),
             "-o",
             str(ordered_output),
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return _parse_labeled_distance_matrix(ordered_output)
+        ]
+        _completed, execution_record = _run_checked_cnp2cnp(
+            command,
+            tmpdir,
+            output_path=ordered_output,
+        )
+        try:
+            ids, matrix = parse_labeled_distance_matrix(ordered_output)
+        except ValueError as exc:
+            invalid_record = _invalid_output_record(execution_record, exc)
+            raise Cnp2CnpExecutionError(
+                "cnp2cnp returned an invalid labeled matrix.",
+                invalid_record,
+            ) from exc
+    if ids != record_ids:
+        message = (
+            "cnp2cnp output labels/order do not match its ordered input "
+            f"(input={record_ids!r}, output={ids!r})."
+        )
+        raise Cnp2CnpExecutionError(
+            message,
+            _invalid_output_record(execution_record, message),
+        )
+    return ids, matrix, execution_record
 
 
 def _cnp2cnp_matrix_from_records(records, runfile):
@@ -560,30 +887,28 @@ def _cnp2cnp_matrix_from_records(records, runfile):
         raise ValueError("cnp2cnp matrix construction requires at least one profile.")
 
     if len(records) <= 1:
-        forward_ids, forward_matrix = _run_cnp2cnp_ordered_matrix(records, runfile)
+        forward_ids, forward_matrix, _record = _run_cnp2cnp_ordered_matrix(
+            records,
+            runfile,
+        )
         return DistanceMatrix(
             ids=forward_ids,
             matrix=forward_matrix,
-            provenance=cnp2cnp_provenance(
+            provenance=_provenance_for_records(
                 runfile,
+                records,
                 construction="trivial_singleton",
-                profile_count=len(records),
             ),
         )
 
-    with tempfile.TemporaryDirectory(prefix="ctbf-cnp2cnp-matrix-") as tmpdir:
-        forward_ids, forward_matrix = _run_cnp2cnp_ordered_matrix(
-            records,
-            runfile,
-            temporary_directory=tmpdir,
-            stem="forward",
-        )
-        reverse_ids, reverse_matrix = _run_cnp2cnp_ordered_matrix(
-            list(reversed(records)),
-            runfile,
-            temporary_directory=tmpdir,
-            stem="reverse",
-        )
+    forward_ids, forward_matrix, forward_record = _run_cnp2cnp_ordered_matrix(
+        records,
+        runfile,
+    )
+    reverse_ids, reverse_matrix, reverse_record = _run_cnp2cnp_ordered_matrix(
+        list(reversed(records)),
+        runfile,
+    )
 
     ids, matrix = combine_ordered_cnp2cnp_matrices(
         forward_ids,
@@ -594,10 +919,11 @@ def _cnp2cnp_matrix_from_records(records, runfile):
     return DistanceMatrix(
         ids=ids,
         matrix=matrix,
-        provenance=cnp2cnp_provenance(
+        provenance=_provenance_for_records(
             runfile,
+            records,
             construction="opposite_order_matrix_mode",
-            profile_count=len(records),
+            execution_records=[forward_record, reverse_record],
         ),
     )
 
@@ -605,7 +931,7 @@ def _cnp2cnp_matrix_from_records(records, runfile):
 def _cnp2cnp_ordered_triangle_from_records(records, runfile):
     if not records:
         raise ValueError("cnp2cnp matrix construction requires at least one profile.")
-    ids, matrix = _run_cnp2cnp_ordered_matrix(records, runfile)
+    ids, matrix, execution_record = _run_cnp2cnp_ordered_matrix(records, runfile)
     row_order = list(ids)
     construction = (
         "trivial_singleton" if len(records) <= 1 else "ordered_triangle_matrix_mode"
@@ -613,12 +939,15 @@ def _cnp2cnp_ordered_triangle_from_records(records, runfile):
     return DistanceMatrix(
         ids=ids,
         matrix=matrix,
-        provenance=cnp2cnp_provenance(
+        provenance=_provenance_for_records(
             runfile,
+            records,
             construction=construction,
             semantic_mode=CNP2CNP_ORDERED_TRIANGLE_FAST,
             row_order=row_order,
-            profile_count=len(records),
+            execution_records=(
+                [] if execution_record is None else [execution_record]
+            ),
         ),
     )
 
@@ -626,37 +955,37 @@ def _cnp2cnp_ordered_triangle_from_records(records, runfile):
 def _cnp2cnp_directed_bundle_from_records(records, runfile):
     if not records:
         raise ValueError("cnp2cnp matrix construction requires at least one profile.")
-    provenance = cnp2cnp_provenance(
-        runfile,
-        construction=(
-            "trivial_singleton"
-            if len(records) <= 1
-            else "opposite_order_matrix_mode_directed_bundle"
-        ),
-        profile_count=len(records),
-        retains_directed=True,
-    )
     if len(records) <= 1:
-        forward_ids, forward_matrix = _run_cnp2cnp_ordered_matrix(records, runfile)
+        forward_ids, forward_matrix, _record = _run_cnp2cnp_ordered_matrix(
+            records,
+            runfile,
+        )
         return DirectedDistanceBundle(
             forward_ids,
             forward_matrix,
-            provenance=provenance,
+            provenance=_provenance_for_records(
+                runfile,
+                records,
+                construction="trivial_singleton",
+                retains_directed=True,
+            ),
         )
 
-    with tempfile.TemporaryDirectory(prefix="ctbf-cnp2cnp-matrix-") as tmpdir:
-        forward_ids, forward_matrix = _run_cnp2cnp_ordered_matrix(
-            records,
-            runfile,
-            temporary_directory=tmpdir,
-            stem="forward",
-        )
-        reverse_ids, reverse_matrix = _run_cnp2cnp_ordered_matrix(
-            list(reversed(records)),
-            runfile,
-            temporary_directory=tmpdir,
-            stem="reverse",
-        )
+    forward_ids, forward_matrix, forward_record = _run_cnp2cnp_ordered_matrix(
+        records,
+        runfile,
+    )
+    reverse_ids, reverse_matrix, reverse_record = _run_cnp2cnp_ordered_matrix(
+        list(reversed(records)),
+        runfile,
+    )
+    provenance = _provenance_for_records(
+        runfile,
+        records,
+        construction="opposite_order_matrix_mode_directed_bundle",
+        retains_directed=True,
+        execution_records=[forward_record, reverse_record],
+    )
     return directed_bundle_from_ordered_cnp2cnp_matrices(
         forward_ids,
         forward_matrix,
@@ -788,6 +1117,29 @@ def _run_simulation(config, bedfile, seed, simulator_with_loaded_tree, time_coll
     print("Simulation finished. Generated cell evolution tree total nodes:", len(sim.tree.nodes()))
     return sim
 
+
+def _write_observed_truth_distance_matrix(sim, observations, output_path):
+    """Write a truth diagnostic only when state-to-occurrence mapping is unique."""
+    node_ids = []
+    labels = []
+    node_by_label = {}
+    for observation in observations:
+        cell_id = observation.cell_id
+        if cell_id in node_by_label:
+            raise ValueError(
+                "compare_dm is undefined when the same canonical CNP label is "
+                "sampled at multiple occurrences; truth event distance is an "
+                f"occurrence-level quantity (repeated label {cell_id!r})."
+            )
+        node_by_label[cell_id] = observation.node_id
+        node_ids.append(observation.node_id)
+        labels.append(cell_id)
+    return sim.to_distance_matrix(
+        output_path,
+        node_list=node_ids,
+        labels=labels,
+    )
+
 def _perform_biopsies(sim, biopsy_generations, biopsy_size, biopsy_size_scalable, seed,
                       compare_dm, runtime_config):
     cell_lists, all_in_one_sample = [], [[]]
@@ -806,7 +1158,11 @@ def _perform_biopsies(sim, biopsy_generations, biopsy_size, biopsy_size_scalable
             print(f"Biopsy sample from generation {b_gen} has no cells. Skipping.")
 
     if compare_dm:
-        sim.to_distance_matrix(runtime_config.sim_dm, [x.cell_id for x in all_in_one_sample[0]])
+        _write_observed_truth_distance_matrix(
+            sim,
+            all_in_one_sample[0],
+            runtime_config.sim_dm,
+        )
 
     print("Number of biopsy cells:", len(all_in_one_sample[0]))
     return cell_lists, all_in_one_sample

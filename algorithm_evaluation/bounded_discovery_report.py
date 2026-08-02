@@ -209,43 +209,12 @@ def verify_checksums(output_root):
     }
 
 
-def compare_artifact_structure(records, previous_records):
-    previous_by_key = {
-        (record["case"]["id"], record["replicate"]["replicate"]): record
-        for record in previous_records
-    }
-    counts = Counter()
-    for record in records:
-        key = (record["case"]["id"], record["replicate"]["replicate"])
-        previous = previous_by_key.get(key)
-        if previous is None:
-            counts["missing_previous_record"] += 1
-            continue
-        counts["compared_records"] += 1
-        counts["identical_replay_inputs"] += int(
-            record["replay_input"] == previous["replay_input"]
-        )
-        counts["identical_direction_audits"] += int(
-            record["direction_audit"] == previous["direction_audit"]
-        )
-        counts["identical_fast_order_audits"] += int(
-            record["fast_order_audit"] == previous["fast_order_audit"]
-        )
-        all_trees_equal = all(
-            record["arms"][arm_id]["tree"] == previous["arms"][arm_id]["tree"]
-            for arm_id in record["arms"]
-        )
-        counts["records_with_all_identical_arm_trees"] += int(all_trees_equal)
-    return dict(counts)
-
-
 def build_detailed_report(
     records,
     manifest,
     summary,
     *,
     output_root,
-    previous_records=None,
 ):
     analysis = manifest["analysis_contract"]
     arm_ids = [arm["id"] for arm in manifest["portfolio_arms"]]
@@ -291,17 +260,11 @@ def build_detailed_report(
         "frozen_gate_results": summary["promotion_gates"],
         "discovery_only": True,
     }
-    if previous_records is not None:
-        report["invalid_v1_structural_comparison"] = compare_artifact_structure(
-            records,
-            previous_records,
-        )
     return report
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
     parser.add_argument("--output-root", default=None)
-    parser.add_argument("--previous-output-root", default=None)
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
     return parser.parse_args(argv)
 
@@ -318,19 +281,11 @@ def main(argv=None):
     if missing:
         raise ValueError(f"Detailed report requires all records; missing {len(missing)}.")
     summary = _read_json(output_root / "summary.json")
-    previous_records = None
-    if args.previous_output_root:
-        previous_root = Path(args.previous_output_root)
-        previous_records = [
-            _read_json(path)
-            for path in sorted((previous_root / "records").glob("*/*.json"))
-        ]
     report = build_detailed_report(
         records,
         manifest,
         summary,
         output_root=output_root,
-        previous_records=previous_records,
     )
     _write_json_atomic(args.output, report)
     print(json.dumps(report, indent=2, sort_keys=True))
@@ -347,6 +302,5 @@ __all__ = [
     "aggregate_fast_order_audit",
     "aggregate_tree_identity",
     "build_detailed_report",
-    "compare_artifact_structure",
     "verify_checksums",
 ]

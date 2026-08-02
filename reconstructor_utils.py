@@ -4,17 +4,12 @@ import networkx as nx
 import numpy as np
 import plotly.graph_objects as go
 
+from distance_semantics import parse_labeled_distance_matrix
+
 
 def parse_distance_matrix(path):
-    with open(path) as f:
-        n = int(f.readline())
-        ids = []
-        matrix = []
-        for _ in range(n):
-            parts = f.readline().strip().split()
-            ids.append(int(parts[0]))
-            matrix.append([float(x) for x in parts[1:]])
-    return ids, np.array(matrix)
+    """Compatibility name for the shared strict distance-file parser."""
+    return parse_labeled_distance_matrix(path)
 
 
 def _cell_id_sort_key(tree, node_id):

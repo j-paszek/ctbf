@@ -122,6 +122,58 @@ def test_scalable_biopsy_keeps_empty_generation_empty():
     assert biopsy == []
 
 
+def test_compare_dm_uses_occurrence_nodes_and_canonical_labels(tmp_path):
+    tree = nx.DiGraph()
+    tree.add_node(10, genome=[2], generation=0, cell_id=10)
+    tree.add_node(20, genome=[3], generation=1, cell_id=20)
+    tree.add_node(30, genome=[4], generation=2, cell_id=30)
+    tree.add_edge(10, 20, events="duplication(pos=0, copies=1)")
+    tree.add_edge(20, 30, events="duplication(pos=0, copies=1)")
+    sim = CancerCellEvolutionSimulator.from_tree(tree)
+    observations = [
+        Genotype([3], node_id=20, generation=1, cell_id=1),
+        Genotype([4], node_id=30, generation=2, cell_id=2),
+    ]
+    output_path = tmp_path / "truth_observations.phy"
+
+    ids, matrix = ctbs._write_observed_truth_distance_matrix(
+        sim,
+        observations,
+        output_path,
+    )
+
+    assert ids == [1, 2]
+    assert np.array_equal(matrix, [[0.0, 1.0], [1.0, 0.0]])
+    assert output_path.read_text().splitlines()[1].split()[0] == "1"
+
+
+def test_compare_dm_rejects_ambiguous_repeated_cnp_occurrences(tmp_path):
+    class UnusedSimulator:
+        def to_distance_matrix(self, *args, **kwargs):
+            pytest.fail("ambiguous truth diagnostic must fail before serialization")
+
+    observations = [
+        Genotype([2], node_id=20, generation=1, cell_id=7),
+        Genotype([2], node_id=30, generation=2, cell_id=7),
+    ]
+
+    with pytest.raises(ValueError, match="same canonical CNP label"):
+        ctbs._write_observed_truth_distance_matrix(
+            UnusedSimulator(),
+            observations,
+            tmp_path / "ambiguous.phy",
+        )
+
+
+def test_simulator_distance_matrix_rejects_unknown_occurrence_node():
+    tree = nx.DiGraph()
+    tree.add_node(10, genome=[2], generation=0, cell_id=10)
+    sim = CancerCellEvolutionSimulator.from_tree(tree)
+
+    with pytest.raises(ValueError, match="unknown node ids"):
+        sim.to_distance_matrix(node_list=[999], labels=[1])
+
+
 @pytest.mark.parametrize(
     "algorithm",
     [

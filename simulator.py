@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import csv
 
 from ctbf_constraints import MIN_BIOPSY_CELLS_FROM_BIOPSY
+from distance_semantics import validate_distance_matrix
 
 """
 Represents a unique type of cell (genotype) with:
@@ -582,31 +583,51 @@ class CancerCellEvolutionSimulator:
             tree_copy.nodes[node]['genome'] = None
         return tree_copy
 
-    def to_distance_matrix(self, output_filename, node_list=None):
+    def to_distance_matrix(self, output_filename=None, node_list=None, labels=None):
         """
         Compute and save a distance matrix of tree nodes in PHYLIP format
         based on the number of evolutionary events along the path between nodes.
-        Uses cell_id for labeling.
+        Uses cell_id for labeling unless explicit biological labels are supplied.
 
         Parameters
         ----------
-        output_filename : str
-            Path to output PHYLIP-style distance matrix file.
+        output_filename : str, optional
+            Path to output PHYLIP-style distance matrix file. If omitted, only
+            the validated in-memory result is returned.
         node_list : list, optional
             If provided, only include these node IDs in the distance matrix.
+        labels : list, optional
+            Labels corresponding one-to-one with ``node_list``. This keeps
+            simulator occurrence identity (node_id) separate from canonical
+            biological CNP identity (cell_id).
         """
         undirected_tree = self.tree.to_undirected()
 
         # Filter nodes
         if node_list is not None:
-            nodes = [n for n in node_list if n in self.tree]
+            nodes = list(node_list)
+            if len(nodes) != len(set(nodes)):
+                raise ValueError("Simulator distance node_list contains duplicates.")
+            missing_nodes = [node for node in nodes if node not in self.tree]
+            if missing_nodes:
+                raise ValueError(
+                    "Simulator distance node_list contains unknown node ids: "
+                    f"{missing_nodes!r}."
+                )
         else:
             nodes = list(self.tree.nodes())
 
         n = len(nodes)
 
         # Get cell_ids for labeling
-        cell_ids = [self.tree.nodes[node]["cell_id"] for node in nodes]
+        if labels is None:
+            cell_ids = [self.tree.nodes[node]["cell_id"] for node in nodes]
+        else:
+            cell_ids = list(labels)
+            if len(cell_ids) != n:
+                raise ValueError(
+                    "Simulator distance labels must match node_list length."
+                )
 
         # Precompute all pairwise distances
         dist_matrix = np.zeros((n, n), dtype=int)
@@ -623,13 +644,16 @@ class CancerCellEvolutionSimulator:
             dist_matrix[i, j] = total_events
             dist_matrix[j, i] = total_events
 
-        # Write PHYLIP-style file
-        with open(output_filename, "w") as f:
-            f.write(f"{n}\n")  # number of nodes first
-            for i, cid in enumerate(cell_ids):
-                f.write(f"{str(cid):<10}")
-                f.write(" ".join(str(dist) for dist in dist_matrix[i]))
-                f.write("\n")
+        cell_ids, dist_matrix = validate_distance_matrix(cell_ids, dist_matrix)
+
+        if output_filename is not None:
+            with open(output_filename, "w") as f:
+                f.write(f"{n}\n")  # number of nodes first
+                for i, cid in enumerate(cell_ids):
+                    f.write(f"{str(cid):<10}")
+                    f.write(" ".join(str(dist) for dist in dist_matrix[i]))
+                    f.write("\n")
+        return cell_ids, dist_matrix
 
     def plot_tree(self, title="Population Evolution", output_file=None,
                   biopsy_lists=None, highlight_nodes=None, node_numbers=False, x_scale=1.25, y_scale=1,

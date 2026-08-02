@@ -27,7 +27,8 @@ from simulation_utils import (
     write_distance_matrix,
 )
 
-# Try to import optimized version, fall back to regular if not available
+# Select a cnp2cnp backend. The fallback is still cnp2cnp subprocess mode;
+# L1 is computed only as its separately named comparator below.
 try:
     from simulation_utils_optimized import (
         distance_matrix_from_biopsy_optimized as distance_matrix_from_biopsy_fast,

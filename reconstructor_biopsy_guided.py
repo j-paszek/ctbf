@@ -14,7 +14,10 @@ from reconstructor_temporal import (
     uses_directed_distance_input,
     uses_ordered_occurrence_input,
 )
-from distance_semantics import validate_distance_matrix
+from distance_semantics import (
+    validate_distance_label_coverage,
+    validate_distance_matrix,
+)
 
 
 def build_evolution_tree_impl(
@@ -40,6 +43,18 @@ def build_evolution_tree_impl(
         return None
 
     ids, full_dist_matrix = validate_distance_matrix(ids, full_dist_matrix)
+    observed_ids = []
+    seen_observed_ids = set()
+    for cell_list in cell_lists:
+        for cell in cell_list:
+            cell_id = cell.cell_id
+            try:
+                if cell_id not in seen_observed_ids:
+                    seen_observed_ids.add(cell_id)
+                    observed_ids.append(cell_id)
+            except TypeError as exc:
+                raise ValueError("Observed CNP labels must be hashable.") from exc
+    validate_distance_label_coverage(ids, observed_ids, allow_extra=True)
 
     if uses_ordered_occurrence_input(neighbor_joining):
         if only_nj:

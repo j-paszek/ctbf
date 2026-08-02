@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from evaluator_full import normalize_cell_label
+
 
 GRF_METRIC_NAME = "grf"
 GRF_METRIC_KIND = "similarity"
@@ -123,7 +125,7 @@ def compute_all_clusters(G, root):
 
     def dfs(n):
         counter = Counter()
-        cell_id = G.nodes[n]['cell_id']
+        cell_id = normalize_cell_label(G.nodes[n].get("cell_id"))
         if cell_id is not None:
             counter[cell_id] += 1
         for child in G.successors(n):

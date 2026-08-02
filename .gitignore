@@ -96,3 +96,4 @@ dist/
 /test/tools/omlta_distance.py
 /test/test_omlta_distance.py
 /zzzz_verify_ctbf.sh
+/zzzz_2nd_repo.sh

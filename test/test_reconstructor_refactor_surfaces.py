@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 import networkx as nx
@@ -264,9 +265,14 @@ def test_ctbs_pairwise_distance_uses_explicit_runtime_config(monkeypatch):
 
     calls = []
 
-    def fake_run(args, capture_output, text, check):
+    def fake_run(args, cwd, capture_output, text, check):
         calls.append(args)
-        return type("Completed", (), {"stdout": "7"})()
+        assert Path(cwd).name.startswith("ctbf-cnp2cnp-pair-")
+        return type(
+            "Completed",
+            (),
+            {"stdout": "7", "stderr": "", "returncode": 0},
+        )()
 
     monkeypatch.setattr(ctbs.subprocess, "run", fake_run)
     runtime_config = ctbs.default_ctbs_runtime_config()
@@ -280,12 +286,18 @@ def test_ctbs_pairwise_distance_uses_explicit_runtime_config(monkeypatch):
         run_single_test=runtime_config.run_single_test,
     )
 
-    assert ctbs.use_cnp2cnp_to_compute_pairwise_distance(
+    distance, execution_record = ctbs.use_cnp2cnp_to_compute_pairwise_distance(
         ">1\n2,2\n",
         runtime_config=runtime_config,
-    ) == 7.0
-    assert calls[0][1] == "/tmp/runtime_cnp2cnp.py"
+        return_execution_record=True,
+    )
+    assert distance == 7.0
+    assert calls[0][1] == str(Path("/tmp/runtime_cnp2cnp.py").resolve())
     assert calls[0][2:6] == ["-m", "dist", "-d", "any"]
+    assert execution_record["status"] == "success"
+    assert execution_record["returncode"] == 0
+    assert execution_record["working_directory"] == "isolated_temporary_directory"
+    assert execution_record["stdout"]["preview"] == "7"
 
 
 def test_ctbs_distance_matrix_validates_id_alignment():
@@ -330,6 +342,15 @@ def test_ctbs_supplied_distance_provider_returns_validated_matrix():
     assert np.array_equal(distance_matrix.build_tree_kwargs()["indm"], provider.matrix)
 
 
+def test_ctbs_supplied_distance_provider_rejects_missing_observed_label():
+    import ctbs
+
+    provider = ctbs.SuppliedDistanceProvider(ids=[1], matrix=np.zeros((1, 1)))
+
+    with pytest.raises(ValueError, match=r"missing=\[2\]"):
+        provider.compute([Genotype([2], 1), Genotype([3], 2)])
+
+
 def test_ctbs_file_distance_provider_uses_validated_two_order_matrix_mode(monkeypatch):
     import ctbs
 
@@ -348,12 +369,6 @@ def test_ctbs_file_distance_provider_uses_validated_two_order_matrix_mode(monkey
             )
         ),
     )
-    monkeypatch.setattr(
-        ctbs,
-        "_write_labeled_distance_matrix",
-        lambda path, ids, matrix: calls.append(("write", path, ids, matrix.copy())),
-    )
-
     provider = ctbs.Cnp2CnpFileDistanceProvider(runtime_config)
     distance_matrix = provider.compute([Genotype([2], 1), Genotype([2], 2)])
 
@@ -363,8 +378,7 @@ def test_ctbs_file_distance_provider_uses_validated_two_order_matrix_mode(monkey
         np.array([[0.0, 3.0], [3.0, 0.0]]),
     )
     assert distance_matrix.provenance == {"semantics_version": "test"}
-    assert calls[0] == ("cnp2cnp", 2, runtime_config.out_file_name)
-    assert calls[1][0:3] == ("write", runtime_config.out_file_name, [1, 2])
+    assert calls == [("cnp2cnp", 2, runtime_config.out_file_name)]
 
 
 def test_reconstructor_accepts_distance_matrix_adapter(monkeypatch):

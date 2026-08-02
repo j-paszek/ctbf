@@ -1,9 +1,6 @@
-from copy import deepcopy
-
 from algorithm_evaluation.bounded_discovery_report import (
     aggregate_fast_order_audit,
     aggregate_tree_identity,
-    compare_artifact_structure,
     verify_checksums,
 )
 
@@ -70,23 +67,11 @@ def test_fast_order_report_counts_matrix_and_tree_changes_separately():
     ] == 1
 
 
-def test_tree_identity_and_invalid_artifact_comparison_are_exact():
+def test_tree_identity_is_exact():
     current = _order_record()
     identity = aggregate_tree_identity([current])
     assert identity["directed_equals_minimum"]["equal_trees"] == 1
     assert identity["fast_equals_minimum"]["different_trees"] == 1
-
-    previous = deepcopy(current)
-    previous["arms"]["temporal_fast"]["metrics"] = {"ad_f1": 0.0}
-    current["arms"]["temporal_fast"]["metrics"] = {"ad_f1": 1.0}
-    comparison = compare_artifact_structure([current], [previous])
-    assert comparison == {
-        "compared_records": 1,
-        "identical_replay_inputs": 1,
-        "identical_direction_audits": 1,
-        "identical_fast_order_audits": 1,
-        "records_with_all_identical_arm_trees": 1,
-    }
 
 
 def test_checksum_verification_detects_unlisted_and_changed_json(tmp_path):

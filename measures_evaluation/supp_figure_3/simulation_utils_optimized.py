@@ -17,7 +17,7 @@ configured_cnp2cnp = str(configured_cnp2cnp_module_dir())
 if configured_cnp2cnp not in sys.path:
     sys.path.insert(0, configured_cnp2cnp)
 
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from ctbs import bounded_process_map, resolve_distance_worker_count
 from distance_semantics import (
     cnp2cnp_provenance,
     minimum_bidirectional_distance,
@@ -38,7 +38,10 @@ try:
     CNP2CNP_AVAILABLE = True
 except ImportError:
     CNP2CNP_AVAILABLE = False
-    print("Warning: Could not import CNPSolver from configured cnp2cnp. Falling back to subprocess method.")
+    print(
+        "Warning: Could not import CNPSolver from configured cnp2cnp; "
+        "using the checked subprocess cnp2cnp backend (never L1)."
+    )
 
 
 def compute_cnp2cnp_distance_direct(cnp1, cnp2, use_dbl=False):
@@ -145,31 +148,34 @@ def distance_matrix_from_biopsy_optimized(cells, max_threads=None, desc="Computi
     dist_matrix : np.ndarray
         Distance matrix (symmetric, n x n)
     """
+    if not CNP2CNP_AVAILABLE:
+        from ctbs import distance_matrix_from_biopsy
+
+        return distance_matrix_from_biopsy(cells, max_threads=max_threads)
+
     n = len(cells)
     ids = [c.get_id() for c in cells]
     dist_matrix = np.zeros((n, n), dtype=float)
     
-    pairs = [(cells[i], cells[j], i, j) for i in range(n) for j in range(i + 1, n)]
-    total_pairs = len(pairs)
-    
-    # Use all available CPUs if max_threads not specified
-    if max_threads is None:
-        import multiprocessing
-        max_threads = multiprocessing.cpu_count()
-    
-    with ProcessPoolExecutor(max_workers=max_threads) as executor:
-        # Submit all tasks
-        future_to_pair = {executor.submit(_compute_pair_optimized, pair): pair for pair in pairs}
-        
-        # Process results with or without progress bar
-        iterator = as_completed(future_to_pair)
-        if show_progress:
-            iterator = tqdm(iterator, total=total_pairs, desc=desc, unit="pairs")
-        
-        for future in iterator:
-            i, j, dist = future.result()
-            dist_matrix[i, j] = dist
-            dist_matrix[j, i] = dist
+    total_pairs = n * (n - 1) // 2
+    worker_count = resolve_distance_worker_count(max_threads, total_pairs)
+    pairs = (
+        (cells[i], cells[j], i, j)
+        for i in range(n)
+        for j in range(i + 1, n)
+    )
+    iterator = bounded_process_map(
+        _compute_pair_optimized,
+        pairs,
+        max_workers=worker_count,
+        task_count=total_pairs,
+    )
+    if show_progress:
+        iterator = tqdm(iterator, total=total_pairs, desc=desc, unit="pairs")
+
+    for i, j, dist in iterator:
+        dist_matrix[i, j] = dist
+        dist_matrix[j, i] = dist
     
     return validate_distance_matrix(ids, dist_matrix)
 

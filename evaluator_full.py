@@ -1,7 +1,7 @@
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Tuple, Dict, Iterable, Optional, Any
+from typing import Tuple, Dict, FrozenSet, Iterable, Optional, Any
 import networkx as nx
 
 
@@ -205,6 +205,18 @@ def normalize_cell_label(label: Any) -> Optional[str]:
     return label if label else None
 
 
+def normalize_cell_labels(labels: Optional[Iterable[Any]]) -> Optional[FrozenSet[str]]:
+    """Apply the node-label canonicalization rule to a label collection."""
+    if labels is None:
+        return None
+    values = (labels,) if isinstance(labels, str) else labels
+    return frozenset(
+        normalized_label
+        for value in values
+        if (normalized_label := normalize_cell_label(value)) is not None
+    )
+
+
 def parent_of(tree: nx.DiGraph, node: Any) -> Optional[Any]:
     """Return parent node id or None. Assumes a rooted tree with single parent."""
     # If multiple parents (shouldn't happen), pick the first deterministically.
@@ -305,7 +317,7 @@ def label_multiset_ancestor_pairs(tree_in: Any,
     Accepts either networkx.DiGraph or Newick string (will be converted).
     """
     context = ensure_tree_evaluation_context(tree_in)
-    allowed = set(restrict_labels) if restrict_labels is not None else None
+    allowed = normalize_cell_labels(restrict_labels)
 
     if not context.roots:
         return _label_multiset_ancestor_pairs_by_parent_chain(context, allowed)
@@ -370,10 +382,8 @@ def _ancestor_pair_id(ancestor_id, descendant_id):
 
 
 def _restricted_labels_cache_key(restrict_labels: Optional[Iterable[str]]):
-    if restrict_labels is None:
-        return None
-    allowed = set(restrict_labels)
-    return tuple(sorted(allowed, key=lambda value: (type(value).__name__, repr(value))))
+    allowed = normalize_cell_labels(restrict_labels)
+    return None if allowed is None else tuple(sorted(allowed))
 
 
 def unique_ancestor_pair_set(tree_in: Any,
@@ -381,7 +391,7 @@ def unique_ancestor_pair_set(tree_in: Any,
                              *,
                              label_to_id: Optional[Dict[str, int]] = None):
     context = ensure_tree_evaluation_context(tree_in)
-    allowed = set(restrict_labels) if restrict_labels is not None else None
+    allowed = normalize_cell_labels(restrict_labels)
 
     if not context.roots:
         pairs = set()
@@ -436,7 +446,7 @@ def unique_ancestor_pair_id_set(tree_in: Any,
                                 *,
                                 label_to_id: Optional[Dict[str, int]] = None):
     context = ensure_tree_evaluation_context(tree_in)
-    allowed = set(restrict_labels) if restrict_labels is not None else None
+    allowed = normalize_cell_labels(restrict_labels)
     if label_to_id is None:
         label_to_id = {}
 
@@ -490,7 +500,7 @@ def label_edge_multiset(tree_in: Any,
     Count edges by (parent_label, child_label) for named parent & child nodes.
     """
     context = ensure_tree_evaluation_context(tree_in)
-    allowed = set(restrict_labels) if restrict_labels is not None else None
+    allowed = normalize_cell_labels(restrict_labels)
     edges = Counter()
     for node, parent in context.parents.items():
         if parent is None:
@@ -597,7 +607,7 @@ def _positive_key_set(counter: Counter):
 def _set_confusion_from_sets(true_set, rec_set, restrict_labels: Optional[Iterable[str]] = None):
     T = true_set
     if restrict_labels is not None:
-        allowed = set(restrict_labels)
+        allowed = normalize_cell_labels(restrict_labels)
         T = {(x, y) for (x, y) in true_set if x in allowed and y in allowed}
     R = rec_set
     tp = len(T & R)
@@ -657,9 +667,9 @@ def evaluate_multiset_with_pruned_truth(true_tree: Any,
 
     original = evaluate_multiset(true_context, rec_context, restrict_labels=None)
     if observed_labels is not None:
-        V = set(observed_labels)
+        V = normalize_cell_labels(observed_labels)
     else:
-        V = set(rec_context.labels.values())
+        V = normalize_cell_labels(rec_context.labels.values())
 
     pruned = evaluate_multiset(true_context, rec_context, restrict_labels=V)
     pruned["labels_used"] = sorted(V)
@@ -726,7 +736,7 @@ def adf1_restricted_metrics_from_contexts(true_tree: Any,
                                           cache: Optional[RestrictedAdf1Cache] = None):
     true_context = ensure_tree_evaluation_context(true_tree)
     rec_context = ensure_tree_evaluation_context(rec_tree)
-    restricted_label_set = set(restrict_labels) if restrict_labels is not None else None
+    restricted_label_set = normalize_cell_labels(restrict_labels)
     if cache is None:
         label_to_id = {}
         true_pairs = unique_ancestor_pair_id_set(

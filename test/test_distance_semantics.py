@@ -1,4 +1,5 @@
 from pathlib import Path
+import importlib
 import sys
 
 import numpy as np
@@ -18,11 +19,14 @@ from distance_semantics import (
     DirectedDistanceBundle,
     cnp2cnp_provenance,
     combine_ordered_cnp2cnp_matrices,
+    distance_input_cache_key,
     directed_bundle_from_ordered_cnp2cnp_matrices,
     minimum_bidirectional_distance,
     parse_cnp2cnp_directional_distance,
+    parse_labeled_distance_matrix,
     stable_row_order_digest,
     validate_directed_distance_matrix,
+    validate_distance_label_coverage,
     validate_distance_matrix,
 )
 from reconstructor import build_evolution_tree
@@ -182,6 +186,69 @@ def test_distance_matrix_validation_enforces_the_publication_contract(ids, matri
         validate_distance_matrix(ids, matrix)
 
 
+def test_shared_matrix_parser_is_strict_and_preserves_text_labels(tmp_path):
+    matrix_path = tmp_path / "valid.phy"
+    matrix_path.write_text("2\nA 0 2\n2 2 0\n")
+
+    ids, matrix = parse_labeled_distance_matrix(matrix_path)
+
+    assert ids == ["A", 2]
+    assert np.array_equal(matrix, [[0.0, 2.0], [2.0, 0.0]])
+
+    matrix_path.write_text("1\nA 0\nB 0\n")
+    with pytest.raises(ValueError, match="unexpected extra rows"):
+        parse_labeled_distance_matrix(matrix_path)
+
+    matrix_path.write_text("0\n")
+    ids, matrix = parse_labeled_distance_matrix(matrix_path)
+    assert ids == []
+    assert matrix.shape == (0, 0)
+
+
+def test_distance_label_coverage_reports_missing_and_optional_extra_labels():
+    assert validate_distance_label_coverage([1, 2, 3], [1, 2]) == [1, 2, 3]
+    with pytest.raises(ValueError, match=r"missing=\[4\]"):
+        validate_distance_label_coverage([1, 2, 3], [1, 4])
+    with pytest.raises(ValueError, match=r"extra=\[3\]"):
+        validate_distance_label_coverage(
+            [1, 2, 3],
+            [1, 2],
+            allow_extra=False,
+        )
+
+
+def test_distance_input_cache_key_is_deterministic_and_order_sensitive():
+    provenance = cnp2cnp_provenance(
+        None,
+        construction="bidirectional_pair_mode",
+        profile_count=2,
+    )
+    records = [(1, "2,2"), (2, "3,2")]
+
+    key = distance_input_cache_key(records, provenance)
+
+    assert key == distance_input_cache_key(list(records), dict(provenance))
+    assert key != distance_input_cache_key(list(reversed(records)), provenance)
+    assert key != distance_input_cache_key([(1, "2,2"), (2, "4,2")], provenance)
+
+
+def test_reconstruction_rejects_missing_observed_distance_label(tmp_path):
+    matrix_path = tmp_path / "missing_observation.phy"
+    matrix_path.write_text("1\n1 0\n")
+    cells = [[
+        Genotype([2], node_id=10, cell_id=1),
+        Genotype([3], node_id=20, cell_id=2),
+    ]]
+
+    with pytest.raises(ValueError, match=r"missing=\[2\]"):
+        build_evolution_tree(
+            cells,
+            dist_matrix_path=matrix_path,
+            only_nj=True,
+            neighbor_joining=neighbor_joining_baseline,
+        )
+
+
 def test_path_backed_reconstruction_uses_the_same_validation(tmp_path):
     matrix_path = tmp_path / "duplicate_ids.phy"
     matrix_path.write_text("2\n1 0 1\n1 1 0\n")
@@ -225,6 +292,240 @@ def test_cnp2cnp_provenance_records_semantics_command_and_source_hashes(tmp_path
         "<forward-or-reverse-pair.fa>",
     ]
     assert set(provenance["source_sha256"]) == {"cnp2cnp.py", "cnpsolver.py"}
+    assert provenance["tool_identity_policy"] == "source_sha256_plus_git_revision"
+
+
+def test_checked_cnp2cnp_failure_exposes_captured_status(monkeypatch):
+    def fake_run(args, cwd, capture_output, text, check):
+        raise ctbs.subprocess.CalledProcessError(
+            9,
+            args,
+            output="partial output",
+            stderr="solver failed",
+        )
+
+    monkeypatch.setattr(ctbs.subprocess, "run", fake_run)
+
+    with pytest.raises(ctbs.Cnp2CnpExecutionError) as error:
+        ctbs.use_cnp2cnp_to_compute_pairwise_distance(
+            ">1\n2,2\n",
+            runfile="/tmp/cnp2cnp.py",
+        )
+
+    record = error.value.record
+    assert record["status"] == "failed"
+    assert record["returncode"] == 9
+    assert record["stdout"]["preview"] == "partial output"
+    assert record["stderr"]["preview"] == "solver failed"
+
+
+def test_invalid_cnp2cnp_scalar_keeps_execution_record(monkeypatch):
+    def fake_run(args, cwd, capture_output, text, check):
+        return type(
+            "Completed",
+            (),
+            {"stdout": "warning 7", "stderr": "", "returncode": 0},
+        )()
+
+    monkeypatch.setattr(ctbs.subprocess, "run", fake_run)
+
+    with pytest.raises(ctbs.Cnp2CnpExecutionError) as error:
+        ctbs.use_cnp2cnp_to_compute_pairwise_distance(
+            ">1\n2,2\n",
+            runfile="/tmp/cnp2cnp.py",
+        )
+
+    assert error.value.record["status"] == "invalid_output"
+    assert "exactly one" in error.value.record["validation_error"]
+
+
+def test_missing_cnp2cnp_matrix_output_is_typed_failure(monkeypatch):
+    def fake_run(args, cwd, capture_output, text, check):
+        return type(
+            "Completed",
+            (),
+            {"stdout": "", "stderr": "", "returncode": 0},
+        )()
+
+    monkeypatch.setattr(ctbs.subprocess, "run", fake_run)
+
+    with pytest.raises(ctbs.Cnp2CnpExecutionError) as error:
+        ctbs._run_cnp2cnp_ordered_matrix(
+            [(1, "2,2"), (2, "3,2")],
+            "/tmp/cnp2cnp.py",
+        )
+
+    assert error.value.record["status"] == "missing_output"
+
+
+def test_invalid_cnp2cnp_matrix_keeps_output_hash_and_execution_record(monkeypatch):
+    def fake_run(args, cwd, capture_output, text, check):
+        output_path = Path(args[args.index("-o") + 1])
+        output_path.write_text("2\n1 0\n")
+        return type(
+            "Completed",
+            (),
+            {"stdout": "", "stderr": "", "returncode": 0},
+        )()
+
+    monkeypatch.setattr(ctbs.subprocess, "run", fake_run)
+
+    with pytest.raises(ctbs.Cnp2CnpExecutionError) as error:
+        ctbs._run_cnp2cnp_ordered_matrix(
+            [(1, "2,2"), (2, "3,2")],
+            "/tmp/cnp2cnp.py",
+        )
+
+    assert error.value.record["status"] == "invalid_output"
+    assert len(error.value.record["output_sha256"]) == 64
+    assert "expected 2" in error.value.record["validation_error"]
+
+
+def test_distance_worker_count_is_machine_and_policy_bounded(monkeypatch):
+    monkeypatch.setattr(ctbs.os, "cpu_count", lambda: 64)
+
+    assert ctbs.resolve_distance_worker_count(None, 100) == 4
+    assert ctbs.resolve_distance_worker_count(7, 3) == 3
+    assert ctbs.resolve_distance_worker_count(None, 0) == 0
+    with pytest.raises(ValueError, match="positive integer"):
+        ctbs.resolve_distance_worker_count(2.0, 100)
+    with pytest.raises(ValueError, match="may not exceed"):
+        ctbs.resolve_distance_worker_count(33, 100)
+
+
+def test_bounded_process_map_limits_pending_tasks_and_preserves_order(monkeypatch):
+    state = {"outstanding": 0, "maximum": 0, "workers": None}
+
+    class ImmediateFuture:
+        def __init__(self, function, value):
+            self.function = function
+            self.value = value
+
+        def result(self):
+            try:
+                return self.function(self.value)
+            finally:
+                state["outstanding"] -= 1
+
+        def cancel(self):
+            state["outstanding"] -= 1
+            return True
+
+    class FakeExecutor:
+        def __init__(self, max_workers):
+            state["workers"] = max_workers
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def submit(self, function, value):
+            state["outstanding"] += 1
+            state["maximum"] = max(state["maximum"], state["outstanding"])
+            return ImmediateFuture(function, value)
+
+    monkeypatch.setattr(ctbs, "ProcessPoolExecutor", FakeExecutor)
+
+    result = list(
+        ctbs.bounded_process_map(
+            lambda value: value * 2,
+            range(10),
+            max_workers=2,
+            task_count=10,
+        )
+    )
+
+    assert result == list(range(0, 20, 2))
+    assert state == {"outstanding": 0, "maximum": 4, "workers": 2}
+
+
+def test_single_worker_distance_map_does_not_construct_nested_process_pool(monkeypatch):
+    monkeypatch.setattr(
+        ctbs,
+        "ProcessPoolExecutor",
+        lambda *args, **kwargs: pytest.fail("one worker must execute serially"),
+    )
+
+    result = list(
+        ctbs.bounded_process_map(
+            lambda value: value + 1,
+            range(3),
+            max_workers=1,
+            task_count=3,
+        )
+    )
+
+    assert result == [1, 2, 3]
+
+
+def test_pairwise_provider_records_real_bounded_execution():
+    cells = [
+        Genotype([2, 2], node_id=10, cell_id=1),
+        Genotype([3, 2], node_id=20, cell_id=2),
+        Genotype([2, 3], node_id=30, cell_id=3),
+    ]
+    provider = ctbs.Cnp2CnpPairwiseDistanceProvider(
+        ctbs.load_ctbs_runtime_config(),
+        max_threads=2,
+    )
+
+    result = provider.compute(cells)
+
+    assert result.ids == [1, 2, 3]
+    assert result.matrix.shape == (3, 3)
+    assert result.matrix[0, 1] == result.matrix[1, 0]
+    execution = result.provenance["external_execution"]
+    assert execution["command_count"] == 6
+    assert execution["status_counts"] == {"success": 6}
+    assert execution["effective_worker_count"] == 2
+    assert execution["pending_task_limit"] == 4
+    assert len(result.provenance["input_cache_key"]) == 64
+
+
+def test_cnp2cnp_matrix_mode_rejects_non_roundtripping_label_type():
+    with pytest.raises(ValueError, match="round-trip"):
+        ctbs._run_cnp2cnp_ordered_matrix(
+            [("2", "2,2"), ("A", "3,2")],
+            "/tmp/cnp2cnp.py",
+        )
+
+
+def test_figure3_missing_direct_backend_falls_back_to_cnp2cnp_not_l1(
+    monkeypatch,
+):
+    figure3_dir = PROJECT_ROOT / "measures_evaluation" / "supp_figure_3"
+    monkeypatch.syspath_prepend(str(figure3_dir))
+    module = importlib.import_module("simulation_utils_optimized")
+    monkeypatch.setattr(module, "CNP2CNP_AVAILABLE", False)
+    cells = [
+        Genotype([2, 2], node_id=10, cell_id=1),
+        Genotype([3, 2], node_id=20, cell_id=2),
+    ]
+    expected = ([1, 2], np.array([[0.0, 1.0], [1.0, 0.0]]))
+    calls = []
+
+    def fake_cnp2cnp(observations, max_threads=None):
+        calls.append((observations, max_threads))
+        return expected
+
+    monkeypatch.setattr(ctbs, "distance_matrix_from_biopsy", fake_cnp2cnp)
+    monkeypatch.setattr(
+        module,
+        "compute_naive_distance_matrix",
+        lambda *args, **kwargs: pytest.fail("L1 must remain a separate comparator"),
+    )
+
+    ids, matrix = module.distance_matrix_from_biopsy_optimized(
+        cells,
+        max_threads=1,
+        show_progress=False,
+    )
+
+    assert ids == expected[0]
+    assert np.array_equal(matrix, expected[1])
+    assert calls == [(cells, 1)]
 
 
 def test_fast_and_directed_provenance_are_separately_versioned():
@@ -262,9 +563,10 @@ def test_explicit_matrix_providers_use_one_or_two_recorded_orders(monkeypatch, t
     calls = []
     directional = {(1, 2): 7.0, (2, 1): 3.0}
 
-    def fake_run(args, capture_output, text, check):
+    def fake_run(args, cwd, capture_output, text, check):
         input_path = Path(args[args.index("-i") + 1])
         output_path = Path(args[args.index("-o") + 1])
+        assert Path(cwd) == input_path.parent == output_path.parent
         lines = [line.strip() for line in input_path.read_text().splitlines()]
         ids = [int(lines[index][1:]) for index in range(0, len(lines), 2)]
         calls.append(ids)
@@ -280,7 +582,11 @@ def test_explicit_matrix_providers_use_one_or_two_recorded_orders(monkeypatch, t
                 for cell_id, row in zip(ids, matrix)
             )
         )
-        return type("Completed", (), {"stdout": "", "stderr": ""})()
+        return type(
+            "Completed",
+            (),
+            {"stdout": "", "stderr": "", "returncode": 0},
+        )()
 
     monkeypatch.setattr(ctbs.subprocess, "run", fake_run)
     base = ctbs.default_ctbs_runtime_config()
@@ -314,6 +620,9 @@ def test_explicit_matrix_providers_use_one_or_two_recorded_orders(monkeypatch, t
     minimum = ctbs.Cnp2CnpFileDistanceProvider(runtime).compute(cells)
     assert calls == [[2, 1], [1, 2]]
     assert np.array_equal(minimum.matrix, [[0.0, 3.0], [3.0, 0.0]])
+    assert not Path(runtime.out_file_name).exists()
+    assert minimum.provenance["external_execution"]["command_count"] == 2
+    assert len(minimum.provenance["input_cache_key"]) == 64
 
 
 def test_default_provider_keeps_minimum_and_rejects_unsupported_parallel_modes():
