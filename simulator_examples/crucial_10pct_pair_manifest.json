@@ -1,0 +1,26 @@
+{
+  "experiment_role": "deterministic semantic validation; not a preregistered paper regime",
+  "simulator_semantic_version": "ctbf-cnp-state-simulator-v2",
+  "mask_selection": {
+    "eligible_row_count": 100,
+    "selected_fraction": 0.1,
+    "selection_method": "uniform_without_replacement",
+    "mask_seed": 20260803,
+    "zero_based_selected_rows": [
+      4,
+      7,
+      38,
+      40,
+      41,
+      49,
+      54,
+      61,
+      69,
+      72
+    ]
+  },
+  "shared_bed": "crucial_10pct_bed.csv",
+  "crucial_config": "crucial_10pct.json",
+  "control_config": "crucial_10pct_control.json",
+  "paired_difference": "CRUCIAL_SURVIVAL_ENABLED only"
+}

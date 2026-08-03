@@ -4,6 +4,7 @@ import numpy as np
 from collections import defaultdict
 
 from reconstructor import visualize_tree_plotly
+from simulator_events import count_edge_events
 
 
 def to_newick(tree: nx.DiGraph, prefer_weight: bool = True, use_events: bool = True, sort_children: bool = False) -> str:
@@ -22,7 +23,8 @@ def to_newick(tree: nx.DiGraph, prefer_weight: bool = True, use_events: bool = T
     prefer_weight : bool
         If True, use 'weight' when available (reconstructor trees).
     use_events : bool
-        If True, fall back to counting events from 'events' string (simulator trees).
+        If True, fall back to counting typed simulator event records (or an
+        external-tree event string).
     sort_children : bool
         If True, children are sorted by cell_id for deterministic output.
 
@@ -47,10 +49,10 @@ def to_newick(tree: nx.DiGraph, prefer_weight: bool = True, use_events: bool = T
                 s = f":{float(data['weight']):.4f}"
             except Exception:
                 s = ""
-        elif use_events and isinstance(data.get("events"), str) and data["events"].strip():
-            # Count non-empty event tokens
-            cnt = sum(1 for tok in data["events"].split(";") if tok.strip())
-            s = f":{cnt}"
+        elif use_events:
+            cnt = count_edge_events(data.get("events"))
+            if cnt:
+                s = f":{cnt}"
         bl[(u, v)] = s
 
     # --- Child getter (optional sort for determinism) ---

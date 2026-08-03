@@ -7,13 +7,13 @@
   "TRUE_TREE_ROOT_ID": 0,
   "RUN_SINGLE_TEST": {
     "seed": 2,
-    "config": "test/data/config_for_pic.json",
-    "bedfile": "test/data/pic.csv",
+    "config": "simulator_examples/default.json",
+    "bedfile": null,
     "biopsy_size_scalable": 0.5,
     "biopsy_generations": [3, 5],
     "r_dist": 4,
     "write_newick": true,
-    "visualize": true,
+    "visualize": false,
     "reconstruction_algorithm": "neighbor_joining_hybrid_anticentral_adaptive_v3"
   }
 }

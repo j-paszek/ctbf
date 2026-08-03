@@ -1,5 +1,6 @@
+import copy
 import itertools
-import json
+from collections import Counter, defaultdict
 import numpy as np
 import networkx as nx
 import plotly.graph_objects as go
@@ -7,6 +8,17 @@ import csv
 
 from ctbf_constraints import MIN_BIOPSY_CELLS_FROM_BIOPSY
 from distance_semantics import validate_distance_matrix
+from simulator_config import (
+    DiscreteDistribution,
+    load_simulator_inputs,
+)
+from simulator_events import (
+    apply_event_sequence,
+    count_edge_events,
+    event_records_to_dicts,
+    event_records_to_text,
+    propose_event_sequence,
+)
 
 """
 Represents a unique type of cell (genotype) with:
@@ -33,171 +45,124 @@ class Genotype:
     def get_cnp(self):
         return ",".join(str(cnp) for cnp in self.genome)
 
-def load_genome_from_csv(csv_path):
-    genome = []
-    event_probs = []
-    duplication_probs = []
-    duplication_multiplicities = []
-    loss_probs = []
-    single_or_multiple_probs = []
-    telomeric_instabilities = []
-    chromosomes = []
-    crucial_for_survival = []
-    fitness_weights = []  # Add fitness_weights list
 
-    with open(csv_path, 'r') as f:
-        reader = csv.DictReader(f)  # Using DictReader for easier column access by name
-        for row in reader:
-            # Split the 'Parameters' column into key-value pairs and process them
-            params = {param.split('=')[0]: float(param.split('=')[1]) for param in row['Parameters'].split(';') if
-                      '=' in param}
+class SimulationDiagnostics:
+    """Owned counters for simulator attempts, viability, and state collisions."""
 
-            # Extract chromosome, CN, and other parameters
-            if 'ChromosomeNumber' in row:
-                chromosome = int(row['ChromosomeNumber'])
-                chromosomes.append(chromosome)
+    def __init__(self):
+        self.totals = Counter()
+        self.by_generation = defaultdict(Counter)
 
-            cn = int(params.get("CN", 2))  # Default CN to 2 if not present in parameters
-            fitness_weight = float(params.get("FITNESS_WEIGHT", 0))  # Default FITNESS_WEIGHT to 0 if missing
+    def increment(self, generation, name, amount=1):
+        self.totals[name] += int(amount)
+        self.by_generation[int(generation)][name] += int(amount)
 
-            genome.append(cn)
-            event_probs.append(params.get("EVENT_PROB", None))
-            duplication_probs.append(params.get("DUPLICATION_PROB", None))
-            duplication_multiplicities.append(params.get("DUPLICATION_MULTIPLICITY", None))
-            loss_probs.append(params.get("LOSS_PROB", None))
-            single_or_multiple_probs.append(params.get("SINGLE_OR_MULTIPLE_EVENT_PROB", None))
-            telomeric_instabilities.append(params.get("TELOMERIC_INSTABILITY", None))
-            crucial_for_survival.append(params.get("CRUCIAL", 0))
-            fitness_weights.append(fitness_weight)  # Store fitness weight
-
-    if all(x == 0 for x in fitness_weights):
-        fitness_weights = None
-
-    if all(x == 0 for x in crucial_for_survival):
-        crucial_for_survival = None
-
-    return (genome, event_probs, duplication_probs, duplication_multiplicities, loss_probs,
-            single_or_multiple_probs, telomeric_instabilities, chromosomes, crucial_for_survival, fitness_weights)
+    def snapshot(self):
+        return {
+            "totals": dict(sorted(self.totals.items())),
+            "by_generation": {
+                str(generation): dict(sorted(values.items()))
+                for generation, values in sorted(self.by_generation.items())
+            },
+        }
 
 
 """
-A simulator for cell population evolution using a replicator model.
-Simulation parameters (loaded from config.json) define:
-  - genome length, initial copy number, number of generations
-  - CN event parameters (expected_events, expected_event_length, duplication_rate, position_probabilities)
-  - offspring count distribution (e.g., Poisson)
+CTBF v2 CNP-state evolution simulator.
+
+Strict JSON/BED parsing and immutable resolved inputs live in
+``simulator_config``. Pure typed CNA proposal/application mechanics live in
+``simulator_events``. This class owns population/tree state, identity, random
+streams, biopsy sampling, diagnostics, provenance, and exports.
 """
 
 
 class CancerCellEvolutionSimulator:
-    def __init__(self, config_path, genome_csv=None, seed=None):
-        with open(config_path, 'r') as f:
-            config = json.load(f)
+    _RNG_STREAM_NAMES = (
+        "offspring",
+        "event_initiation",
+        "event_class",
+        "footprint",
+        "event_type",
+        "gain_operator",
+        "magnitude_additive",
+        "magnitude_factor",
+        "event_order",
+        "wgd",
+        "biopsy",
+    )
 
-        # Seed for reproducibility
-        self.seed = seed
-        # self.chidi = {}
-        if self.seed is not None:
-            np.random.seed(self.seed)
+    def __init__(self, config_source, genome_bed=None, seed=None):
+        inputs = load_simulator_inputs(config_source, genome_bed)
+        self.config = inputs.config
+        self.genome_bins = inputs.genome_bins
+        self.semantic_version = self.config.semantic_version
+        self.config_sha256 = inputs.config_sha256
+        self.bed_sha256 = inputs.bed_sha256
+        self.config_source = inputs.config_source
+        self.bed_source = inputs.bed_source
 
-        self.model_telomeric_regions = str(config.get("MODEL_TELOMERIC_REGIONS", "False")).lower() == "true"
-        self.model_crucial_for_survival = str(config.get("MODEL_CRUCIAL_FOR_SURVIVAL", "False")).lower() == "true"
+        if isinstance(seed, bool) or (seed is not None and not isinstance(seed, (int, np.integer))):
+            raise ValueError("Simulator seed must be a non-negative integer or None.")
+        if seed is not None and int(seed) < 0:
+            raise ValueError("Simulator seed must be a non-negative integer or None.")
+        seed_sequence = np.random.SeedSequence(None if seed is None else int(seed))
+        self.seed = int(seed_sequence.entropy)
+        child_sequences = seed_sequence.spawn(len(self._RNG_STREAM_NAMES))
+        self._rng_streams = {
+            name: np.random.default_rng(child_sequence)
+            for name, child_sequence in zip(self._RNG_STREAM_NAMES, child_sequences)
+        }
+        self._rng_spawn_keys = {
+            name: list(child_sequence.spawn_key)
+            for name, child_sequence in zip(self._RNG_STREAM_NAMES, child_sequences)
+        }
 
-        if self.model_telomeric_regions:
-            if "GENERAL_TELOMERIC_INSTABILITY" not in config or "GENERAL_TELOMERIC_PERCENTAGE" not in config:
-                raise ValueError(
-                    "GENERAL_TELOMERIC_INSTABILITY and GENERAL_TELOMERIC_PERCENTAGE must be specified in the config when MODEL_TELOMERIC_REGIONS is enabled.")
-            self.general_telomeric_instability = config["GENERAL_TELOMERIC_INSTABILITY"]
-            self.general_telomeric_percentage = config["GENERAL_TELOMERIC_PERCENTAGE"]
+        self.genome_length = len(self.genome_bins)
+        self.founder_genome = np.asarray(
+            [genome_bin.initial_copy_number for genome_bin in self.genome_bins],
+            dtype=int,
+        )
+        self.chromosome = tuple(genome_bin.chromosome for genome_bin in self.genome_bins)
+        self.crucial_for_survival = tuple(genome_bin.crucial for genome_bin in self.genome_bins)
+        self.num_generations = self.config.number_of_generations
+        self.offspring_model = self.config.offspring_model
+        self.offspring_param = self.config.offspring_parameter
+        self.baseline_descendant_attempts = self.config.baseline_descendant_attempts
+        self.representation_type = self.config.representation_type
+        self.model_telomeric_regions = self.config.telomeric_instability_enabled
+        self.model_crucial_for_survival = self.config.crucial_survival_enabled
+        self.diagnostics = SimulationDiagnostics()
 
-        # generate or load founder_genome
-        founder_genome = []
-        if genome_csv is not None:
-            (self.genome, self.event_probs, self.duplication_probs,
-             self.duplication_multiplicities, self.loss_probs,
-             self.single_or_multiple_probs, self.telomeric_instabilities,
-             chromosome, crucial_for_survival, fitness_weights) = load_genome_from_csv(genome_csv)
-            if chromosome:
-                self.chromosome = chromosome
-            if crucial_for_survival:
-                self.crucial_for_survival = crucial_for_survival
-            if fitness_weights:
-                self.fitness_weights = fitness_weights
-            self.genome_length = len(self.genome)
-            founder_genome = np.array(self.genome)
-        else:
-            self.genome_length = config["genome_length"]
-            self.initial_copies = config["initial_copies"]
-            founder_genome = np.full(self.genome_length, self.initial_copies)
-
-        self.founder_genome = founder_genome
-
-        if self.model_telomeric_regions:
-            self.telomeric_instability_factor = np.zeros(self.genome_length)
-
-            if not hasattr(self, 'chromosome') or self.chromosome is None:
-                telomeric_size = int(len(self.founder_genome) * self.general_telomeric_percentage)
-                # Only apply the instability if telomeric_size is greater than 0
-                if telomeric_size > 0:
-                    # Assign the general telomeric instability value to the first and last portions of this chromosome
-                    self.telomeric_instability_factor[:telomeric_size] = self.general_telomeric_instability
-                    self.telomeric_instability_factor[-telomeric_size:] = self.general_telomeric_instability
-
-                # Overwrite with specific values from the CSV if provided
-                for i in range(len(self.founder_genome)):
-                    if self._get_ith_telomeric_instability(i) is not None:
-                        self.telomeric_instability_factor[i] = self.telomeric_instabilities[i]
-
-            else:
-                # Iterate over distinct chromosomes
-                unique_chromosomes = np.unique(self.chromosome)  # Get unique chromosome numbers
-                for chrom in unique_chromosomes:
-                    # Get the indices of the positions corresponding to this chromosome
-                    chrom_indices = np.where(self.chromosome == chrom)[0]
-                    chrom_length = len(chrom_indices)
-
-                    # Calculate the telomeric size for this chromosome
-                    telomeric_size = int(chrom_length * self.general_telomeric_percentage)
-
-                    # Only apply the instability if telomeric_size is greater than 0
-                    if telomeric_size > 0:
-                        # Assign the general telomeric instability value to the first and last portions of this chromosome
-                        self.telomeric_instability_factor[
-                            chrom_indices[:telomeric_size]] = self.general_telomeric_instability
-                        self.telomeric_instability_factor[
-                            chrom_indices[-telomeric_size:]] = self.general_telomeric_instability
-
-                    # Overwrite with specific values from the CSV if provided
-                    for i in chrom_indices:
-                        if self.telomeric_instabilities[i] is not None:
-                            self.telomeric_instability_factor[i] = self.telomeric_instabilities[i]
-
-        # Simulation parameters
-        self.num_generations = config["NUMBER_OF_GENERATIONS"]
-        self.offspring_model = config["OFFSPRING_MODEL"]
-        self.offspring_param = config["OFFSPRING_PARAMETER"]
-
-        self.event_prob = config["GENERAL_EVENT_PROB"]
-        self.duplication_prob = config["GENERAL_DUPLICATION_PROB"]
-        self.duplication_multiplicity = config["GENERAL_DUPLICATION_MULTIPLICITY"]
-        self.loss_prob = config["GENERAL_LOSS_PROB"]
-        self.single_or_multiple_event_prob = config["GENERAL_SINGLE_OR_MULTIPLE_EVENT_PROB"]
-
-        self.representation_type = config.get("REPRESENTATION_TYPE", "representative")
-        if self.representation_type not in {"full", "representative"}:
-            raise ValueError("REPRESENTATION_TYPE must be 'full' or 'representative'")
-
-        # Evolutionary tree initialization
         self.tree = nx.DiGraph()
-        # Population initialization: start with a single genotype (founder)
-        founder = Genotype(genome=founder_genome, node_id=0, generation=0)
-        # node_id -> Genotype
+        founder = Genotype(genome=self.founder_genome, node_id=0, generation=0, cell_id=0)
         self.genotypes = {0: founder}
-
-        # Add founder node to the graph
-        self.tree.add_node(0, genome=founder_genome.tolist(), generation=0, cell_id=0)
+        self.tree.add_node(
+            0,
+            genome=self.founder_genome.tolist(),
+            generation=0,
+            cell_id=0,
+        )
+        self.tree.graph["simulator_provenance"] = self.provenance()
         self.node_counter = 1
         self._canonical_cell_id_by_genome = None
+
+    def provenance(self):
+        first_generator = next(iter(self._rng_streams.values()))
+        return {
+            "simulator_semantic_version": self.semantic_version,
+            "seed": self.seed,
+            "numpy_version": np.__version__,
+            "bit_generator": type(first_generator.bit_generator).__name__,
+            "rng_stream_spawn_keys": dict(self._rng_spawn_keys),
+            "config_sha256": self.config_sha256,
+            "bed_sha256": self.bed_sha256,
+            "config_source": self.config_source,
+            "bed_source": self.bed_source,
+        }
+
+    def diagnostics_snapshot(self):
+        return self.diagnostics.snapshot()
 
     @classmethod
     def from_tree(cls, input_tree: nx.DiGraph):
@@ -214,16 +179,27 @@ class CancerCellEvolutionSimulator:
         -------
         CancerCellEvolutionSimulator
         """
-        # Create instance without running __init__
         self = cls.__new__(cls)
-
-        # Directly assign the tree
-        self.tree = input_tree
+        # NetworkX ``copy`` is shallow for nested node/edge attributes. The
+        # simulator owns its tree, including mutable genome and event records.
+        self.tree = copy.deepcopy(input_tree)
         self.genotypes = {}
         self._canonical_cell_id_by_genome = None
+        stored_provenance = self.tree.graph.get("simulator_provenance", {})
+        self.semantic_version = stored_provenance.get(
+            "simulator_semantic_version", "external-tree"
+        )
+        self.seed = None
+        self._rng_streams = {"biopsy": np.random.default_rng()}
+        self._rng_spawn_keys = {}
+        self.config_sha256 = stored_provenance.get("config_sha256")
+        self.bed_sha256 = stored_provenance.get("bed_sha256")
+        self.config_source = stored_provenance.get("config_source")
+        self.bed_source = stored_provenance.get("bed_source")
+        self.diagnostics = SimulationDiagnostics()
 
         # Fill genotypes dict from nodes
-        for node_id, data in input_tree.nodes(data=True):
+        for node_id, data in self.tree.nodes(data=True):
             genome = np.array(data["genome"])  # genome as numpy array
             generation = data.get("generation")
             cell_id = data.get("cell_id", node_id)
@@ -235,8 +211,7 @@ class CancerCellEvolutionSimulator:
                 cell_id=cell_id,
             )
 
-        # Keep a counter for new nodes if needed later
-        self.node_counter = max(self.genotypes.keys()) + 1
+        self.node_counter = max(self.genotypes.keys(), default=-1) + 1
 
         return self
 
@@ -304,172 +279,110 @@ class CancerCellEvolutionSimulator:
         return tree_copy
 
     def get_parameters_csv(self, file):
-        """Outputs a CSV file containing CN values, event probabilities, and crucial_for_survival status."""
-        with open(file, mode='w', newline='') as csvfile:
+        """Export the resolved immutable v2 locus parameters as a wide CSV."""
+        with open(file, mode="w", newline="") as csvfile:
             writer = csv.writer(csvfile)
-            headers = ["CN", "Chromosome", "GENERAL_EVENT_PROB", "GENERAL_DUPLICATION_PROB",
-                       "GENERAL_DUPLICATION_MULTIPLICITY", "GENERAL_LOSS_PROB", "GENERAL_SINGLE_OR_MULTIPLE_EVENT_PROB",
-                       "CRUCIAL_FOR_SURVIVAL", "FITNESS_WEIGHT"]
-            if self.model_telomeric_regions:
-                headers.append("TELOMERIC_INSTABILITY")
-            writer.writerow(headers)
-            for i, cn in enumerate(self.founder_genome):
-                row = [cn, self._get_ith_chromosome(i), self._get_ith_event_probability(i),
-                       self._get_ith_duplication_probability(i), self._get_ith_duplication_multiplicity(i),
-                       self._get_ith_loss_probability(i), self._get_ith_single_or_multiple_probability(i),
-                       self._get_ith_crucial(i), self._get_ith_fitness(i)]  # Include FITNESS_WEIGHT
-                if self.model_telomeric_regions:
-                    row.append(self.telomeric_instability_factor[i])
-                writer.writerow(row)
+            writer.writerow(
+                [
+                    "ChromosomeNumber",
+                    "Start",
+                    "End",
+                    "CN",
+                    "CNA_EVENT_PROBABILITY",
+                    "GAIN_GIVEN_CNA_PROBABILITY",
+                    "INTERVAL_CNA_PROBABILITY",
+                    "INTERVAL_GAIN_OPERATOR_PROBABILITIES",
+                    "ADDITIVE_GAIN_LAMBDA",
+                    "MULTIPLICATIVE_FACTOR_PROBABILITIES",
+                    "TELOMERIC_INSTABILITY",
+                    "CRUCIAL",
+                ]
+            )
+            for genome_bin in self.genome_bins:
+                writer.writerow(
+                    [
+                        genome_bin.chromosome,
+                        genome_bin.start,
+                        genome_bin.end,
+                        genome_bin.initial_copy_number,
+                        genome_bin.cna_event_probability,
+                        genome_bin.gain_given_cna_probability,
+                        genome_bin.interval_cna_probability,
+                        self._distribution_text(genome_bin.interval_gain_operators),
+                        genome_bin.additive_gain_lambda,
+                        self._distribution_text(genome_bin.multiplicative_factors),
+                        genome_bin.telomeric_instability,
+                        int(genome_bin.crucial),
+                    ]
+                )
+
+    @staticmethod
+    def _distribution_text(distribution: DiscreteDistribution):
+        return ",".join(
+            f"{value}:{probability:g}"
+            for value, probability in zip(
+                distribution.values,
+                distribution.probabilities,
+            )
+        )
 
     def create_bed_csv(self, file):
-        with (open(file, mode='w', newline='') as csvfile):
+        """Export a strict BED-like v2 input with all resolved row parameters."""
+        with open(file, mode="w", newline="") as csvfile:
             writer = csv.writer(csvfile)
-            headers = ["ChromosomeNumber","Start","End","Parameters"]
-            writer.writerow(headers)
-            for i, cn in enumerate(self.founder_genome):
-                c = "CN="+str(cn)
-                row = [1,0,0,c]
-                writer.writerow(row)
+            writer.writerow(["ChromosomeNumber", "Start", "End", "Parameters"])
+            for genome_bin in self.genome_bins:
+                parameters = ";".join(
+                    [
+                        f"CN={genome_bin.initial_copy_number}",
+                        f"CNA_EVENT_PROBABILITY={genome_bin.cna_event_probability:g}",
+                        f"GAIN_GIVEN_CNA_PROBABILITY={genome_bin.gain_given_cna_probability:g}",
+                        f"INTERVAL_CNA_PROBABILITY={genome_bin.interval_cna_probability:g}",
+                        "INTERVAL_GAIN_OPERATOR_PROBABILITIES="
+                        f"{self._distribution_text(genome_bin.interval_gain_operators)}",
+                        f"ADDITIVE_GAIN_LAMBDA={genome_bin.additive_gain_lambda:g}",
+                        "MULTIPLICATIVE_FACTOR_PROBABILITIES="
+                        f"{self._distribution_text(genome_bin.multiplicative_factors)}",
+                        f"CRUCIAL={int(genome_bin.crucial)}",
+                    ]
+                    + (
+                        [f"TELOMERIC_INSTABILITY={genome_bin.telomeric_instability:g}"]
+                        if self.model_telomeric_regions
+                        else []
+                    )
+                )
+                writer.writerow(
+                    [
+                        genome_bin.chromosome,
+                        genome_bin.start,
+                        genome_bin.end,
+                        parameters,
+                    ]
+                )
 
-    def _sample_offspring_count(self, genotype):
+    def _sample_additional_offspring_count(self):
+        rng = self._rng_streams["offspring"]
         if self.offspring_model == "constant":
             return int(self.offspring_param)
-        elif self.offspring_model == "uniform_range":
-            min_val, max_val = map(int, self.offspring_param.split(","))
-            return np.random.randint(min_val, max_val + 1)
-        elif self.offspring_model == "poisson":
-            return np.random.poisson(float(self.offspring_param))
-        elif self.offspring_model == "fitness":
-            return np.random.poisson(self._fitness_poisson_mean(genotype, MAX_N=self.offspring_param))
-            # total_fitness = self._compute_fitness(genotype)
-            # # print(total_fitness)
-            # exp_children = total_fitness + 2
-            # if exp_children < 0:
-            #     exp_children = 0
-            # if exp_children > 4:
-            #     exp_children = 4
-            # return np.random.poisson(exp_children)
-        else:
-            raise ValueError("Unsupported OFFSPRING_MODEL.")
-
-    def _fitness_poisson_mean(self, genotype, alpha=1.0, MAX_N=4.0):
-        """
-        Computes the expected number of offspring (Poisson mean)
-        based on a logistic transform of the dot-product of (cnp - 1) and weights.
-
-        Parameters:
-        -----------
-        cnp     : array-like of copy numbers, shape (n,)
-        importance_weights : array-like of fitness impacts, shape (n,)
-        alpha   : float, shape parameter controlling how sharply
-                  fitness rises or falls around baseline
-        MAX_N   : What is the maximum number of offspring?
-        Returns:
-        --------
-        float    : The mean (lambda) of the Poisson distribution
-                   for the expected number of offspring.
-        """
-        # Convert inputs to arrays, just to be sure
-        cnp = np.array(genotype.genome)
-        importance_weights = np.zeros(len(genotype.genome))
-        for i in range(len(genotype.genome)):
-            importance_weights[i] = self._get_ith_fitness(i)
-
-        # Score S = sum_i w_i * (cn_i - 1)
-        score = np.sum(importance_weights * (cnp - 1))
-        # Logistic transform bounding output to (0, 4)
-        # This ensures baseline genotype (cnp = 1,...,1) => score=0 => output=2
-        numerator = MAX_N * np.exp(alpha * score)
-        denominator = 1.0 + np.exp(alpha * score)
-        lam = numerator / denominator
-
-        return lam
-
-    def _compute_fitness(self, genotype):
-        # Sum FITNESS_WEIGHT * CN for each position
-        suma = 0
-        for i in range(self.genome_length):
-            suma += self._get_ith_fitness(i) * genotype.genome[i]
-        return suma / self.genome_length
-
-    def _get_ith_fitness(self, i):
-        return (self.fitness_weights[i]
-                if hasattr(self, 'fitness_weights') and self.fitness_weights and
-                   self.fitness_weights[i] is not None
-                else 0)
-
-    def _get_ith_crucial(self, i):
-        return (self.crucial_for_survival[i]
-                if hasattr(self, 'crucial_for_survival') and self.crucial_for_survival and self.crucial_for_survival[
-            i] is not None
-                else 0)
-
-    def _get_ith_telomeric_instability(self, i):
-        return (self.telomeric_instabilities[i]
-                if hasattr(self, 'telomeric_instabilities') and self.telomeric_instabilities and
-                   self.telomeric_instabilities[i] is not None
-                else None)
-
-    def _get_ith_chromosome(self, i):
-        return (self.chromosome[i]
-                if hasattr(self, 'chromosome') and self.chromosome and self.chromosome[i] is not None
-                else 1)
-
-    def _get_ith_event_probability(self, i):
-        return (self.event_probs[i]
-                if hasattr(self, 'event_probs') and self.event_probs and self.event_probs[i] is not None
-                else self.event_prob)
-
-    def _get_ith_duplication_probability(self, i):
-        return (self.duplication_probs[i]
-                if hasattr(self, 'duplication_probs') and self.duplication_probs and self.duplication_probs[
-            i] is not None
-                else self.duplication_prob)
-
-    def _get_ith_duplication_multiplicity(self, i):
-        return (self.duplication_multiplicities[i]
-                if hasattr(self, 'duplication_multiplicities') and self.duplication_multiplicities and
-                   self.duplication_multiplicities[i] is not None
-                else self.duplication_multiplicity)
-
-    def _get_ith_loss_probability(self, i):
-        return (self.loss_probs[i]
-                if hasattr(self, 'loss_probs') and self.loss_probs and self.loss_probs[i] is not None
-                else self.loss_prob)
-
-    def _get_ith_single_or_multiple_probability(self, i):
-        return (self.single_or_multiple_probs[i]
-                if hasattr(self, 'single_or_multiple_probs') and self.single_or_multiple_probs and
-                   self.single_or_multiple_probs[i] is not None
-                else self.single_or_multiple_event_prob)
+        if self.offspring_model == "uniform_range":
+            minimum, maximum = self.offspring_param
+            return int(rng.integers(minimum, maximum + 1))
+        if self.offspring_model == "poisson":
+            return int(rng.poisson(float(self.offspring_param)))
+        raise ValueError("Unsupported CTBF v2 OFFSPRING_MODEL.")
 
     def _apply_copy_number_events(self, genome):
-        events_summary = []
-        for i in range(self.genome_length):
-            event_prob = self._get_ith_event_probability(i)
-            if self.model_telomeric_regions:
-                event_prob = min(1, event_prob + self.telomeric_instability_factor[i])
-
-            # event_prob = self.event_probs[i] if self.event_probs[i] is not None else self.event_prob
-            if np.random.rand() < event_prob:
-                is_multiple_event = np.random.rand() < self.single_or_multiple_event_prob
-                if is_multiple_event:
-                    j = np.random.randint(i, self.genome_length)
-                else:
-                    j = i
-
-                event_type = "duplication" if np.random.rand() < self.duplication_prob else "loss"
-                num_copies = np.random.poisson(self.duplication_multiplicity) + 1 if event_type == "duplication" else -1
-
-                for pos in range(i, j + 1):
-                    if genome[pos] > 0: # IMPORTANT genes cannot appear from nothing
-                        genome[pos] = max(0, genome[pos] + num_copies)
-                    if self.model_crucial_for_survival and self._get_ith_crucial(pos) and genome[pos] == 0:
-                        return None, None  # Prevent genome generation if crucial CN drops to 0
-                pos_label = f"{i}-{j}" if i != j else f"{i}"
-                events_summary.append(f"{event_type}(pos={pos_label}, copies={num_copies})")
-        return genome, ";".join(events_summary)
+        proposals = propose_event_sequence(
+            self.genome_bins,
+            wgd_probability=self.config.wgd_probability,
+            rng_streams=self._rng_streams,
+        )
+        return apply_event_sequence(
+            genome,
+            proposals,
+            self.genome_bins,
+            crucial_survival_enabled=self.model_crucial_for_survival,
+        )
 
     """
     Run the simulation for a specified number of generations.
@@ -480,6 +393,7 @@ class CancerCellEvolutionSimulator:
     def run_simulation(self):
         for gen in range(1, self.num_generations + 1):
             self._spawn_children(current_generation=gen)
+        self.tree.graph["simulation_diagnostics"] = self.diagnostics_snapshot()
 
     """
     For each genotype, draw the number of offspring based on Poisson distribution.
@@ -488,62 +402,108 @@ class CancerCellEvolutionSimulator:
 
     def _spawn_children(self, current_generation):
         new_genotypes = []
-        parent_genotypes = [g for g in self.genotypes.values() if g.generation == current_generation - 1]
-        seen_genomes = set()
+        parent_genotypes = sorted(
+            (
+                genotype
+                for genotype in self.genotypes.values()
+                if genotype.generation == current_generation - 1
+            ),
+            key=lambda genotype: genotype.node_id,
+        )
+        seen_genomes = {}
         for genotype in parent_genotypes:
-            # Randomly generate the number of offspring for this genotype
-            num_children = self._sample_offspring_count(genotype)
-            # if num_children in self.chidi:
-            #     self.chidi[num_children] += 1
-            # else:
-            #     self.chidi[num_children] = 1
-            for _ in range(num_children + 1):
-                # Create a copy of the parent's genome
-                child_genome, event_summary = self._apply_copy_number_events(genotype.genome.copy())
+            additional_children = self._sample_additional_offspring_count()
+            number_of_attempts = self.baseline_descendant_attempts + additional_children
+            for _ in range(number_of_attempts):
+                self.diagnostics.increment(current_generation, "attempted_children")
+                event_result = self._apply_copy_number_events(genotype.genome)
+                attempted_records = event_result.attempted_records
+                self.diagnostics.increment(
+                    current_generation,
+                    "attempted_event_records",
+                    len(attempted_records),
+                )
+                self.diagnostics.increment(
+                    current_generation,
+                    "effective_event_applications",
+                    sum(record.effective for record in attempted_records),
+                )
+                self.diagnostics.increment(
+                    current_generation,
+                    "ineffective_event_applications",
+                    sum(not record.effective for record in attempted_records),
+                )
+                self.diagnostics.increment(
+                    current_generation,
+                    "sampled_wgd_events",
+                    sum(
+                        record.event_class == "whole_genome_doubling"
+                        for record in attempted_records
+                    ),
+                )
 
-                # Ignore the child if crucial CN is lost (genome is None)
-                if child_genome is None:
+                if event_result.rejected_by_crucial_survival:
+                    self.diagnostics.increment(current_generation, "crucial_rejections")
                     continue
 
+                child_genome = event_result.genome
+                if child_genome is None:  # pragma: no cover - result invariant
+                    raise RuntimeError("Non-rejected event application returned no genome.")
+                self.diagnostics.increment(current_generation, "viable_children")
+                if event_result.net_zero_sequence:
+                    self.diagnostics.increment(current_generation, "net_zero_sequences")
+
                 if self.representation_type == "representative":
-                    genome_tuple = tuple(child_genome)
+                    genome_tuple = self._genome_key(child_genome)
                     if genome_tuple in seen_genomes:
+                        self.diagnostics.increment(
+                            current_generation,
+                            "representative_collisions",
+                        )
+                        if seen_genomes[genome_tuple] != genotype.node_id:
+                            self.diagnostics.increment(
+                                current_generation,
+                                "cross_parent_representative_collisions",
+                            )
                         continue
-                    seen_genomes.add(genome_tuple)
-                # Create a new genotype
-                if event_summary:
-                    child_cell_id = self.node_counter
-                else:
-                    child_cell_id = genotype.cell_id
+                    seen_genomes[genome_tuple] = genotype.node_id
+
+                edge_records = event_result.edge_records
+                event_dicts = event_records_to_dicts(edge_records)
+                event_summary = event_records_to_text(edge_records)
+                child_cell_id = self.node_counter if edge_records else genotype.cell_id
                 child = Genotype(
                     genome=child_genome,
                     node_id=self.node_counter,
                     generation=current_generation,
-                    cell_id=child_cell_id
+                    cell_id=child_cell_id,
                 )
-                # Store information about the parent
-                new_genotypes.append((genotype.node_id, child, event_summary))
-                # Add a node to the tree
+                new_genotypes.append((genotype.node_id, child))
                 self.tree.add_node(
                     self.node_counter,
                     genome=child_genome.tolist(),
                     generation=current_generation,
-                    cell_id=child_cell_id
+                    cell_id=child_cell_id,
                 )
-                # Create edge from parent -> child with event annotation
                 self.tree.add_edge(
                     genotype.node_id,
                     self.node_counter,
-                    events=event_summary
+                    events=event_dicts,
+                    events_text=event_summary,
+                    event_count=len(event_dicts),
+                )
+                self.diagnostics.increment(current_generation, "retained_children")
+                self.diagnostics.increment(
+                    current_generation,
+                    "edge_event_records",
+                    len(event_dicts),
                 )
                 self.node_counter += 1
 
-        # Add newly created genotypes to the dictionary
-        for parent_id, child, event_summary in new_genotypes:
+        for _, child in new_genotypes:
             self.genotypes[child.node_id] = child
         if new_genotypes:
             self._canonical_cell_id_by_genome = None
-
 
     def perform_biopsy(self, generation, biopsy_size=0, biopsy_size_scalable=None, seed=None):
         """
@@ -569,10 +529,17 @@ class CancerCellEvolutionSimulator:
             # If there are fewer genotypes than the biopsy size, return all available.
             biopsy_size = min(biopsy_size, len(genotypes_from_generation))
 
-        if seed is not None:
-            np.random.seed(seed)
-        # Randomly sample unique genotypes
-        sampled_genotypes = np.random.choice(genotypes_from_generation, size=biopsy_size, replace=False)
+        if seed is None:
+            rng = self._rng_streams["biopsy"]
+        else:
+            if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)) or int(seed) < 0:
+                raise ValueError("Biopsy seed must be a non-negative integer or None.")
+            rng = np.random.default_rng(int(seed))
+        sampled_genotypes = rng.choice(
+            genotypes_from_generation,
+            size=biopsy_size,
+            replace=False,
+        )
 
         return self.canonicalize_biopsy_genotypes(list(sampled_genotypes))
 
@@ -638,8 +605,8 @@ class CancerCellEvolutionSimulator:
             total_events = 0
             for u, v in zip(path[:-1], path[1:]):
                 edge_data = self.tree.get_edge_data(u, v) or self.tree.get_edge_data(v, u)
-                if edge_data is not None and edge_data.get("events"):
-                    total_events += len(edge_data["events"].split(";"))
+                if edge_data is not None:
+                    total_events += count_edge_events(edge_data.get("events"))
 
             dist_matrix[i, j] = total_events
             dist_matrix[j, i] = total_events

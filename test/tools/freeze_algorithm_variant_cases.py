@@ -41,6 +41,7 @@ from evaluator import (  # noqa: E402
 from evaluator_full import ancestors_unique_restricted_metrics, tree_evaluation_context  # noqa: E402
 from reconstructor import build_evolution_tree  # noqa: E402
 from simulator import CancerCellEvolutionSimulator, Genotype  # noqa: E402
+from simulator_events import count_edge_events  # noqa: E402
 
 
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "test" / "data" / "algorithm_cases"
@@ -364,9 +365,17 @@ def true_tree_distance_matrix(tree, node_ids):
             for u, v in zip(path[:-1], path[1:]):
                 edge_data = tree.get_edge_data(u, v) or tree.get_edge_data(v, u) or {}
                 events = edge_data.get("events")
-                if isinstance(events, str) and events.strip():
-                    distance += sum(1 for event in events.split(";") if event.strip())
+                if isinstance(events, (list, tuple)):
+                    # CTBF v2: an empty typed list is a zero-event persistence
+                    # edge and must not fall through to a unit edge weight.
+                    distance += count_edge_events(events)
+                elif isinstance(events, str) and events.strip():
+                    # Historical frozen cases used nonempty semicolon strings.
+                    distance += count_edge_events(events)
                 else:
+                    # Preserve only the frozen-case helper's historical
+                    # unlabeled/empty-string fallback; this is not v2 truth
+                    # semantics and is never used by simulator.to_distance_matrix.
                     distance += float(edge_data.get("weight", 1))
             dist_matrix[i, j] = distance
             dist_matrix[j, i] = distance

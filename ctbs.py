@@ -40,6 +40,10 @@ from evaluator import grf_tree
 from evaluator_full import evaluate_4, named_label
 from ctbs_utils import to_newick, vizualize_nx_tree, get_biopsy_nodes_ids
 
+DEFAULT_SIMULATOR_CONFIG_PATH = (
+    Path(__file__).resolve().parent / "simulator_examples" / "default.json"
+)
+
 DEFAULT_CTBS_CONFIG = {
     "IN_FILE_NAME": "biopsy.txt",
     "OUT_FILE_NAME": "cnp_distance_matrix.txt",
@@ -49,13 +53,13 @@ DEFAULT_CTBS_CONFIG = {
     "TRUE_TREE_ROOT_ID": 0,
     "RUN_SINGLE_TEST": {
         "seed": 2,
-        "config": "test/data/config_for_pic.json",
-        "bedfile": "test/data/pic.csv",
+        "config": str(DEFAULT_SIMULATOR_CONFIG_PATH),
+        "bedfile": None,
         "biopsy_size_scalable": 0.5,
         "biopsy_generations": [3, 5],
         "r_dist": 4,
         "write_newick": True,
-        "visualize": True,
+        "visualize": False,
         "reconstruction_algorithm": "neighbor_joining_hybrid_anticentral_adaptive_v3",
         "biopsy_guided_strategy": None,
     },
@@ -1348,8 +1352,8 @@ def _reconstruct_and_evaluate(sim, seed, cell_lists, all_in_one_sample, r_dist, 
     return true_tree_simplified, tree, njtree
 
 
-def run_single_test(config="config_telomeric.json", bedfile="bed like config sample.csv", seed=777,
-                    biopsy_size=2, biopsy_size_scalable=None, biopsy_generations=[5,7,9], r_dist=4,
+def run_single_test(config=DEFAULT_SIMULATOR_CONFIG_PATH, bedfile=None, seed=777,
+                    biopsy_size=2, biopsy_size_scalable=None, biopsy_generations=(3, 5), r_dist=4,
                     visualize=False, time_collector=None, clear_cnps=False, compare_dm=False,
                     write_newick=False, simulator_with_loaded_tree=None, parallel=False,
                     reconstruction_algorithm=None, biopsy_guided_strategy=None,
