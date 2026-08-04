@@ -605,6 +605,44 @@ def test_tracked_default_v2_configuration_runs_without_bed():
     assert provenance["bed_sha256"] is None
 
 
+def test_tracked_v2_paper_configs_are_strict_and_paired_by_one_field():
+    paper_configs = SIMULATOR_EXAMPLES / "paper_v2"
+    clean_paths = [
+        paper_configs / "clean_balanced.json",
+        paper_configs / "clean_interval_gain.json",
+        paper_configs / "clean_telomeric.json",
+        paper_configs / "wgd_1pct.json",
+    ]
+    for path in clean_paths:
+        simulator = CancerCellEvolutionSimulator(path, seed=1)
+        assert simulator.semantic_version == SIMULATOR_SEMANTIC_VERSION
+        assert simulator.num_generations == 7
+
+    balanced = json.loads(clean_paths[0].read_text())
+    wgd = json.loads(clean_paths[-1].read_text())
+    assert {
+        key for key in balanced if balanced[key] != wgd[key]
+    } == {"WGD_PROBABILITY"}
+    assert balanced["WGD_PROBABILITY"] == 0
+    assert wgd["WGD_PROBABILITY"] == 0.01
+
+    bed = SIMULATOR_EXAMPLES / "crucial_10pct_bed.csv"
+    crucial_paths = [
+        paper_configs / "crucial_10pct_control.json",
+        paper_configs / "crucial_10pct_survival.json",
+    ]
+    crucial_configs = [json.loads(path.read_text()) for path in crucial_paths]
+    assert {
+        key
+        for key in crucial_configs[0]
+        if crucial_configs[0][key] != crucial_configs[1][key]
+    } == {"CRUCIAL_SURVIVAL_ENABLED"}
+    for path in crucial_paths:
+        simulator = CancerCellEvolutionSimulator(path, bed, seed=1)
+        assert simulator.semantic_version == SIMULATOR_SEMANTIC_VERSION
+        assert simulator.num_generations == 7
+
+
 def test_bed_export_round_trips_resolved_v2_parameters(tmp_path):
     simulator = CancerCellEvolutionSimulator(v2_config(), seed=2)
     bed = tmp_path / "roundtrip.csv"

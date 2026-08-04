@@ -103,10 +103,18 @@ def _sha256_file(path):
 
 
 def _captured_stream(value):
-    text = "" if value is None else str(value)
-    encoded = text.encode("utf-8")
+    if value is None:
+        text = ""
+        encoded = b""
+    elif isinstance(value, bytes):
+        encoded = value
+        text = value.decode("utf-8", errors="replace")
+    else:
+        text = str(value)
+        encoded = text.encode("utf-8")
     return {
         "character_count": len(text),
+        "byte_count": len(encoded),
         "sha256": sha256(encoded).hexdigest(),
         "preview": text[:_CAPTURE_PREVIEW_CHARACTERS],
         "preview_truncated": len(text) > _CAPTURE_PREVIEW_CHARACTERS,
@@ -114,15 +122,19 @@ def _captured_stream(value):
 
 
 def _execution_record(command, workdir, completed, *, status, output_path=None):
-    workdir = Path(workdir).resolve()
-    workdir_prefix = str(workdir)
+    raw_workdir = Path(workdir)
+    workdir = raw_workdir.resolve()
+    workdir_prefixes = tuple(dict.fromkeys((str(raw_workdir), str(workdir))))
     normalized_command = []
     for value in command:
         text = str(value)
-        if text == workdir_prefix:
-            text = "<temporary-workdir>"
-        elif text.startswith(workdir_prefix + os.sep):
-            text = "<temporary-workdir>/" + Path(text).name
+        for workdir_prefix in workdir_prefixes:
+            if text == workdir_prefix:
+                text = "<temporary-workdir>"
+                break
+            if text.startswith(workdir_prefix + os.sep):
+                text = "<temporary-workdir>/" + Path(text).name
+                break
         normalized_command.append(text)
 
     record = {
@@ -139,15 +151,54 @@ def _execution_record(command, workdir, completed, *, status, output_path=None):
     return record
 
 
-def _run_checked_cnp2cnp(command, workdir, *, output_path=None):
+def _stream_byte_count(value):
+    if value is None:
+        return 0
+    if isinstance(value, bytes):
+        return len(value)
+    return len(str(value).encode("utf-8"))
+
+
+def _run_checked_cnp2cnp(
+    command,
+    workdir,
+    *,
+    output_path=None,
+    timeout_seconds=None,
+    capture_limit_bytes=None,
+):
+    run_kwargs = {
+        "cwd": str(workdir),
+        "capture_output": True,
+        "text": True,
+        "check": True,
+    }
+    if timeout_seconds is not None:
+        run_kwargs["timeout"] = float(timeout_seconds)
     try:
-        completed = subprocess.run(
+        completed = subprocess.run(command, **run_kwargs)
+    except subprocess.TimeoutExpired as exc:
+        completed = type(
+            "TimeoutFailure",
+            (),
+            {
+                "returncode": None,
+                "stdout": exc.stdout or "",
+                "stderr": exc.stderr or "",
+            },
+        )()
+        record = _execution_record(
             command,
-            cwd=str(workdir),
-            capture_output=True,
-            text=True,
-            check=True,
+            workdir,
+            completed,
+            status="timeout",
+            output_path=output_path,
         )
+        record["timeout_seconds"] = float(timeout_seconds)
+        raise Cnp2CnpExecutionError(
+            f"cnp2cnp exceeded its {timeout_seconds}-second timeout.",
+            record,
+        ) from exc
     except subprocess.CalledProcessError as exc:
         record = _execution_record(
             command,
@@ -174,6 +225,23 @@ def _run_checked_cnp2cnp(command, workdir, *, output_path=None):
             output_path=output_path,
         )
         raise Cnp2CnpExecutionError("cnp2cnp could not be started.", record) from exc
+
+    if capture_limit_bytes is not None:
+        stdout_bytes = _stream_byte_count(completed.stdout)
+        stderr_bytes = _stream_byte_count(completed.stderr)
+        if stdout_bytes > capture_limit_bytes or stderr_bytes > capture_limit_bytes:
+            record = _execution_record(
+                command,
+                workdir,
+                completed,
+                status="capture_limit_exceeded",
+                output_path=output_path,
+            )
+            record["capture_limit_bytes"] = int(capture_limit_bytes)
+            raise Cnp2CnpExecutionError(
+                "cnp2cnp stdout or stderr exceeded the configured capture limit.",
+                record,
+            )
 
     if output_path is not None and not Path(output_path).is_file():
         record = _execution_record(
@@ -343,6 +411,8 @@ class CtbsRuntimeConfig:
     cnp2cnp_file: str
     true_tree_root_id: int
     run_single_test: dict
+    cnp2cnp_timeout_seconds: float | None = None
+    cnp2cnp_capture_limit_bytes: int | None = None
 
     @classmethod
     def from_mapping(cls, config):
@@ -354,10 +424,12 @@ class CtbsRuntimeConfig:
             cnp2cnp_file=config["cnp2cnp_FILE"],
             true_tree_root_id=config["TRUE_TREE_ROOT_ID"],
             run_single_test=deepcopy(config["RUN_SINGLE_TEST"]),
+            cnp2cnp_timeout_seconds=config.get("CNP2CNP_TIMEOUT_SECONDS"),
+            cnp2cnp_capture_limit_bytes=config.get("CNP2CNP_CAPTURE_LIMIT_BYTES"),
         )
 
     def as_legacy_dict(self):
-        return {
+        result = {
             "IN_FILE_NAME": self.in_file_name,
             "OUT_FILE_NAME": self.out_file_name,
             "SIM_DM": self.sim_dm,
@@ -366,6 +438,11 @@ class CtbsRuntimeConfig:
             "TRUE_TREE_ROOT_ID": self.true_tree_root_id,
             "RUN_SINGLE_TEST": deepcopy(self.run_single_test),
         }
+        if self.cnp2cnp_timeout_seconds is not None:
+            result["CNP2CNP_TIMEOUT_SECONDS"] = self.cnp2cnp_timeout_seconds
+        if self.cnp2cnp_capture_limit_bytes is not None:
+            result["CNP2CNP_CAPTURE_LIMIT_BYTES"] = self.cnp2cnp_capture_limit_bytes
+        return result
 
 
 def load_ctbs_config(config_path=CTBS_CONFIG_PATH):
@@ -650,11 +727,13 @@ def to_file(file, cells):
 
 
 def _compute_pair(args):
-    c, d, i, j, runfile = args
+    c, d, i, j, runfile, timeout_seconds, capture_limit_bytes = args
     dist, execution_records = compute_symmetric_cnp2cnp_distance(
         c,
         d,
         runfile=runfile,
+        timeout_seconds=timeout_seconds,
+        capture_limit_bytes=capture_limit_bytes,
         return_execution_records=True,
     )
     return i, j, dist, execution_records
@@ -686,7 +765,15 @@ def distance_matrix_from_biopsy(
     pair_count = n * (n - 1) // 2
     worker_count = resolve_distance_worker_count(max_threads, pair_count)
     pairs = (
-        (cells[i], cells[j], i, j, runtime_config.cnp2cnp_file)
+        (
+            cells[i],
+            cells[j],
+            i,
+            j,
+            runtime_config.cnp2cnp_file,
+            runtime_config.cnp2cnp_timeout_seconds,
+            runtime_config.cnp2cnp_capture_limit_bytes,
+        )
         for i in range(n)
         for j in range(i + 1, n)
     )
@@ -722,9 +809,17 @@ def use_cnp2cnp_to_compute_pairwise_distance(
     runtime_config=None,
     *,
     return_execution_record=False,
+    timeout_seconds=None,
+    capture_limit_bytes=None,
 ):
-    if runfile is None:
-        runfile = _coerce_runtime_config(runtime_config).cnp2cnp_file
+    if runtime_config is not None or runfile is None:
+        resolved_runtime = _coerce_runtime_config(runtime_config)
+        if runfile is None:
+            runfile = resolved_runtime.cnp2cnp_file
+        if timeout_seconds is None:
+            timeout_seconds = resolved_runtime.cnp2cnp_timeout_seconds
+        if capture_limit_bytes is None:
+            capture_limit_bytes = resolved_runtime.cnp2cnp_capture_limit_bytes
     runfile = str(Path(runfile).expanduser().resolve())
 
     with tempfile.TemporaryDirectory(prefix="ctbf-cnp2cnp-pair-") as tmpdir:
@@ -743,6 +838,8 @@ def use_cnp2cnp_to_compute_pairwise_distance(
         out, execution_record = _run_checked_cnp2cnp(
             command,
             tmpdir,
+            timeout_seconds=timeout_seconds,
+            capture_limit_bytes=capture_limit_bytes,
         )
         try:
             distance = parse_cnp2cnp_directional_distance(out.stdout)
@@ -764,6 +861,8 @@ def compute_symmetric_cnp2cnp_distance(
     runtime_config=None,
     *,
     return_execution_records=False,
+    timeout_seconds=None,
+    capture_limit_bytes=None,
 ):
     """Compute min(d(left,right), d(right,left)) with two explicit calls."""
     forward_input = (
@@ -774,18 +873,25 @@ def compute_symmetric_cnp2cnp_distance(
         f">{right.get_id()}\n{right.get_cnp()}\n"
         f">{left.get_id()}\n{left.get_cnp()}\n"
     )
+    limit_kwargs = {}
+    if timeout_seconds is not None:
+        limit_kwargs["timeout_seconds"] = timeout_seconds
+    if capture_limit_bytes is not None:
+        limit_kwargs["capture_limit_bytes"] = capture_limit_bytes
     if return_execution_records:
         forward, forward_record = use_cnp2cnp_to_compute_pairwise_distance(
             forward_input,
             runfile=runfile,
             runtime_config=runtime_config,
             return_execution_record=True,
+            **limit_kwargs,
         )
         reverse, reverse_record = use_cnp2cnp_to_compute_pairwise_distance(
             reverse_input,
             runfile=runfile,
             runtime_config=runtime_config,
             return_execution_record=True,
+            **limit_kwargs,
         )
         return minimum_bidirectional_distance(forward, reverse), [
             forward_record,
@@ -796,11 +902,13 @@ def compute_symmetric_cnp2cnp_distance(
         forward_input,
         runfile=runfile,
         runtime_config=runtime_config,
+        **limit_kwargs,
     )
     reverse = use_cnp2cnp_to_compute_pairwise_distance(
         reverse_input,
         runfile=runfile,
         runtime_config=runtime_config,
+        **limit_kwargs,
     )
     return minimum_bidirectional_distance(forward, reverse)
 
@@ -823,6 +931,9 @@ def _write_labeled_distance_matrix(path, ids, matrix):
 def _run_cnp2cnp_ordered_matrix(
     records,
     runfile,
+    *,
+    timeout_seconds=None,
+    capture_limit_bytes=None,
 ):
     if not records:
         raise ValueError("cnp2cnp matrix construction requires at least one profile.")
@@ -865,6 +976,8 @@ def _run_cnp2cnp_ordered_matrix(
             command,
             tmpdir,
             output_path=ordered_output,
+            timeout_seconds=timeout_seconds,
+            capture_limit_bytes=capture_limit_bytes,
         )
         try:
             ids, matrix = parse_labeled_distance_matrix(ordered_output)
@@ -886,7 +999,13 @@ def _run_cnp2cnp_ordered_matrix(
     return ids, matrix, execution_record
 
 
-def _cnp2cnp_matrix_from_records(records, runfile):
+def _cnp2cnp_matrix_from_records(
+    records,
+    runfile,
+    *,
+    timeout_seconds=None,
+    capture_limit_bytes=None,
+):
     if not records:
         raise ValueError("cnp2cnp matrix construction requires at least one profile.")
 
@@ -894,6 +1013,8 @@ def _cnp2cnp_matrix_from_records(records, runfile):
         forward_ids, forward_matrix, _record = _run_cnp2cnp_ordered_matrix(
             records,
             runfile,
+            timeout_seconds=timeout_seconds,
+            capture_limit_bytes=capture_limit_bytes,
         )
         return DistanceMatrix(
             ids=forward_ids,
@@ -908,10 +1029,14 @@ def _cnp2cnp_matrix_from_records(records, runfile):
     forward_ids, forward_matrix, forward_record = _run_cnp2cnp_ordered_matrix(
         records,
         runfile,
+        timeout_seconds=timeout_seconds,
+        capture_limit_bytes=capture_limit_bytes,
     )
     reverse_ids, reverse_matrix, reverse_record = _run_cnp2cnp_ordered_matrix(
         list(reversed(records)),
         runfile,
+        timeout_seconds=timeout_seconds,
+        capture_limit_bytes=capture_limit_bytes,
     )
 
     ids, matrix = combine_ordered_cnp2cnp_matrices(
@@ -932,10 +1057,21 @@ def _cnp2cnp_matrix_from_records(records, runfile):
     )
 
 
-def _cnp2cnp_ordered_triangle_from_records(records, runfile):
+def _cnp2cnp_ordered_triangle_from_records(
+    records,
+    runfile,
+    *,
+    timeout_seconds=None,
+    capture_limit_bytes=None,
+):
     if not records:
         raise ValueError("cnp2cnp matrix construction requires at least one profile.")
-    ids, matrix, execution_record = _run_cnp2cnp_ordered_matrix(records, runfile)
+    ids, matrix, execution_record = _run_cnp2cnp_ordered_matrix(
+        records,
+        runfile,
+        timeout_seconds=timeout_seconds,
+        capture_limit_bytes=capture_limit_bytes,
+    )
     row_order = list(ids)
     construction = (
         "trivial_singleton" if len(records) <= 1 else "ordered_triangle_matrix_mode"
@@ -956,13 +1092,21 @@ def _cnp2cnp_ordered_triangle_from_records(records, runfile):
     )
 
 
-def _cnp2cnp_directed_bundle_from_records(records, runfile):
+def _cnp2cnp_directed_bundle_from_records(
+    records,
+    runfile,
+    *,
+    timeout_seconds=None,
+    capture_limit_bytes=None,
+):
     if not records:
         raise ValueError("cnp2cnp matrix construction requires at least one profile.")
     if len(records) <= 1:
         forward_ids, forward_matrix, _record = _run_cnp2cnp_ordered_matrix(
             records,
             runfile,
+            timeout_seconds=timeout_seconds,
+            capture_limit_bytes=capture_limit_bytes,
         )
         return DirectedDistanceBundle(
             forward_ids,
@@ -978,10 +1122,14 @@ def _cnp2cnp_directed_bundle_from_records(records, runfile):
     forward_ids, forward_matrix, forward_record = _run_cnp2cnp_ordered_matrix(
         records,
         runfile,
+        timeout_seconds=timeout_seconds,
+        capture_limit_bytes=capture_limit_bytes,
     )
     reverse_ids, reverse_matrix, reverse_record = _run_cnp2cnp_ordered_matrix(
         list(reversed(records)),
         runfile,
+        timeout_seconds=timeout_seconds,
+        capture_limit_bytes=capture_limit_bytes,
     )
     provenance = _provenance_for_records(
         runfile,
@@ -1003,7 +1151,12 @@ def distance_matrix_from_cnp2cnp_matrix_mode(cells, runtime_config=None):
     """Run cnp2cnp matrix mode in both global orders and take pairwise minima."""
     runtime_config = _coerce_runtime_config(runtime_config)
     records = [(cell.get_id(), cell.get_cnp()) for cell in cells]
-    return _cnp2cnp_matrix_from_records(records, runtime_config.cnp2cnp_file)
+    return _cnp2cnp_matrix_from_records(
+        records,
+        runtime_config.cnp2cnp_file,
+        timeout_seconds=runtime_config.cnp2cnp_timeout_seconds,
+        capture_limit_bytes=runtime_config.cnp2cnp_capture_limit_bytes,
+    )
 
 
 def distance_matrix_from_cnp2cnp_ordered_triangle(cells, runtime_config=None):
@@ -1013,6 +1166,8 @@ def distance_matrix_from_cnp2cnp_ordered_triangle(cells, runtime_config=None):
     return _cnp2cnp_ordered_triangle_from_records(
         records,
         runtime_config.cnp2cnp_file,
+        timeout_seconds=runtime_config.cnp2cnp_timeout_seconds,
+        capture_limit_bytes=runtime_config.cnp2cnp_capture_limit_bytes,
     )
 
 
@@ -1023,6 +1178,8 @@ def directed_distance_bundle_from_cnp2cnp_matrix_mode(cells, runtime_config=None
     return _cnp2cnp_directed_bundle_from_records(
         records,
         runtime_config.cnp2cnp_file,
+        timeout_seconds=runtime_config.cnp2cnp_timeout_seconds,
+        capture_limit_bytes=runtime_config.cnp2cnp_capture_limit_bytes,
     )
 
 

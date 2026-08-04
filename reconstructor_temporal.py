@@ -82,9 +82,19 @@ def _normalize_occurrences(cell_lists):
     if len(genome_shapes) != 1:
         raise ValueError("All temporal occurrence genomes must have the same shape.")
 
-    # State-first ordering keeps the no-time ablation independent of biopsy
-    # order for distinct states. Repeated equal-state records remain distinct.
-    records.sort(key=lambda record: (_stable_label_key(record[1]), record[0]))
+    # Exact CNP state, not its opaque alignment label, owns the normalized
+    # occurrence order and therefore the seeded tie universe.  The label is
+    # only a final fallback for malformed/noninjective generic inputs with two
+    # labels on one exact profile; paper inputs reject that situation before
+    # reconstruction.  Repeated occurrences of one state remain level-ordered
+    # and distinct.
+    records.sort(
+        key=lambda record: (
+            tuple(record[2].tolist()),
+            record[0],
+            _stable_label_key(record[1]),
+        )
+    )
     return [
         _TemporalOccurrence(
             node_id=node_id,
