@@ -1,4 +1,4 @@
-"""Strict immutable configuration and BED-like inputs for CTBF simulator v2."""
+"""Strict immutable configuration and BED-like inputs for CTBF v3."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple, Union
 
 
-SIMULATOR_SEMANTIC_VERSION = "ctbf-cnp-state-simulator-v2"
+SIMULATOR_SEMANTIC_VERSION = "ctbf-cnp-state-simulator-v3"
 
 _CONFIG_KEYS = frozenset(
     {
@@ -30,6 +30,7 @@ _CONFIG_KEYS = frozenset(
         "MULTIPLICATIVE_FACTOR_PROBABILITIES",
         "WGD_PROBABILITY",
         "REPRESENTATION_TYPE",
+        "STATE_LINEAGE_REGULATION",
         "TELOMERIC_INSTABILITY_ENABLED",
         "TELOMERIC_INSTABILITY_INCREMENT",
         "TELOMERIC_FRACTION",
@@ -190,6 +191,15 @@ def _probability_distribution(
 
 
 @dataclass(frozen=True)
+class StateLineageRegulationConfig:
+    """Validated neutral regulation of representative-state continuation."""
+
+    model: str
+    capacity: Optional[int]
+    steepness: Optional[float]
+
+
+@dataclass(frozen=True)
 class SimulatorConfig:
     semantic_version: str
     genome_length: Optional[int]
@@ -206,6 +216,7 @@ class SimulatorConfig:
     multiplicative_factors: DiscreteDistribution
     wgd_probability: float
     representation_type: str
+    state_lineage_regulation: StateLineageRegulationConfig
     telomeric_instability_enabled: bool
     telomeric_instability_increment: float
     telomeric_fraction: float
@@ -271,7 +282,57 @@ def _offspring_parameter(model: str, raw_value: Any) -> Union[int, float, Tuple[
         return (low, high)
     raise ValueError(
         "OFFSPRING_MODEL must be one of 'constant', 'poisson', or 'uniform_range'; "
-        "fitness is deferred from CTBF v2."
+        "fitness is not part of CTBF v3."
+    )
+
+
+def _state_lineage_regulation(
+    raw_value: Any,
+) -> StateLineageRegulationConfig:
+    if not isinstance(raw_value, Mapping):
+        raise ValueError("STATE_LINEAGE_REGULATION must be a JSON object.")
+
+    model = raw_value.get("MODEL")
+    if model == "none":
+        _require_exact_keys(
+            raw_value,
+            allowed=frozenset({"MODEL"}),
+            required=frozenset({"MODEL"}),
+            context="STATE_LINEAGE_REGULATION",
+        )
+        return StateLineageRegulationConfig(
+            model="none",
+            capacity=None,
+            steepness=None,
+        )
+
+    if model == "soft_capacity":
+        keys = frozenset({"MODEL", "CAPACITY", "STEEPNESS"})
+        _require_exact_keys(
+            raw_value,
+            allowed=keys,
+            required=keys,
+            context="STATE_LINEAGE_REGULATION",
+        )
+        capacity = _as_int(
+            raw_value["CAPACITY"],
+            "STATE_LINEAGE_REGULATION.CAPACITY",
+            minimum=1,
+        )
+        steepness = _as_float(
+            raw_value["STEEPNESS"],
+            "STATE_LINEAGE_REGULATION.STEEPNESS",
+        )
+        if steepness <= 0.0:
+            raise ValueError("STATE_LINEAGE_REGULATION.STEEPNESS must be > 0.")
+        return StateLineageRegulationConfig(
+            model="soft_capacity",
+            capacity=capacity,
+            steepness=steepness,
+        )
+
+    raise ValueError(
+        "STATE_LINEAGE_REGULATION.MODEL must be 'none' or 'soft_capacity'."
     )
 
 
@@ -309,6 +370,18 @@ def parse_simulator_config(
     if representation_type not in {"full", "representative"}:
         raise ValueError("REPRESENTATION_TYPE must be 'full' or 'representative'.")
 
+    state_lineage_regulation = _state_lineage_regulation(
+        value["STATE_LINEAGE_REGULATION"]
+    )
+    if (
+        state_lineage_regulation.model == "soft_capacity"
+        and representation_type != "representative"
+    ):
+        raise ValueError(
+            "STATE_LINEAGE_REGULATION soft_capacity requires "
+            "REPRESENTATION_TYPE='representative'."
+        )
+
     baseline_attempts = _as_int(
         value["BASELINE_DESCENDANT_ATTEMPTS"],
         "BASELINE_DESCENDANT_ATTEMPTS",
@@ -316,7 +389,7 @@ def parse_simulator_config(
     )
     if baseline_attempts != 1:
         raise ValueError(
-            "CTBF simulator v2 fixes BASELINE_DESCENDANT_ATTEMPTS at 1."
+            "CTBF v3 fixes BASELINE_DESCENDANT_ATTEMPTS at 1."
         )
 
     return SimulatorConfig(
@@ -375,6 +448,7 @@ def parse_simulator_config(
         ),
         wgd_probability=_as_probability(value["WGD_PROBABILITY"], "WGD_PROBABILITY"),
         representation_type=representation_type,
+        state_lineage_regulation=state_lineage_regulation,
         telomeric_instability_enabled=_as_bool(
             value["TELOMERIC_INSTABILITY_ENABLED"],
             "TELOMERIC_INSTABILITY_ENABLED",

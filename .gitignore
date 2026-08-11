@@ -33,7 +33,10 @@ dist/
 /technical_description/
 /experimental_description/
 /manuals/
+# `legacy/ideas/` inherits this cold-storage ignore; consult it only when the
+# owner explicitly names an in-scope path.
 /legacy/
+/bib_notes/
 *.md
 
 # Manuscript, authoring-template, presentation, and historical paper material

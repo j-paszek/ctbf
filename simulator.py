@@ -1,5 +1,6 @@
 import copy
 import itertools
+import math
 from collections import Counter, defaultdict
 import numpy as np
 import networkx as nx
@@ -52,23 +53,105 @@ class SimulationDiagnostics:
     def __init__(self):
         self.totals = Counter()
         self.by_generation = defaultdict(Counter)
+        self.state_lineage_regulation_by_generation = {}
 
     def increment(self, generation, name, amount=1):
         self.totals[name] += int(amount)
         self.by_generation[int(generation)][name] += int(amount)
 
+    def record_state_lineage_regulation(
+        self,
+        generation,
+        *,
+        parent_state_count,
+        unregulated_expected_descendant_attempts,
+        capacity,
+        steepness,
+        survival_probability,
+        continued_lineage_count,
+    ):
+        self.state_lineage_regulation_by_generation[int(generation)] = {
+            "model": "soft_capacity",
+            "parent_state_count": int(parent_state_count),
+            "unregulated_expected_descendant_attempts": float(
+                unregulated_expected_descendant_attempts
+            ),
+            "capacity": int(capacity),
+            "steepness": float(steepness),
+            "survival_probability": float(survival_probability),
+            "continued_lineage_count": int(continued_lineage_count),
+            "extinct_lineage_count": int(
+                parent_state_count - continued_lineage_count
+            ),
+        }
+
     def snapshot(self):
-        return {
+        result = {
             "totals": dict(sorted(self.totals.items())),
             "by_generation": {
                 str(generation): dict(sorted(values.items()))
                 for generation, values in sorted(self.by_generation.items())
             },
         }
+        if self.state_lineage_regulation_by_generation:
+            result["state_lineage_regulation_by_generation"] = {
+                str(generation): dict(values)
+                for generation, values in sorted(
+                    self.state_lineage_regulation_by_generation.items()
+                )
+            }
+        return result
+
+
+def state_lineage_survival_probability(
+    *,
+    state_count,
+    unregulated_expected_descendant_attempts,
+    capacity,
+    steepness,
+):
+    """Return the bounded neutral continuation probability for one lineage.
+
+    At ``state_count == capacity``, survival is the reciprocal of the
+    unregulated expected descendant-attempt multiplier. Thus the expected
+    number of attempts is at most population-replacing at the declared scale;
+    viability rejection and representative collisions can place the realized
+    retained-state equilibrium below it.
+    """
+    if isinstance(state_count, bool) or not isinstance(
+        state_count, (int, np.integer)
+    ):
+        raise ValueError("state_count must be an integer.")
+    if int(state_count) < 0:
+        raise ValueError("state_count must be >= 0.")
+    if isinstance(capacity, bool) or not isinstance(capacity, (int, np.integer)):
+        raise ValueError("capacity must be an integer.")
+    if int(capacity) < 1:
+        raise ValueError("capacity must be >= 1.")
+
+    expected_attempts = float(unregulated_expected_descendant_attempts)
+    steepness = float(steepness)
+    if not math.isfinite(expected_attempts) or expected_attempts < 1.0:
+        raise ValueError(
+            "unregulated_expected_descendant_attempts must be finite and >= 1."
+        )
+    if not math.isfinite(steepness) or steepness <= 0.0:
+        raise ValueError("steepness must be finite and > 0.")
+    if int(state_count) == 0 or expected_attempts == 1.0:
+        return 1.0
+
+    log_odds = math.log(expected_attempts - 1.0) + steepness * (
+        math.log(int(state_count)) - math.log(int(capacity))
+    )
+    if log_odds >= 0.0:
+        inverse_odds = math.exp(-log_odds)
+        return inverse_odds / (1.0 + inverse_odds)
+    odds = math.exp(log_odds)
+    return 1.0 / (1.0 + odds)
 
 
 """
-CTBF v2 CNP-state evolution simulator.
+CTBF v3 CNP-state evolution simulator.
 
 Strict JSON/BED parsing and immutable resolved inputs live in
 ``simulator_config``. Pure typed CNA proposal/application mechanics live in
@@ -90,7 +173,9 @@ class CancerCellEvolutionSimulator:
         "event_order",
         "wgd",
         "biopsy",
+        "state_lineage_survival",
     )
+    _STATE_LINEAGE_SURVIVAL_RNG_STREAM = "state_lineage_survival"
 
     def __init__(self, config_source, genome_bed=None, seed=None):
         inputs = load_simulator_inputs(config_source, genome_bed)
@@ -130,6 +215,10 @@ class CancerCellEvolutionSimulator:
         self.offspring_param = self.config.offspring_parameter
         self.baseline_descendant_attempts = self.config.baseline_descendant_attempts
         self.representation_type = self.config.representation_type
+        self.state_lineage_regulation = self.config.state_lineage_regulation
+        self.unregulated_expected_descendant_attempts = (
+            self._unregulated_expected_descendant_attempts()
+        )
         self.model_telomeric_regions = self.config.telomeric_instability_enabled
         self.model_crucial_for_survival = self.config.crucial_survival_enabled
         self.diagnostics = SimulationDiagnostics()
@@ -149,7 +238,7 @@ class CancerCellEvolutionSimulator:
 
     def provenance(self):
         first_generator = next(iter(self._rng_streams.values()))
-        return {
+        result = {
             "simulator_semantic_version": self.semantic_version,
             "seed": self.seed,
             "numpy_version": np.__version__,
@@ -160,6 +249,16 @@ class CancerCellEvolutionSimulator:
             "config_source": self.config_source,
             "bed_source": self.bed_source,
         }
+        if hasattr(self, "state_lineage_regulation"):
+            result["state_lineage_regulation"] = {
+                "model": self.state_lineage_regulation.model,
+                "capacity": self.state_lineage_regulation.capacity,
+                "steepness": self.state_lineage_regulation.steepness,
+                "unregulated_expected_descendant_attempts": (
+                    self.unregulated_expected_descendant_attempts
+                ),
+            }
+        return result
 
     def diagnostics_snapshot(self):
         return self.diagnostics.snapshot()
@@ -279,7 +378,7 @@ class CancerCellEvolutionSimulator:
         return tree_copy
 
     def get_parameters_csv(self, file):
-        """Export the resolved immutable v2 locus parameters as a wide CSV."""
+        """Export the resolved immutable active locus parameters as a wide CSV."""
         with open(file, mode="w", newline="") as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(
@@ -327,7 +426,7 @@ class CancerCellEvolutionSimulator:
         )
 
     def create_bed_csv(self, file):
-        """Export a strict BED-like v2 input with all resolved row parameters."""
+        """Export a strict BED-like active input with all resolved row parameters."""
         with open(file, mode="w", newline="") as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(["ChromosomeNumber", "Start", "End", "Parameters"])
@@ -369,7 +468,72 @@ class CancerCellEvolutionSimulator:
             return int(rng.integers(minimum, maximum + 1))
         if self.offspring_model == "poisson":
             return int(rng.poisson(float(self.offspring_param)))
-        raise ValueError("Unsupported CTBF v2 OFFSPRING_MODEL.")
+        raise ValueError("Unsupported CTBF v3 OFFSPRING_MODEL.")
+
+    def _unregulated_expected_descendant_attempts(self):
+        if self.offspring_model == "constant":
+            expected_additional = float(self.offspring_param)
+        elif self.offspring_model == "poisson":
+            expected_additional = float(self.offspring_param)
+        elif self.offspring_model == "uniform_range":
+            minimum, maximum = self.offspring_param
+            expected_additional = (float(minimum) + float(maximum)) / 2.0
+        else:  # pragma: no cover - strict parser invariant
+            raise ValueError("Unsupported CTBF offspring model.")
+        return float(self.baseline_descendant_attempts) + expected_additional
+
+    def _continuing_parent_genotypes(self, parent_genotypes, current_generation):
+        if self.state_lineage_regulation.model == "none" or not parent_genotypes:
+            return parent_genotypes
+
+        capacity = self.state_lineage_regulation.capacity
+        steepness = self.state_lineage_regulation.steepness
+        if capacity is None or steepness is None:  # pragma: no cover - config invariant
+            raise RuntimeError("Soft state-lineage regulation parameters are missing.")
+        survival_probability = state_lineage_survival_probability(
+            state_count=len(parent_genotypes),
+            unregulated_expected_descendant_attempts=(
+                self.unregulated_expected_descendant_attempts
+            ),
+            capacity=capacity,
+            steepness=steepness,
+        )
+        draws = self._rng_streams[
+            self._STATE_LINEAGE_SURVIVAL_RNG_STREAM
+        ].random(len(parent_genotypes))
+        continuing = [
+            genotype
+            for genotype, draw in zip(parent_genotypes, draws)
+            if float(draw) < survival_probability
+        ]
+        extinct_count = len(parent_genotypes) - len(continuing)
+        self.diagnostics.increment(
+            current_generation,
+            "state_lineages_considered",
+            len(parent_genotypes),
+        )
+        self.diagnostics.increment(
+            current_generation,
+            "state_lineages_continued",
+            len(continuing),
+        )
+        self.diagnostics.increment(
+            current_generation,
+            "state_lineage_extinctions",
+            extinct_count,
+        )
+        self.diagnostics.record_state_lineage_regulation(
+            current_generation,
+            parent_state_count=len(parent_genotypes),
+            unregulated_expected_descendant_attempts=(
+                self.unregulated_expected_descendant_attempts
+            ),
+            capacity=capacity,
+            steepness=steepness,
+            survival_probability=survival_probability,
+            continued_lineage_count=len(continuing),
+        )
+        return continuing
 
     def _apply_copy_number_events(self, genome):
         proposals = propose_event_sequence(
@@ -391,8 +555,27 @@ class CancerCellEvolutionSimulator:
     """
 
     def run_simulation(self):
+        extinction_generation = None
         for gen in range(1, self.num_generations + 1):
-            self._spawn_children(current_generation=gen)
+            parent_count, retained_count = self._spawn_children(current_generation=gen)
+            if parent_count > 0 and retained_count == 0:
+                extinction_generation = gen
+                self.diagnostics.increment(gen, "population_extinctions")
+                break
+        self.tree.graph["simulation_outcome"] = {
+            "status": "extinct" if extinction_generation is not None else "completed",
+            "configured_final_generation": int(self.num_generations),
+            "last_retained_generation": int(
+                self.num_generations
+                if extinction_generation is None
+                else extinction_generation - 1
+            ),
+            "extinction_generation": (
+                None
+                if extinction_generation is None
+                else int(extinction_generation)
+            ),
+        }
         self.tree.graph["simulation_diagnostics"] = self.diagnostics_snapshot()
 
     """
@@ -409,6 +592,11 @@ class CancerCellEvolutionSimulator:
                 if genotype.generation == current_generation - 1
             ),
             key=lambda genotype: genotype.node_id,
+        )
+        parent_count = len(parent_genotypes)
+        parent_genotypes = self._continuing_parent_genotypes(
+            parent_genotypes,
+            current_generation,
         )
         seen_genomes = {}
         for genotype in parent_genotypes:
@@ -504,6 +692,7 @@ class CancerCellEvolutionSimulator:
             self.genotypes[child.node_id] = child
         if new_genotypes:
             self._canonical_cell_id_by_genome = None
+        return parent_count, len(new_genotypes)
 
     def perform_biopsy(self, generation, biopsy_size=0, biopsy_size_scalable=None, seed=None):
         """

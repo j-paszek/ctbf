@@ -1,6 +1,6 @@
 {
   "experiment_role": "deterministic semantic validation; not a preregistered paper regime",
-  "simulator_semantic_version": "ctbf-cnp-state-simulator-v2",
+  "simulator_semantic_version": "ctbf-cnp-state-simulator-v3",
   "mask_selection": {
     "eligible_row_count": 100,
     "selected_fraction": 0.1,

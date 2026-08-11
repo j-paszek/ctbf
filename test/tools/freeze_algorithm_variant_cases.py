@@ -366,7 +366,7 @@ def true_tree_distance_matrix(tree, node_ids):
                 edge_data = tree.get_edge_data(u, v) or tree.get_edge_data(v, u) or {}
                 events = edge_data.get("events")
                 if isinstance(events, (list, tuple)):
-                    # CTBF v2: an empty typed list is a zero-event persistence
+                    # CTBF v3: an empty typed list is a zero-event persistence
                     # edge and must not fall through to a unit edge weight.
                     distance += count_edge_events(events)
                 elif isinstance(events, str) and events.strip():

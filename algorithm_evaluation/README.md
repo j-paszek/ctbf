@@ -1,20 +1,17 @@
 # Evaluation of NJ-derived Reconstruction Algorithms
 
-## CTBF v2 paper runner
+## CTBF v3 paper pipeline
 
-Current paper evidence uses the manifest-locked v2 modules
-`v2_paper_contract.py`, `v2_paper_runner.py`, and `v2_paper_analysis.py`. Run
-the read-only preflight with:
+Reusable pipeline mechanics live in `paper_pipeline_contract.py`,
+`paper_pipeline_runner.py`, and `paper_pipeline_analysis.py`. Registered and
+smoke execution are currently disabled: CTBF v3 simulator parameters and a new
+protocol/manifest must be owner-approved before the manifest hash lock is set.
 
-```bash
-python -m algorithm_evaluation.v2_paper_runner validate \
-  --manifest experimental_description/g0_05a_v2_preregistration_manifest.json
-```
-
-The `smoke` command is non-held-out and stamps its injected L1 matrix as
-ineligible for paper evidence. Registered large runs require a new empty
-output root and remain owner-run. The historical scripts and result folders
-described below are CTBF v1/rejected-paper context, not v2 evidence.
+The old G0-05-A CTBF-v2 manifest, commands, outputs, and exact-lock tests are
+legacy evidence and are not accepted or replayed. Generic pipeline invariants
+remain in `test/test_paper_pipeline.py`; new manifest-specific tests are added
+only after the v3 freeze. The historical scripts and result folders described
+below are CTBF v1/rejected-paper context, not v3 evidence.
 
 ## Historical workflow
 
