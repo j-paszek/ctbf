@@ -23,6 +23,7 @@ _CONFIG_KEYS = frozenset(
         "OFFSPRING_PARAMETER",
         "BASELINE_DESCENDANT_ATTEMPTS",
         "CNA_EVENT_PROBABILITY",
+        "CNA_INITIATION_SCHEDULE",
         "GAIN_GIVEN_CNA_PROBABILITY",
         "INTERVAL_CNA_PROBABILITY",
         "INTERVAL_GAIN_OPERATOR_PROBABILITIES",
@@ -31,6 +32,7 @@ _CONFIG_KEYS = frozenset(
         "WGD_PROBABILITY",
         "REPRESENTATION_TYPE",
         "STATE_LINEAGE_REGULATION",
+        "RESOURCE_GUARD",
         "TELOMERIC_INSTABILITY_ENABLED",
         "TELOMERIC_INSTABILITY_INCREMENT",
         "TELOMERIC_FRACTION",
@@ -200,6 +202,24 @@ class StateLineageRegulationConfig:
 
 
 @dataclass(frozen=True)
+class ResourceGuardConfig:
+    """Validated abort-only operational resource limits."""
+
+    max_representatives_per_generation: int
+    max_total_nodes: int
+
+
+@dataclass(frozen=True)
+class CnaInitiationScheduleConfig:
+    """Validated generation-dependent multiplier for segmental CNA starts."""
+
+    model: str
+    initial_multiplier: float
+    final_multiplier: float
+    decay_exponent: Optional[float]
+
+
+@dataclass(frozen=True)
 class SimulatorConfig:
     semantic_version: str
     genome_length: Optional[int]
@@ -209,6 +229,7 @@ class SimulatorConfig:
     offspring_parameter: Union[int, float, Tuple[int, int]]
     baseline_descendant_attempts: int
     cna_event_probability: float
+    cna_initiation_schedule: CnaInitiationScheduleConfig
     gain_given_cna_probability: float
     interval_cna_probability: float
     interval_gain_operators: DiscreteDistribution
@@ -217,6 +238,7 @@ class SimulatorConfig:
     wgd_probability: float
     representation_type: str
     state_lineage_regulation: StateLineageRegulationConfig
+    resource_guard: ResourceGuardConfig
     telomeric_instability_enabled: bool
     telomeric_instability_increment: float
     telomeric_fraction: float
@@ -336,6 +358,146 @@ def _state_lineage_regulation(
     )
 
 
+def _resource_guard(raw_value: Any) -> ResourceGuardConfig:
+    if not isinstance(raw_value, Mapping):
+        raise ValueError("RESOURCE_GUARD must be a JSON object.")
+
+    keys = frozenset(
+        {
+            "MAX_REPRESENTATIVES_PER_GENERATION",
+            "MAX_TOTAL_NODES",
+        }
+    )
+    _require_exact_keys(
+        raw_value,
+        allowed=keys,
+        required=keys,
+        context="RESOURCE_GUARD",
+    )
+    return ResourceGuardConfig(
+        max_representatives_per_generation=_as_int(
+            raw_value["MAX_REPRESENTATIVES_PER_GENERATION"],
+            "RESOURCE_GUARD.MAX_REPRESENTATIVES_PER_GENERATION",
+            minimum=1,
+        ),
+        max_total_nodes=_as_int(
+            raw_value["MAX_TOTAL_NODES"],
+            "RESOURCE_GUARD.MAX_TOTAL_NODES",
+            minimum=1,
+        ),
+    )
+
+
+def _cna_initiation_schedule(raw_value: Any) -> CnaInitiationScheduleConfig:
+    if not isinstance(raw_value, Mapping):
+        raise ValueError("CNA_INITIATION_SCHEDULE must be a JSON object.")
+
+    model = raw_value.get("MODEL")
+    if model == "constant":
+        _require_exact_keys(
+            raw_value,
+            allowed=frozenset({"MODEL"}),
+            required=frozenset({"MODEL"}),
+            context="CNA_INITIATION_SCHEDULE",
+        )
+        return CnaInitiationScheduleConfig(
+            model="constant",
+            initial_multiplier=1.0,
+            final_multiplier=1.0,
+            decay_exponent=None,
+        )
+
+    if model == "early_burst_decay":
+        keys = frozenset(
+            {
+                "MODEL",
+                "INITIAL_MULTIPLIER",
+                "FINAL_MULTIPLIER",
+                "DECAY_EXPONENT",
+            }
+        )
+        _require_exact_keys(
+            raw_value,
+            allowed=keys,
+            required=keys,
+            context="CNA_INITIATION_SCHEDULE",
+        )
+        initial_multiplier = _as_float(
+            raw_value["INITIAL_MULTIPLIER"],
+            "CNA_INITIATION_SCHEDULE.INITIAL_MULTIPLIER",
+        )
+        final_multiplier = _as_float(
+            raw_value["FINAL_MULTIPLIER"],
+            "CNA_INITIATION_SCHEDULE.FINAL_MULTIPLIER",
+        )
+        decay_exponent = _as_float(
+            raw_value["DECAY_EXPONENT"],
+            "CNA_INITIATION_SCHEDULE.DECAY_EXPONENT",
+        )
+        if final_multiplier <= 0.0:
+            raise ValueError(
+                "CNA_INITIATION_SCHEDULE.FINAL_MULTIPLIER must be > 0."
+            )
+        if initial_multiplier <= final_multiplier:
+            raise ValueError(
+                "CNA_INITIATION_SCHEDULE.INITIAL_MULTIPLIER must be greater "
+                "than FINAL_MULTIPLIER."
+            )
+        if decay_exponent <= 0.0:
+            raise ValueError(
+                "CNA_INITIATION_SCHEDULE.DECAY_EXPONENT must be > 0."
+            )
+        return CnaInitiationScheduleConfig(
+            model="early_burst_decay",
+            initial_multiplier=initial_multiplier,
+            final_multiplier=final_multiplier,
+            decay_exponent=decay_exponent,
+        )
+
+    raise ValueError(
+        "CNA_INITIATION_SCHEDULE.MODEL must be 'constant' or "
+        "'early_burst_decay'."
+    )
+
+
+def cna_initiation_schedule_at_generation(
+    schedule: CnaInitiationScheduleConfig,
+    *,
+    generation: int,
+    number_of_generations: int,
+) -> Tuple[float, float]:
+    """Return ``(normalized_time, multiplier)`` for one generated generation."""
+    if isinstance(generation, bool) or not isinstance(generation, int):
+        raise ValueError("generation must be an integer.")
+    if isinstance(number_of_generations, bool) or not isinstance(
+        number_of_generations, int
+    ):
+        raise ValueError("number_of_generations must be an integer.")
+    if number_of_generations < 1:
+        raise ValueError("number_of_generations must be >= 1.")
+    if generation < 1 or generation > number_of_generations:
+        raise ValueError(
+            "generation must be between 1 and number_of_generations inclusive."
+        )
+
+    normalized_time = (
+        0.0
+        if number_of_generations == 1
+        else (generation - 1) / (number_of_generations - 1)
+    )
+    if schedule.model == "constant":
+        return float(normalized_time), 1.0
+    if schedule.model != "early_burst_decay":  # pragma: no cover - parser invariant
+        raise ValueError(f"Unsupported CNA initiation schedule {schedule.model!r}.")
+    if schedule.decay_exponent is None:  # pragma: no cover - parser invariant
+        raise ValueError("Early-burst schedule decay exponent is missing.")
+
+    multiplier = schedule.final_multiplier + (
+        schedule.initial_multiplier - schedule.final_multiplier
+    ) * (1.0 - normalized_time) ** schedule.decay_exponent
+    return float(normalized_time), float(multiplier)
+
+
 def parse_simulator_config(
     value: Mapping[str, Any],
     *,
@@ -423,6 +585,9 @@ def parse_simulator_config(
             value["CNA_EVENT_PROBABILITY"],
             "CNA_EVENT_PROBABILITY",
         ),
+        cna_initiation_schedule=_cna_initiation_schedule(
+            value["CNA_INITIATION_SCHEDULE"]
+        ),
         gain_given_cna_probability=_as_probability(
             value["GAIN_GIVEN_CNA_PROBABILITY"],
             "GAIN_GIVEN_CNA_PROBABILITY",
@@ -449,6 +614,7 @@ def parse_simulator_config(
         wgd_probability=_as_probability(value["WGD_PROBABILITY"], "WGD_PROBABILITY"),
         representation_type=representation_type,
         state_lineage_regulation=state_lineage_regulation,
+        resource_guard=_resource_guard(value["RESOURCE_GUARD"]),
         telomeric_instability_enabled=_as_bool(
             value["TELOMERIC_INSTABILITY_ENABLED"],
             "TELOMERIC_INSTABILITY_ENABLED",

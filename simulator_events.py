@@ -1,8 +1,9 @@
-"""Pure typed event proposal and application mechanics for CTBF simulator v2."""
+"""Pure typed event proposal and application mechanics for CTBF simulator v3."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
@@ -98,15 +99,47 @@ def _chromosome_end_indices(genome_bins: Sequence[GenomeBin]) -> Tuple[int, ...]
     return tuple(result)
 
 
+def segmental_initiation_probabilities(
+    genome_bins: Sequence[GenomeBin],
+    *,
+    initiation_multiplier: float,
+) -> np.ndarray:
+    """Resolve scheduled base-plus-telomeric initiation probabilities."""
+    if isinstance(initiation_multiplier, bool) or not isinstance(
+        initiation_multiplier,
+        (int, float, np.integer, np.floating),
+    ):
+        raise ValueError("initiation_multiplier must be finite and > 0.")
+    multiplier = float(initiation_multiplier)
+    if not math.isfinite(multiplier) or multiplier <= 0.0:
+        raise ValueError("initiation_multiplier must be finite and > 0.")
+
+    unscheduled_hazards = np.fromiter(
+        (
+            genome_bin.cna_event_probability + genome_bin.telomeric_instability
+            for genome_bin in genome_bins
+        ),
+        dtype=float,
+        count=len(genome_bins),
+    )
+    with np.errstate(over="ignore"):
+        return np.minimum(1.0, multiplier * unscheduled_hazards)
+
+
 def propose_event_sequence(
     genome_bins: Sequence[GenomeBin],
     *,
     wgd_probability: float,
+    initiation_multiplier: float,
     rng_streams: Mapping[str, np.random.Generator],
 ) -> Tuple[CNAEventProposal, ...]:
     """Sample all proposals first, then order independently of genomic position."""
     number_of_positions = len(genome_bins)
     chromosome_ends = _chromosome_end_indices(genome_bins)
+    initiation_probabilities = segmental_initiation_probabilities(
+        genome_bins,
+        initiation_multiplier=initiation_multiplier,
+    )
 
     initiation_draws = rng_streams["event_initiation"].random(number_of_positions)
     interval_draws = rng_streams["event_class"].random(number_of_positions)
@@ -124,11 +157,7 @@ def propose_event_sequence(
     proposals = []
     proposal_id = 0
     for index, genome_bin in enumerate(genome_bins):
-        initiation_probability = min(
-            1.0,
-            genome_bin.cna_event_probability + genome_bin.telomeric_instability,
-        )
-        if initiation_draws[index] >= initiation_probability:
+        if initiation_draws[index] >= initiation_probabilities[index]:
             continue
 
         is_interval = interval_draws[index] < genome_bin.interval_cna_probability

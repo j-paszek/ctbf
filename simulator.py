@@ -11,6 +11,7 @@ from ctbf_constraints import MIN_BIOPSY_CELLS_FROM_BIOPSY
 from distance_semantics import validate_distance_matrix
 from simulator_config import (
     DiscreteDistribution,
+    cna_initiation_schedule_at_generation,
     load_simulator_inputs,
 )
 from simulator_events import (
@@ -19,6 +20,7 @@ from simulator_events import (
     event_records_to_dicts,
     event_records_to_text,
     propose_event_sequence,
+    segmental_initiation_probabilities,
 )
 
 """
@@ -47,6 +49,38 @@ class Genotype:
         return ",".join(str(cnp) for cnp in self.genome)
 
 
+class SimulationResourceLimitExceeded(RuntimeError):
+    """Typed abort when retaining one more node would exceed a hard limit."""
+
+    def __init__(
+        self,
+        *,
+        generation,
+        limit_name,
+        configured_limit,
+        attempted_count,
+    ):
+        self.generation = int(generation)
+        self.limit_name = str(limit_name)
+        self.configured_limit = int(configured_limit)
+        self.attempted_count = int(attempted_count)
+        self.simulation_outcome = None
+        super().__init__(
+            "Simulation resource guard exceeded "
+            f"{self.limit_name} at generation {self.generation}: "
+            f"attempted {self.attempted_count} > configured "
+            f"{self.configured_limit}."
+        )
+
+    def as_dict(self):
+        return {
+            "limit_name": self.limit_name,
+            "configured_limit": self.configured_limit,
+            "attempted_count": self.attempted_count,
+            "generation": self.generation,
+        }
+
+
 class SimulationDiagnostics:
     """Owned counters for simulator attempts, viability, and state collisions."""
 
@@ -54,6 +88,7 @@ class SimulationDiagnostics:
         self.totals = Counter()
         self.by_generation = defaultdict(Counter)
         self.state_lineage_regulation_by_generation = {}
+        self.cna_initiation_schedule_by_generation = {}
 
     def increment(self, generation, name, amount=1):
         self.totals[name] += int(amount)
@@ -85,6 +120,27 @@ class SimulationDiagnostics:
             ),
         }
 
+    def record_cna_initiation_schedule(
+        self,
+        generation,
+        *,
+        model,
+        normalized_time,
+        initiation_multiplier,
+        expected_segmental_starts_per_attempt,
+    ):
+        self.cna_initiation_schedule_by_generation[int(generation)] = {
+            "model": str(model),
+            "time_basis": (
+                "constant" if model == "constant" else "horizon_normalized"
+            ),
+            "normalized_time": float(normalized_time),
+            "initiation_multiplier": float(initiation_multiplier),
+            "expected_segmental_starts_per_attempt": float(
+                expected_segmental_starts_per_attempt
+            ),
+        }
+
     def snapshot(self):
         result = {
             "totals": dict(sorted(self.totals.items())),
@@ -100,6 +156,31 @@ class SimulationDiagnostics:
                     self.state_lineage_regulation_by_generation.items()
                 )
             }
+        if self.cna_initiation_schedule_by_generation:
+            schedule_audit = {}
+            for generation, values in sorted(
+                self.cna_initiation_schedule_by_generation.items()
+            ):
+                generation_counts = self.by_generation.get(generation, {})
+                attempted_children = int(
+                    generation_counts.get("attempted_children", 0)
+                )
+                entry = dict(values)
+                entry["attempted_children"] = attempted_children
+                entry["expected_segmental_starts_over_attempts"] = float(
+                    values["expected_segmental_starts_per_attempt"]
+                    * attempted_children
+                )
+                entry["attempted_segmental_event_records"] = int(
+                    generation_counts.get("attempted_segmental_event_records", 0)
+                )
+                entry["effective_segmental_event_applications"] = int(
+                    generation_counts.get(
+                        "effective_segmental_event_applications", 0
+                    )
+                )
+                schedule_audit[str(generation)] = entry
+            result["cna_initiation_schedule_by_generation"] = schedule_audit
         return result
 
 
@@ -215,7 +296,9 @@ class CancerCellEvolutionSimulator:
         self.offspring_param = self.config.offspring_parameter
         self.baseline_descendant_attempts = self.config.baseline_descendant_attempts
         self.representation_type = self.config.representation_type
+        self.cna_initiation_schedule = self.config.cna_initiation_schedule
         self.state_lineage_regulation = self.config.state_lineage_regulation
+        self.resource_guard = self.config.resource_guard
         self.unregulated_expected_descendant_attempts = (
             self._unregulated_expected_descendant_attempts()
         )
@@ -257,6 +340,27 @@ class CancerCellEvolutionSimulator:
                 "unregulated_expected_descendant_attempts": (
                     self.unregulated_expected_descendant_attempts
                 ),
+            }
+        if hasattr(self, "resource_guard"):
+            result["resource_guard"] = {
+                "max_representatives_per_generation": (
+                    self.resource_guard.max_representatives_per_generation
+                ),
+                "max_total_nodes": self.resource_guard.max_total_nodes,
+            }
+        if hasattr(self, "cna_initiation_schedule"):
+            result["cna_initiation_schedule"] = {
+                "model": self.cna_initiation_schedule.model,
+                "time_basis": (
+                    "constant"
+                    if self.cna_initiation_schedule.model == "constant"
+                    else "horizon_normalized"
+                ),
+                "initial_multiplier": (
+                    self.cna_initiation_schedule.initial_multiplier
+                ),
+                "final_multiplier": self.cna_initiation_schedule.final_multiplier,
+                "decay_exponent": self.cna_initiation_schedule.decay_exponent,
             }
         return result
 
@@ -535,10 +639,32 @@ class CancerCellEvolutionSimulator:
         )
         return continuing
 
-    def _apply_copy_number_events(self, genome):
+    def _cna_initiation_multiplier_for_generation(self, current_generation):
+        normalized_time, multiplier = cna_initiation_schedule_at_generation(
+            self.cna_initiation_schedule,
+            generation=current_generation,
+            number_of_generations=self.num_generations,
+        )
+        expected_starts = float(
+            segmental_initiation_probabilities(
+                self.genome_bins,
+                initiation_multiplier=multiplier,
+            ).sum()
+        )
+        self.diagnostics.record_cna_initiation_schedule(
+            current_generation,
+            model=self.cna_initiation_schedule.model,
+            normalized_time=normalized_time,
+            initiation_multiplier=multiplier,
+            expected_segmental_starts_per_attempt=expected_starts,
+        )
+        return multiplier
+
+    def _apply_copy_number_events(self, genome, initiation_multiplier):
         proposals = propose_event_sequence(
             self.genome_bins,
             wgd_probability=self.config.wgd_probability,
+            initiation_multiplier=initiation_multiplier,
             rng_streams=self._rng_streams,
         )
         return apply_event_sequence(
@@ -556,12 +682,36 @@ class CancerCellEvolutionSimulator:
 
     def run_simulation(self):
         extinction_generation = None
-        for gen in range(1, self.num_generations + 1):
-            parent_count, retained_count = self._spawn_children(current_generation=gen)
-            if parent_count > 0 and retained_count == 0:
-                extinction_generation = gen
-                self.diagnostics.increment(gen, "population_extinctions")
-                break
+        try:
+            for gen in range(1, self.num_generations + 1):
+                parent_count, retained_count = self._spawn_children(
+                    current_generation=gen
+                )
+                if parent_count > 0 and retained_count == 0:
+                    extinction_generation = gen
+                    self.diagnostics.increment(gen, "population_extinctions")
+                    break
+        except SimulationResourceLimitExceeded as exc:
+            last_retained_generation = max(
+                (
+                    int(data["generation"])
+                    for _, data in self.tree.nodes(data=True)
+                    if data.get("generation") is not None
+                ),
+                default=0,
+            )
+            outcome = {
+                "status": "resource_limit_exceeded",
+                "configured_final_generation": int(self.num_generations),
+                "last_retained_generation": last_retained_generation,
+                "extinction_generation": None,
+                "failure_generation": exc.generation,
+                "resource_limit": exc.as_dict(),
+            }
+            self.tree.graph["simulation_outcome"] = outcome
+            self.tree.graph["simulation_diagnostics"] = self.diagnostics_snapshot()
+            exc.simulation_outcome = outcome
+            raise
         self.tree.graph["simulation_outcome"] = {
             "status": "extinct" if extinction_generation is not None else "completed",
             "configured_final_generation": int(self.num_generations),
@@ -585,6 +735,9 @@ class CancerCellEvolutionSimulator:
 
     def _spawn_children(self, current_generation):
         new_genotypes = []
+        initiation_multiplier = self._cna_initiation_multiplier_for_generation(
+            current_generation
+        )
         parent_genotypes = sorted(
             (
                 genotype
@@ -604,12 +757,30 @@ class CancerCellEvolutionSimulator:
             number_of_attempts = self.baseline_descendant_attempts + additional_children
             for _ in range(number_of_attempts):
                 self.diagnostics.increment(current_generation, "attempted_children")
-                event_result = self._apply_copy_number_events(genotype.genome)
+                event_result = self._apply_copy_number_events(
+                    genotype.genome,
+                    initiation_multiplier,
+                )
                 attempted_records = event_result.attempted_records
+                segmental_records = tuple(
+                    record
+                    for record in attempted_records
+                    if record.event_class != "whole_genome_doubling"
+                )
                 self.diagnostics.increment(
                     current_generation,
                     "attempted_event_records",
                     len(attempted_records),
+                )
+                self.diagnostics.increment(
+                    current_generation,
+                    "attempted_segmental_event_records",
+                    len(segmental_records),
+                )
+                self.diagnostics.increment(
+                    current_generation,
+                    "effective_segmental_event_applications",
+                    sum(record.effective for record in segmental_records),
                 )
                 self.diagnostics.increment(
                     current_generation,
@@ -656,6 +827,15 @@ class CancerCellEvolutionSimulator:
                         continue
                     seen_genomes[genome_tuple] = genotype.node_id
 
+                try:
+                    self._check_resource_guard_before_retention(
+                        current_generation=current_generation,
+                        retained_in_generation=len(new_genotypes),
+                    )
+                except SimulationResourceLimitExceeded:
+                    self._commit_new_genotypes(new_genotypes)
+                    raise
+
                 edge_records = event_result.edge_records
                 event_dicts = event_records_to_dicts(edge_records)
                 event_summary = event_records_to_text(edge_records)
@@ -688,11 +868,44 @@ class CancerCellEvolutionSimulator:
                 )
                 self.node_counter += 1
 
+        self._commit_new_genotypes(new_genotypes)
+        return parent_count, len(new_genotypes)
+
+    def _check_resource_guard_before_retention(
+        self,
+        *,
+        current_generation,
+        retained_in_generation,
+    ):
+        attempted_generation_count = int(retained_in_generation) + 1
+        generation_limit = (
+            self.resource_guard.max_representatives_per_generation
+        )
+        if attempted_generation_count > generation_limit:
+            self.diagnostics.increment(current_generation, "resource_guard_aborts")
+            raise SimulationResourceLimitExceeded(
+                generation=current_generation,
+                limit_name="MAX_REPRESENTATIVES_PER_GENERATION",
+                configured_limit=generation_limit,
+                attempted_count=attempted_generation_count,
+            )
+
+        attempted_total_count = len(self.tree) + 1
+        total_limit = self.resource_guard.max_total_nodes
+        if attempted_total_count > total_limit:
+            self.diagnostics.increment(current_generation, "resource_guard_aborts")
+            raise SimulationResourceLimitExceeded(
+                generation=current_generation,
+                limit_name="MAX_TOTAL_NODES",
+                configured_limit=total_limit,
+                attempted_count=attempted_total_count,
+            )
+
+    def _commit_new_genotypes(self, new_genotypes):
         for _, child in new_genotypes:
             self.genotypes[child.node_id] = child
         if new_genotypes:
             self._canonical_cell_id_by_genome = None
-        return parent_count, len(new_genotypes)
 
     def perform_biopsy(self, generation, biopsy_size=0, biopsy_size_scalable=None, seed=None):
         """
