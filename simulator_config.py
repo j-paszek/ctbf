@@ -1,4 +1,4 @@
-"""Strict immutable configuration and BED-like inputs for CTBF v3."""
+"""Strict immutable configuration and BED-like inputs for CTBF v5."""
 
 from __future__ import annotations
 
@@ -11,13 +11,15 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple, Union
 
 
-SIMULATOR_SEMANTIC_VERSION = "ctbf-cnp-state-simulator-v3"
+SIMULATOR_SEMANTIC_VERSION = "ctbf-cnp-state-simulator-v5"
 
 _CONFIG_KEYS = frozenset(
     {
         "SIMULATOR_SEMANTIC_VERSION",
         "GENOME_LENGTH",
+        "NUMBER_OF_CHROMOSOMES",
         "INITIAL_COPY_NUMBER",
+        "CRUCIAL_BIN_INDICES",
         "NUMBER_OF_GENERATIONS",
         "OFFSPRING_MODEL",
         "OFFSPRING_PARAMETER",
@@ -42,7 +44,9 @@ _CONFIG_KEYS = frozenset(
 
 _COMMON_REQUIRED_CONFIG_KEYS = _CONFIG_KEYS - {
     "GENOME_LENGTH",
+    "NUMBER_OF_CHROMOSOMES",
     "INITIAL_COPY_NUMBER",
+    "CRUCIAL_BIN_INDICES",
 }
 
 _BED_HEADERS = frozenset({"ChromosomeNumber", "Start", "End", "Parameters"})
@@ -223,7 +227,9 @@ class CnaInitiationScheduleConfig:
 class SimulatorConfig:
     semantic_version: str
     genome_length: Optional[int]
+    number_of_chromosomes: Optional[int]
     initial_copy_number: Optional[int]
+    crucial_bin_indices: Optional[Tuple[int, ...]]
     number_of_generations: int
     offspring_model: str
     offspring_parameter: Union[int, float, Tuple[int, int]]
@@ -304,8 +310,27 @@ def _offspring_parameter(model: str, raw_value: Any) -> Union[int, float, Tuple[
         return (low, high)
     raise ValueError(
         "OFFSPRING_MODEL must be one of 'constant', 'poisson', or 'uniform_range'; "
-        "fitness is not part of CTBF v3."
+        "fitness is not part of CTBF v5."
     )
+
+
+def _strict_index_tuple(
+    value: Any,
+    name: str,
+    *,
+    upper_bound: int,
+) -> Tuple[int, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"{name} must be a JSON list of integer indexes.")
+    indexes = tuple(
+        _as_int(raw_index, f"{name}[{position}]", minimum=0)
+        for position, raw_index in enumerate(value)
+    )
+    if any(index >= upper_bound for index in indexes):
+        raise ValueError(f"{name} indexes must be smaller than GENOME_LENGTH.")
+    if tuple(sorted(set(indexes))) != indexes:
+        raise ValueError(f"{name} must contain unique indexes in increasing order.")
+    return indexes
 
 
 def _state_lineage_regulation(
@@ -505,7 +530,12 @@ def parse_simulator_config(
 ) -> SimulatorConfig:
     required = _COMMON_REQUIRED_CONFIG_KEYS
     if not has_bed:
-        required = required | {"GENOME_LENGTH", "INITIAL_COPY_NUMBER"}
+        required = required | {
+            "GENOME_LENGTH",
+            "NUMBER_OF_CHROMOSOMES",
+            "INITIAL_COPY_NUMBER",
+            "CRUCIAL_BIN_INDICES",
+        }
     _require_exact_keys(
         value,
         allowed=_CONFIG_KEYS,
@@ -513,9 +543,16 @@ def parse_simulator_config(
         context="simulator configuration",
     )
 
-    if has_bed and ({"GENOME_LENGTH", "INITIAL_COPY_NUMBER"} & set(value)):
+    layout_keys = {
+        "GENOME_LENGTH",
+        "NUMBER_OF_CHROMOSOMES",
+        "INITIAL_COPY_NUMBER",
+        "CRUCIAL_BIN_INDICES",
+    }
+    if has_bed and (layout_keys & set(value)):
         raise ValueError(
-            "GENOME_LENGTH and INITIAL_COPY_NUMBER must be omitted when BED-like input is used."
+            "GENOME_LENGTH, NUMBER_OF_CHROMOSOMES, INITIAL_COPY_NUMBER, and "
+            "CRUCIAL_BIN_INDICES must be omitted when BED-like input is used."
         )
 
     semantic_version = value["SIMULATOR_SEMANTIC_VERSION"]
@@ -551,16 +588,44 @@ def parse_simulator_config(
     )
     if baseline_attempts != 1:
         raise ValueError(
-            "CTBF v3 fixes BASELINE_DESCENDANT_ATTEMPTS at 1."
+            "CTBF v5 fixes BASELINE_DESCENDANT_ATTEMPTS at 1."
         )
+
+    genome_length = (
+        None
+        if has_bed
+        else _as_int(value["GENOME_LENGTH"], "GENOME_LENGTH", minimum=1)
+    )
+    number_of_chromosomes = (
+        None
+        if has_bed
+        else _as_int(
+            value["NUMBER_OF_CHROMOSOMES"],
+            "NUMBER_OF_CHROMOSOMES",
+            minimum=1,
+        )
+    )
+    if (
+        genome_length is not None
+        and number_of_chromosomes is not None
+        and number_of_chromosomes > genome_length
+    ):
+        raise ValueError("NUMBER_OF_CHROMOSOMES must not exceed GENOME_LENGTH.")
+
+    crucial_bin_indices = (
+        None
+        if has_bed
+        else _strict_index_tuple(
+            value["CRUCIAL_BIN_INDICES"],
+            "CRUCIAL_BIN_INDICES",
+            upper_bound=genome_length,
+        )
+    )
 
     return SimulatorConfig(
         semantic_version=semantic_version,
-        genome_length=(
-            None
-            if has_bed
-            else _as_int(value["GENOME_LENGTH"], "GENOME_LENGTH", minimum=1)
-        ),
+        genome_length=genome_length,
+        number_of_chromosomes=number_of_chromosomes,
         initial_copy_number=(
             None
             if has_bed
@@ -570,6 +635,7 @@ def parse_simulator_config(
                 minimum=0,
             )
         ),
+        crucial_bin_indices=crucial_bin_indices,
         number_of_generations=_as_int(
             value["NUMBER_OF_GENERATIONS"],
             "NUMBER_OF_GENERATIONS",
@@ -894,24 +960,35 @@ def _resolve_bins(
 
 def _default_unresolved_bins(config: SimulatorConfig) -> Tuple[_UnresolvedGenomeBin, ...]:
     assert config.genome_length is not None
+    assert config.number_of_chromosomes is not None
     assert config.initial_copy_number is not None
-    return tuple(
-        _UnresolvedGenomeBin(
-            chromosome="1",
-            start=index,
-            end=index + 1,
-            initial_copy_number=config.initial_copy_number,
-            cna_event_probability=None,
-            gain_given_cna_probability=None,
-            interval_cna_probability=None,
-            interval_gain_operators=None,
-            additive_gain_lambda=None,
-            multiplicative_factors=None,
-            telomeric_instability=None,
-            crucial=False,
-        )
-        for index in range(config.genome_length)
+    assert config.crucial_bin_indices is not None
+    crucial_indices = frozenset(config.crucial_bin_indices)
+    base_size, longer_chromosomes = divmod(
+        config.genome_length,
+        config.number_of_chromosomes,
     )
+    bins = []
+    for chromosome_index in range(config.number_of_chromosomes):
+        chromosome_size = base_size + int(chromosome_index < longer_chromosomes)
+        for local_index in range(chromosome_size):
+            bins.append(
+                _UnresolvedGenomeBin(
+                    chromosome=str(chromosome_index + 1),
+                    start=local_index,
+                    end=local_index + 1,
+                    initial_copy_number=config.initial_copy_number,
+                    cna_event_probability=None,
+                    gain_given_cna_probability=None,
+                    interval_cna_probability=None,
+                    interval_gain_operators=None,
+                    additive_gain_lambda=None,
+                    multiplicative_factors=None,
+                    telomeric_instability=None,
+                    crucial=len(bins) in crucial_indices,
+                )
+            )
+    return tuple(bins)
 
 
 def load_simulator_inputs(
@@ -946,6 +1023,14 @@ def load_simulator_inputs(
         unresolved = _parse_bed_like(bed_bytes, bed_label)
 
     bins = _resolve_bins(config, unresolved)
+    if all(genome_bin.initial_copy_number == 0 for genome_bin in bins):
+        raise ValueError("The founder genome cannot be entirely copy-number zero.")
+    if config.crucial_survival_enabled and not any(
+        genome_bin.crucial for genome_bin in bins
+    ):
+        raise ValueError(
+            "CRUCIAL_SURVIVAL_ENABLED=true requires at least one crucial bin."
+        )
     return LoadedSimulatorInputs(
         config=config,
         genome_bins=bins,
@@ -961,7 +1046,7 @@ def choose_crucial_mask(
     fraction: float,
     seed: int,
 ) -> Tuple[int, ...]:
-    """Select an exact, reproducible fraction without replacement for tests."""
+    """Select an exact, reproducible fraction without replacement."""
     if number_of_positions <= 0:
         raise ValueError("number_of_positions must be positive.")
     fraction = _as_probability(fraction, "fraction")

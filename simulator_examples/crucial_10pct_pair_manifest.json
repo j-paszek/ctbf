@@ -1,6 +1,6 @@
 {
-  "experiment_role": "deterministic semantic validation; not a preregistered paper regime",
-  "simulator_semantic_version": "ctbf-cnp-state-simulator-v3",
+  "experiment_role": "prospectively fixed primary-mask provenance and deterministic semantic validation; not a preregistered paper regime",
+  "simulator_semantic_version": "ctbf-cnp-state-simulator-v5",
   "mask_selection": {
     "eligible_row_count": 100,
     "selected_fraction": 0.1,
@@ -20,7 +20,13 @@
     ]
   },
   "shared_bed": "crucial_10pct_bed.csv",
+  "standard_no_bed_config": "default.json",
   "crucial_config": "crucial_10pct.json",
   "control_config": "crucial_10pct_control.json",
-  "paired_difference": "CRUCIAL_SURVIVAL_ENABLED only"
+  "paired_difference": "CRUCIAL_SURVIVAL_ENABLED only",
+  "integration_test_stress_override": {
+    "simulation_seed": 73,
+    "CNA_EVENT_PROBABILITY": 0.08,
+    "interpretation": "deliberate mechanism stress for deterministic integration testing; not an experiment setting"
+  }
 }

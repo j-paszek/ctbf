@@ -1,4 +1,4 @@
-"""Pure typed event proposal and application mechanics for CTBF simulator v3."""
+"""Pure typed event proposal and application mechanics for CTBF simulator v5."""
 
 from __future__ import annotations
 
@@ -17,8 +17,10 @@ class CNAEventProposal:
     within_generation_time: float
     event_class: str
     chromosome: Optional[str]
+    initiation_index: Optional[int]
     start_index: int
     end_index: int
+    footprint_direction: str
     direction: str
     operator: str
     magnitude: int
@@ -31,12 +33,15 @@ class CNAEventRecord:
     within_generation_time: float
     event_class: str
     chromosome: Optional[str]
+    initiation_index: Optional[int]
     start_index: int
     end_index: int
+    initiation_coordinate: Optional[int]
     start_coordinate: Optional[int]
     end_coordinate: Optional[int]
     footprint_length: int
     multi_position: bool
+    footprint_direction: str
     direction: str
     operator: str
     magnitude: int
@@ -59,12 +64,15 @@ class CNAEventRecord:
             "within_generation_time": self.within_generation_time,
             "event_class": self.event_class,
             "chromosome": self.chromosome,
+            "initiation_index": self.initiation_index,
             "start_index": self.start_index,
             "end_index": self.end_index,
+            "initiation_coordinate": self.initiation_coordinate,
             "start_coordinate": self.start_coordinate,
             "end_coordinate": self.end_coordinate,
             "footprint_length": self.footprint_length,
             "multi_position": self.multi_position,
+            "footprint_direction": self.footprint_direction,
             "direction": self.direction,
             "operator": self.operator,
             "magnitude": self.magnitude,
@@ -79,14 +87,18 @@ class CNAEventRecord:
 @dataclass(frozen=True)
 class EventApplicationResult:
     genome: Optional[np.ndarray]
+    proposed_events: Tuple[CNAEventProposal, ...]
     attempted_records: Tuple[CNAEventRecord, ...]
     edge_records: Tuple[CNAEventRecord, ...]
-    rejected_by_crucial_survival: bool
+    viability_rejection_reason: Optional[str]
     net_zero_sequence: bool
 
 
-def _chromosome_end_indices(genome_bins: Sequence[GenomeBin]) -> Tuple[int, ...]:
-    result = [0] * len(genome_bins)
+def _chromosome_boundary_indices(
+    genome_bins: Sequence[GenomeBin],
+) -> Tuple[Tuple[int, ...], Tuple[int, ...]]:
+    starts = [0] * len(genome_bins)
+    ends = [0] * len(genome_bins)
     start = 0
     while start < len(genome_bins):
         chromosome = genome_bins[start].chromosome
@@ -94,9 +106,10 @@ def _chromosome_end_indices(genome_bins: Sequence[GenomeBin]) -> Tuple[int, ...]
         while end + 1 < len(genome_bins) and genome_bins[end + 1].chromosome == chromosome:
             end += 1
         for index in range(start, end + 1):
-            result[index] = end
+            starts[index] = start
+            ends[index] = end
         start = end + 1
-    return tuple(result)
+    return tuple(starts), tuple(ends)
 
 
 def segmental_initiation_probabilities(
@@ -135,7 +148,7 @@ def propose_event_sequence(
 ) -> Tuple[CNAEventProposal, ...]:
     """Sample all proposals first, then order independently of genomic position."""
     number_of_positions = len(genome_bins)
-    chromosome_ends = _chromosome_end_indices(genome_bins)
+    chromosome_starts, chromosome_ends = _chromosome_boundary_indices(genome_bins)
     initiation_probabilities = segmental_initiation_probabilities(
         genome_bins,
         initiation_multiplier=initiation_multiplier,
@@ -143,7 +156,8 @@ def propose_event_sequence(
 
     initiation_draws = rng_streams["event_initiation"].random(number_of_positions)
     interval_draws = rng_streams["event_class"].random(number_of_positions)
-    footprint_draws = rng_streams["footprint"].random(number_of_positions)
+    footprint_direction_draws = rng_streams["footprint"].random(number_of_positions)
+    footprint_endpoint_draws = rng_streams["footprint"].random(number_of_positions)
     direction_draws = rng_streams["event_type"].random(number_of_positions)
     operator_draws = rng_streams["gain_operator"].random(number_of_positions)
     factor_draws = rng_streams["magnitude_factor"].random(number_of_positions)
@@ -162,14 +176,30 @@ def propose_event_sequence(
 
         is_interval = interval_draws[index] < genome_bin.interval_cna_probability
         if is_interval:
-            available = chromosome_ends[index] - index + 1
-            end_index = index + min(
-                available - 1,
-                int(footprint_draws[index] * available),
-            )
+            extends_left = footprint_direction_draws[index] < 0.5
+            if extends_left:
+                available = index - chromosome_starts[index] + 1
+                sampled_endpoint = index - min(
+                    available - 1,
+                    int(footprint_endpoint_draws[index] * available),
+                )
+                start_index = sampled_endpoint
+                end_index = index
+                footprint_direction = "left"
+            else:
+                available = chromosome_ends[index] - index + 1
+                sampled_endpoint = index + min(
+                    available - 1,
+                    int(footprint_endpoint_draws[index] * available),
+                )
+                start_index = index
+                end_index = sampled_endpoint
+                footprint_direction = "right"
             event_class = "interval_mode_cna"
         else:
+            start_index = index
             end_index = index
+            footprint_direction = "point"
             event_class = "point_unit_cna"
 
         is_gain = direction_draws[index] < genome_bin.gain_given_cna_probability
@@ -194,8 +224,10 @@ def propose_event_sequence(
                 within_generation_time=float(order_draws[index]),
                 event_class=event_class,
                 chromosome=genome_bin.chromosome,
-                start_index=index,
+                initiation_index=index,
+                start_index=start_index,
                 end_index=end_index,
+                footprint_direction=footprint_direction,
                 direction=direction,
                 operator=operator,
                 magnitude=magnitude,
@@ -210,8 +242,10 @@ def propose_event_sequence(
                 within_generation_time=float(rng_streams["event_order"].random()),
                 event_class="whole_genome_doubling",
                 chromosome=None,
+                initiation_index=None,
                 start_index=0,
                 end_index=number_of_positions - 1,
+                footprint_direction="whole_genome",
                 direction="gain",
                 operator="whole_genome_doubling",
                 magnitude=2,
@@ -266,8 +300,14 @@ def _apply_proposal(
         within_generation_time=proposal.within_generation_time,
         event_class=proposal.event_class,
         chromosome=proposal.chromosome,
+        initiation_index=proposal.initiation_index,
         start_index=proposal.start_index,
         end_index=proposal.end_index,
+        initiation_coordinate=(
+            None
+            if proposal.initiation_index is None
+            else genome_bins[proposal.initiation_index].start
+        ),
         start_coordinate=(
             None
             if proposal.event_class == "whole_genome_doubling"
@@ -280,6 +320,7 @@ def _apply_proposal(
         ),
         footprint_length=len(positions),
         multi_position=len(positions) > 1,
+        footprint_direction=proposal.footprint_direction,
         direction=proposal.direction,
         operator=proposal.operator,
         magnitude=proposal.magnitude,
@@ -304,22 +345,56 @@ def apply_event_sequence(
         index for index, genome_bin in enumerate(genome_bins) if genome_bin.crucial
     )
 
-    ordered_proposals = sorted(
-        proposals,
-        key=lambda proposal: (
-            proposal.within_generation_time,
-            proposal.proposal_id,
-        ),
+    ordered_proposals = tuple(
+        sorted(
+            proposals,
+            key=lambda proposal: (
+                proposal.within_generation_time,
+                proposal.proposal_id,
+            ),
+        )
     )
+
+    if not np.any(genome):
+        return EventApplicationResult(
+            genome=None,
+            proposed_events=ordered_proposals,
+            attempted_records=(),
+            edge_records=(),
+            viability_rejection_reason="all_zero_genome",
+            net_zero_sequence=False,
+        )
+    if crucial_survival_enabled and any(
+        genome[index] == 0 for index in crucial_positions
+    ):
+        return EventApplicationResult(
+            genome=None,
+            proposed_events=ordered_proposals,
+            attempted_records=(),
+            edge_records=(),
+            viability_rejection_reason="crucial_bin_zero",
+            net_zero_sequence=False,
+        )
+
     for order, proposal in enumerate(ordered_proposals):
         record = _apply_proposal(genome, proposal, genome_bins, order)
         records.append(record)
+        if not np.any(genome):
+            return EventApplicationResult(
+                genome=None,
+                proposed_events=ordered_proposals,
+                attempted_records=tuple(records),
+                edge_records=(),
+                viability_rejection_reason="all_zero_genome",
+                net_zero_sequence=False,
+            )
         if crucial_survival_enabled and any(genome[index] == 0 for index in crucial_positions):
             return EventApplicationResult(
                 genome=None,
+                proposed_events=ordered_proposals,
                 attempted_records=tuple(records),
                 edge_records=(),
-                rejected_by_crucial_survival=True,
+                viability_rejection_reason="crucial_bin_zero",
                 net_zero_sequence=False,
             )
 
@@ -332,9 +407,10 @@ def apply_event_sequence(
     )
     return EventApplicationResult(
         genome=genome,
+        proposed_events=ordered_proposals,
         attempted_records=tuple(records),
         edge_records=edge_records,
-        rejected_by_crucial_survival=False,
+        viability_rejection_reason=None,
         net_zero_sequence=net_zero_sequence,
     )
 

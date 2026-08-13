@@ -1,4 +1,5 @@
 from pathlib import Path
+import random
 import sys
 
 import networkx as nx
@@ -13,6 +14,12 @@ from reconstructor import build_evolution_tree
 from distance_semantics import DirectedDistanceBundle
 from reconstructor_plausibility import is_biologically_plausible_ancestor
 from reconstructor_temporal import (
+    TEMPORAL_ARBORESCENCE_SOLVER_VERSION,
+    _WorkingEdge,
+    _compact_minimum_spanning_arborescence,
+    _compact_seeded_tie_ranks,
+    _edge_tie_key_index,
+    _seeded_tie_ranks,
     temporal_cnp_arborescence,
     temporal_cnp_arborescence_directed,
     temporal_cnp_arborescence_directed_no_time,
@@ -69,6 +76,155 @@ def _label_topology(tree, root):
             for parent, child in tree.edges()
         ),
     )
+
+
+def _working_edges(edge_specs):
+    return [
+        _WorkingEdge(
+            edge_id=edge_id,
+            original_source=source,
+            original_target=target,
+            source=source,
+            target=target,
+            weight=weight,
+        )
+        for edge_id, (source, target, weight) in enumerate(edge_specs)
+    ]
+
+
+@pytest.mark.parametrize("occurrence_count", [1, 2, 5, 9])
+@pytest.mark.parametrize("seed", [0, 7, 29])
+def test_compact_tie_ranks_exactly_match_the_legacy_tuple_universe(
+    occurrence_count,
+    seed,
+):
+    biological_edges = [
+        (parent, child)
+        for parent in range(occurrence_count)
+        for child in range(occurrence_count)
+        if parent != child
+    ]
+    legacy = _seeded_tie_ranks(
+        biological_edges,
+        list(range(occurrence_count)),
+        seed,
+    )
+    compact = _compact_seeded_tie_ranks(occurrence_count, seed)
+    for parent, child in biological_edges:
+        assert legacy[("edge", parent, child)] == compact[
+            _edge_tie_key_index(parent, child, occurrence_count)
+        ]
+    root_offset = occurrence_count * (occurrence_count - 1)
+    for root in range(occurrence_count):
+        assert legacy[("root", root)] == compact[root_offset + root]
+
+
+@pytest.mark.parametrize("seed", range(24))
+def test_compact_edmonds_exactly_matches_networkx_reference(seed):
+    biological_count = 3 + seed % 5
+    virtual_root = biological_count
+    rng = random.Random(seed)
+    edge_specs = [
+        (source, target, rng.randrange(9))
+        for source in range(biological_count)
+        for target in range(biological_count)
+        if source != target
+    ]
+    edge_specs.extend(
+        (virtual_root, target, 20 + rng.randrange(9))
+        for target in range(biological_count)
+    )
+
+    reference_graph = nx.DiGraph()
+    reference_graph.add_nodes_from(range(biological_count + 1))
+    for edge_id, (source, target, weight) in enumerate(edge_specs):
+        reference_graph.add_edge(
+            source,
+            target,
+            objective_cost=weight,
+            edge_id=edge_id,
+        )
+    reference = nx.minimum_spanning_arborescence(
+        reference_graph,
+        attr="objective_cost",
+        preserve_attrs=True,
+    )
+    reference_edge_ids = {
+        data["edge_id"]
+        for _, _, data in reference.edges(data=True)
+    }
+
+    selected_edge_ids = _compact_minimum_spanning_arborescence(
+        biological_count + 1,
+        virtual_root,
+        _working_edges(edge_specs),
+    )
+
+    assert selected_edge_ids == reference_edge_ids
+
+
+def test_compact_edmonds_expands_nested_cycle_contractions():
+    virtual_root = 3
+    edge_specs = [
+        (0, 1, 1),
+        (0, 2, 1),
+        (1, 0, 1),
+        (2, 0, 2),
+        (virtual_root, 0, 10),
+        (virtual_root, 1, 11),
+        (virtual_root, 2, 12),
+    ]
+    reference_graph = nx.DiGraph()
+    reference_graph.add_nodes_from(range(4))
+    for edge_id, (source, target, weight) in enumerate(edge_specs):
+        reference_graph.add_edge(
+            source,
+            target,
+            objective_cost=weight,
+            edge_id=edge_id,
+        )
+    reference = nx.minimum_spanning_arborescence(
+        reference_graph,
+        attr="objective_cost",
+        preserve_attrs=True,
+    )
+
+    selected_edge_ids = _compact_minimum_spanning_arborescence(
+        4,
+        virtual_root,
+        _working_edges(edge_specs),
+    )
+
+    assert selected_edge_ids == {
+        data["edge_id"]
+        for _, _, data in reference.edges(data=True)
+    }
+
+
+def test_production_temporal_solver_does_not_call_networkx_edmonds(monkeypatch):
+    def reject_networkx_backend(*_args, **_kwargs):
+        raise AssertionError("The production temporal solver used NetworkX Edmonds.")
+
+    monkeypatch.setattr(
+        nx,
+        "minimum_spanning_arborescence",
+        reject_networkx_backend,
+    )
+    cells = [_cell([2, index + 1], index, index) for index in range(40)]
+    matrix = np.abs(
+        np.subtract.outer(np.arange(len(cells)), np.arange(len(cells)))
+    ).astype(float)
+
+    tree, _, _ = temporal_cnp_arborescence_no_time(
+        matrix,
+        [cells],
+        list(range(len(cells))),
+        seed=31,
+    )
+
+    assert nx.is_arborescence(tree)
+    assert tree.number_of_nodes() == 40
+    assert tree.number_of_edges() == 39
 
 
 def test_temporal_arborescence_creates_one_vertex_per_level_state_record():
@@ -322,6 +478,15 @@ def test_temporal_algorithm_contract_metadata_is_explicit():
     assert temporal_cnp_arborescence_directed.ctbf_order_ablation is (
         temporal_cnp_arborescence_directed_no_time
     )
+    assert {
+        algorithm.ctbf_solver_version
+        for algorithm in (
+            temporal_cnp_arborescence,
+            temporal_cnp_arborescence_no_time,
+            temporal_cnp_arborescence_directed,
+            temporal_cnp_arborescence_directed_no_time,
+        )
+    } == {TEMPORAL_ARBORESCENCE_SOLVER_VERSION}
 
 
 def test_directed_variant_changes_only_both_plausible_numeric_edge_tier():

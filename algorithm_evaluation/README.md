@@ -1,17 +1,88 @@
 # Evaluation of NJ-derived Reconstruction Algorithms
 
-## CTBF v3 paper pipeline
+## CTBF v5 paper pipeline
 
 Reusable pipeline mechanics live in `paper_pipeline_contract.py`,
 `paper_pipeline_runner.py`, and `paper_pipeline_analysis.py`. Registered and
-smoke execution are currently disabled: CTBF v3 simulator parameters and a new
+smoke execution are currently disabled: CTBF v5 simulator parameters and a new
 protocol/manifest must be owner-approved before the manifest hash lock is set.
 
 The old G0-05-A CTBF-v2 manifest, commands, outputs, and exact-lock tests are
 legacy evidence and are not accepted or replayed. Generic pipeline invariants
 remain in `test/test_paper_pipeline.py`; new manifest-specific tests are added
-only after the v3 freeze. The historical scripts and result folders described
-below are CTBF v1/rejected-paper context, not v3 evidence.
+only after the v5 freeze. The historical scripts and result folders described
+below are CTBF v1/rejected-paper context, not v5 evidence.
+
+## CTBF v5 non-paper reconstruction-intuition probe
+
+`simulator_reconstruction_intuition_probe.py` implements the owner-approved
+bounded design check that precedes selection of the paper height regime. It
+runs 12 fresh common-seed blocks at H14/H24/H34, uses the Rule-Y generations
+`[9,12,14]`, `[15,20,24]`, and `[21,28,34]`, and samples
+`min(6, available distinct representative states)` at every nonempty biopsy.
+It runs production minimum-bidirectional cnp2cnp once per case and passes that
+same realized input to all six registered reconstruction arms.
+
+The output distinguishes reconstruction problems: the two partial-output arms
+declare GRF only, while fully labeled arms declare AD-F1 and GRF. It also
+records truth-side sampled-ancestry, hidden-fork/path, recurrence,
+representability, ambiguity, resource, runtime, and typed-failure summaries.
+It writes no CNP profiles, trees, distance matrices, or simulator node
+identities. The artifact is discovery-only and cannot freeze a paper height or
+select simulator parameters from accuracy.
+
+Run the complete owner handoff with:
+
+```bash
+./zzzz_verify_ctbf.sh simulator-reconstruction-probe \
+  --base-config simulator_examples/default.json \
+  --replicates 12 --base-seed 20260812 \
+  --output /tmp/ctbf-v5-reconstruction-intuition-probe.json \
+  --progress
+```
+
+## CTBF v5 truth-only sampling-fraction probe
+
+`simulator_sampling_fraction_truth_probe.py` tests whether the sparse ancestry
+seen above is driven by the capped-six rule. On the same truth blocks it
+compares the nested hybrid rule `min(N,max(6,ceil(pN)))` for the capped-six
+control, 5%, 10%, 25%, and 50%. Percentages refer to distinct representative
+genotype states, not physical cells or clone abundance.
+
+The compact probe records ancestry/hidden-branch diagnostics and projected
+distance cost only. It runs no cnp2cnp, reconstruction, or evaluator. Run:
+
+```bash
+./zzzz_verify_ctbf.sh simulator-sampling-fraction-truth-probe \
+  --base-config simulator_examples/default.json \
+  --reference-report /tmp/ctbf-v5-reconstruction-intuition-probe.json \
+  --replicates 12 --base-seed 20260812 \
+  --output /tmp/ctbf-v5-sampling-fraction-truth-probe.json \
+  --progress
+```
+
+## CTBF v5 dense-reconstruction operational preflight
+
+`simulator_dense_reconstruction_preflight.py` runs only the registered largest
+50%-sampling case from the completed truth probe: H34 replicate index 11, with
+329 unique representative genotype states and 107,912 ordered distance
+entries. It validates the regenerated truth and selection against both compact
+reference artifacts, then runs production cnp2cnp and all six established
+reconstruction/evaluation arms sequentially.
+
+This is a technical feasibility gate, not an accuracy test. Even a passing
+result requires owner review before any full dense reconstruction probe. Run:
+
+```bash
+./zzzz_verify_ctbf.sh simulator-dense-reconstruction-preflight \
+  --base-config simulator_examples/default.json \
+  --fraction-truth-report \
+    /tmp/ctbf-v5-sampling-fraction-truth-probe.json \
+  --sparse-reconstruction-report \
+    /tmp/ctbf-v5-reconstruction-intuition-probe.json \
+  --output /tmp/ctbf-v5-dense-reconstruction-preflight.json \
+  --progress
+```
 
 ## Historical workflow
 

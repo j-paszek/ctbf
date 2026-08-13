@@ -89,6 +89,16 @@ class SimulationDiagnostics:
         self.by_generation = defaultdict(Counter)
         self.state_lineage_regulation_by_generation = {}
         self.cna_initiation_schedule_by_generation = {}
+        self.interval_footprints = {
+            stage: {"gain": Counter(), "loss": Counter()}
+            for stage in ("proposed", "retained")
+        }
+        self.interval_footprints_by_generation = {
+            stage: defaultdict(lambda: {"gain": Counter(), "loss": Counter()})
+            for stage in ("proposed", "retained")
+        }
+        self.zero_bin_counts_by_generation = defaultdict(Counter)
+        self.longest_zero_runs_by_generation = defaultdict(Counter)
 
     def increment(self, generation, name, amount=1):
         self.totals[name] += int(amount)
@@ -141,6 +151,68 @@ class SimulationDiagnostics:
             ),
         }
 
+    def _record_segmental_events(self, generation, events, *, stage):
+        generation = int(generation)
+        for event in events:
+            if event.event_class == "whole_genome_doubling":
+                continue
+            direction = str(event.direction)
+            self.increment(
+                generation,
+                f"{stage}_segmental_{direction}_events",
+            )
+            self.increment(
+                generation,
+                f"{stage}_{event.event_class}_{direction}_events",
+            )
+            if event.event_class != "interval_mode_cna":
+                continue
+            footprint_length = int(event.end_index - event.start_index + 1)
+            self.interval_footprints[stage][direction][footprint_length] += 1
+            self.interval_footprints_by_generation[stage][generation][direction][
+                footprint_length
+            ] += 1
+
+    def record_proposed_segmental_events(self, generation, proposals):
+        self._record_segmental_events(generation, proposals, stage="proposed")
+
+    def record_retained_segmental_events(self, generation, records):
+        self._record_segmental_events(generation, records, stage="retained")
+
+    def record_retained_profile(self, generation, genome, chromosomes):
+        """Record compact CN0 burden without retaining another profile copy."""
+        values = np.asarray(genome, dtype=int)
+        if values.ndim != 1 or len(values) != len(chromosomes):
+            raise ValueError(
+                "Retained-profile diagnostics require one chromosome per bin."
+            )
+
+        is_zero = values == 0
+        zero_count = int(np.count_nonzero(is_zero))
+        longest_run = 0
+        current_run = 0
+        previous_chromosome = None
+        for chromosome, zero in zip(chromosomes, is_zero):
+            if chromosome != previous_chromosome:
+                current_run = 0
+            current_run = current_run + 1 if bool(zero) else 0
+            longest_run = max(longest_run, current_run)
+            previous_chromosome = chromosome
+
+        generation = int(generation)
+        self.zero_bin_counts_by_generation[generation][zero_count] += 1
+        self.longest_zero_runs_by_generation[generation][longest_run] += 1
+        self.increment(generation, "zero_burden_profiles")
+        for percent in (10, 25, 50):
+            threshold = math.ceil(len(values) * percent / 100)
+            if zero_count >= threshold:
+                self.increment(
+                    generation,
+                    f"profiles_at_or_above_{percent}pct_cn0",
+                )
+        if zero_count == len(values):
+            self.increment(generation, "retained_all_zero_profiles")
+
     def snapshot(self):
         result = {
             "totals": dict(sorted(self.totals.items())),
@@ -174,6 +246,9 @@ class SimulationDiagnostics:
                 entry["attempted_segmental_event_records"] = int(
                     generation_counts.get("attempted_segmental_event_records", 0)
                 )
+                entry["proposed_segmental_event_records"] = int(
+                    generation_counts.get("proposed_segmental_event_records", 0)
+                )
                 entry["effective_segmental_event_applications"] = int(
                     generation_counts.get(
                         "effective_segmental_event_applications", 0
@@ -181,6 +256,47 @@ class SimulationDiagnostics:
                 )
                 schedule_audit[str(generation)] = entry
             result["cna_initiation_schedule_by_generation"] = schedule_audit
+        result["interval_footprint_length_histograms"] = {}
+        for stage in ("proposed", "retained"):
+            result["interval_footprint_length_histograms"][stage] = {
+                "totals": {
+                    direction: {
+                        str(length): int(count)
+                        for length, count in sorted(histogram.items())
+                    }
+                    for direction, histogram in self.interval_footprints[stage].items()
+                },
+                "by_generation": {
+                    str(generation): {
+                        direction: {
+                            str(length): int(count)
+                            for length, count in sorted(histogram.items())
+                        }
+                        for direction, histogram in histograms.items()
+                    }
+                    for generation, histograms in sorted(
+                        self.interval_footprints_by_generation[stage].items()
+                    )
+                },
+            }
+        result["zero_burden_by_generation"] = {
+            str(generation): {
+                "profile_count": int(sum(zero_histogram.values())),
+                "zero_bin_count_histogram": {
+                    str(zero_count): int(count)
+                    for zero_count, count in sorted(zero_histogram.items())
+                },
+                "longest_contiguous_zero_run_histogram": {
+                    str(run_length): int(count)
+                    for run_length, count in sorted(
+                        self.longest_zero_runs_by_generation[generation].items()
+                    )
+                },
+            }
+            for generation, zero_histogram in sorted(
+                self.zero_bin_counts_by_generation.items()
+            )
+        }
         return result
 
 
@@ -232,7 +348,7 @@ def state_lineage_survival_probability(
 
 
 """
-CTBF v3 CNP-state evolution simulator.
+CTBF v5 CNP-state evolution simulator.
 
 Strict JSON/BED parsing and immutable resolved inputs live in
 ``simulator_config``. Pure typed CNA proposal/application mechanics live in
@@ -315,6 +431,11 @@ class CancerCellEvolutionSimulator:
             generation=0,
             cell_id=0,
         )
+        self.diagnostics.record_retained_profile(
+            0,
+            self.founder_genome,
+            self.chromosome,
+        )
         self.tree.graph["simulator_provenance"] = self.provenance()
         self.node_counter = 1
         self._canonical_cell_id_by_genome = None
@@ -332,6 +453,30 @@ class CancerCellEvolutionSimulator:
             "config_source": self.config_source,
             "bed_source": self.bed_source,
         }
+        if hasattr(self, "genome_bins"):
+            result["genome_layout"] = {
+                "number_of_bins": len(self.genome_bins),
+                "number_of_chromosomes": len(
+                    {genome_bin.chromosome for genome_bin in self.genome_bins}
+                ),
+            }
+        if hasattr(self, "model_crucial_for_survival"):
+            crucial_indices = [
+                index
+                for index, genome_bin in enumerate(self.genome_bins)
+                if genome_bin.crucial
+            ]
+            result["viability_model"] = {
+                "all_zero_genome_nonviable": True,
+                "crucial_survival_enabled": bool(
+                    self.model_crucial_for_survival
+                ),
+                "crucial_bin_indices": crucial_indices,
+                "crucial_bin_count": len(crucial_indices),
+                "crucial_bin_fraction": (
+                    len(crucial_indices) / len(self.genome_bins)
+                ),
+            }
         if hasattr(self, "state_lineage_regulation"):
             result["state_lineage_regulation"] = {
                 "model": self.state_lineage_regulation.model,
@@ -572,7 +717,7 @@ class CancerCellEvolutionSimulator:
             return int(rng.integers(minimum, maximum + 1))
         if self.offspring_model == "poisson":
             return int(rng.poisson(float(self.offspring_param)))
-        raise ValueError("Unsupported CTBF v3 OFFSPRING_MODEL.")
+        raise ValueError("Unsupported CTBF v5 OFFSPRING_MODEL.")
 
     def _unregulated_expected_descendant_attempts(self):
         if self.offspring_model == "constant":
@@ -762,10 +907,26 @@ class CancerCellEvolutionSimulator:
                     initiation_multiplier,
                 )
                 attempted_records = event_result.attempted_records
+                proposed_events = event_result.proposed_events
+                proposed_segmental_events = tuple(
+                    event
+                    for event in proposed_events
+                    if event.event_class != "whole_genome_doubling"
+                )
                 segmental_records = tuple(
                     record
                     for record in attempted_records
                     if record.event_class != "whole_genome_doubling"
+                )
+                self.diagnostics.increment(
+                    current_generation,
+                    "proposed_event_records",
+                    len(proposed_events),
+                )
+                self.diagnostics.increment(
+                    current_generation,
+                    "proposed_segmental_event_records",
+                    len(proposed_segmental_events),
                 )
                 self.diagnostics.increment(
                     current_generation,
@@ -776,6 +937,10 @@ class CancerCellEvolutionSimulator:
                     current_generation,
                     "attempted_segmental_event_records",
                     len(segmental_records),
+                )
+                self.diagnostics.record_proposed_segmental_events(
+                    current_generation,
+                    proposed_segmental_events,
                 )
                 self.diagnostics.increment(
                     current_generation,
@@ -797,12 +962,20 @@ class CancerCellEvolutionSimulator:
                     "sampled_wgd_events",
                     sum(
                         record.event_class == "whole_genome_doubling"
-                        for record in attempted_records
+                        for record in proposed_events
                     ),
                 )
 
-                if event_result.rejected_by_crucial_survival:
-                    self.diagnostics.increment(current_generation, "crucial_rejections")
+                rejection_reason = event_result.viability_rejection_reason
+                if rejection_reason is not None:
+                    self.diagnostics.increment(
+                        current_generation,
+                        "viability_rejections",
+                    )
+                    self.diagnostics.increment(
+                        current_generation,
+                        f"{rejection_reason}_rejections",
+                    )
                     continue
 
                 child_genome = event_result.genome
@@ -859,6 +1032,15 @@ class CancerCellEvolutionSimulator:
                     events=event_dicts,
                     events_text=event_summary,
                     event_count=len(event_dicts),
+                )
+                self.diagnostics.record_retained_segmental_events(
+                    current_generation,
+                    edge_records,
+                )
+                self.diagnostics.record_retained_profile(
+                    current_generation,
+                    child_genome,
+                    self.chromosome,
                 )
                 self.diagnostics.increment(current_generation, "retained_children")
                 self.diagnostics.increment(

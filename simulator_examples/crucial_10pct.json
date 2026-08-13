@@ -1,22 +1,21 @@
 {
-  "SIMULATOR_SEMANTIC_VERSION": "ctbf-cnp-state-simulator-v3",
+  "SIMULATOR_SEMANTIC_VERSION": "ctbf-cnp-state-simulator-v5",
   "NUMBER_OF_GENERATIONS": 4,
   "OFFSPRING_MODEL": "constant",
   "OFFSPRING_PARAMETER": 1,
   "BASELINE_DESCENDANT_ATTEMPTS": 1,
-  "CNA_EVENT_PROBABILITY": 0.08,
+  "CNA_EVENT_PROBABILITY": 0.001,
   "CNA_INITIATION_SCHEDULE": {"MODEL": "constant"},
   "GAIN_GIVEN_CNA_PROBABILITY": 0.5,
   "INTERVAL_CNA_PROBABILITY": 0.1,
   "INTERVAL_GAIN_OPERATOR_PROBABILITIES": {
-    "unit": 0.7,
+    "unit": 0.8,
     "additive": 0.2,
-    "multiplicative": 0.1
+    "multiplicative": 0
   },
-  "ADDITIVE_GAIN_LAMBDA": 1,
+  "ADDITIVE_GAIN_LAMBDA": 0,
   "MULTIPLICATIVE_FACTOR_PROBABILITIES": {
-    "2": 0.9,
-    "3": 0.1
+    "2": 1
   },
   "WGD_PROBABILITY": 0,
   "REPRESENTATION_TYPE": "full",
