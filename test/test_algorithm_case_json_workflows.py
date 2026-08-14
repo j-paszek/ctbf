@@ -70,17 +70,10 @@ def _assert_reconstruction_matches_stored_observable_tree(regenerated, stored):
 
     regenerated_graph_root = regenerated_roots[0]
     stored_graph_root = stored_roots[0]
-    regenerated_root_cell_id = regenerated_tree.nodes[regenerated_graph_root].get(
-        "cell_id"
-    )
     stored_root_cell_id = stored_tree.nodes[stored_graph_root].get("cell_id")
-    # CTBF's existing algorithms do not yet expose one uniform root-reference
-    # type: legacy directed agglomeration returns root-state cell_id, whereas
-    # classical and newer routines may return graph node_id.
-    assert regenerated["root"] in (
-        regenerated_graph_root,
-        regenerated_root_cell_id,
-    )
+    # Active CTBF returns graph occurrence identity. Stored rejected-paper
+    # artifacts may still carry the former root-state cell_id token.
+    assert regenerated["root"] == regenerated_graph_root
     assert stored["root"] in (stored_graph_root, stored_root_cell_id)
 
     regenerated_root = regenerated_tree.nodes[regenerated_graph_root]

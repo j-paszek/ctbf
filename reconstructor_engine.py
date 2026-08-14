@@ -67,7 +67,11 @@ def initialize_reconstruction_state(dist_matrix, cells, max_id, seed=7, existing
 
 def remaining_lineage_root(state):
     root = state.node_list[0]
-    return state.tree, state.new_nodes, root.cell_id
+    # The public reconstruction API returns graph identity, not biological
+    # state identity.  Copied-parent internal occurrences deliberately retain
+    # their parent's ``cell_id`` while receiving a fresh ``node_id``; returning
+    # the former can therefore name a non-root observed occurrence.
+    return state.tree, state.new_nodes, root.node_id
 
 
 def run_agglomerative_reconstruction(

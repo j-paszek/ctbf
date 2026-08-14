@@ -18,6 +18,7 @@ from reconstructor_merge import (
     anticentral_weighted_copy_parent_node,
     copy_parent_equal_weight_internal_node,
     copy_parent_without_new_node_record,
+    reuse_or_create_parent_internal_node,
 )
 from reconstructor_nj import (
     make_nj_full_cps_variant,
@@ -494,6 +495,45 @@ def neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony(
     )
 
 
+def neighbor_joining_anticentral_parent_reuse(
+    dist_matrix,
+    cells,
+    max_id,
+    seed=None,
+    existing_tree=None,
+    alpha: float = 1.0,
+    beta: float = 1.0,
+    gamma: float = 0.5,
+    baseline_cn: int = 2,
+):
+    """Anticentral plausible-parsimony reconstruction without forced binarity.
+
+    Pair selection, orientation, retained parent distances, and anticentral
+    centrality updates match the plausible-parsimony incumbent.  The only
+    reconstruction-decision change is the merge representation: an inferred
+    copied-parent occurrence is created once per active parent lineage and
+    reused if that lineage acquires further children.  The identical copied-
+    parent edge has weight zero.  This permits unresolved multifurcations and
+    avoids chains of duplicate parent occurrences.
+
+    The returned inferred occurrences remain labeled working states.  A caller
+    solving the partial-output problem may project only its newly created top
+    nodes to unlabeled latent vertices after reconstruction.
+    """
+    return _run_configured_algorithm(
+        dist_matrix,
+        cells,
+        max_id,
+        seed=seed,
+        existing_tree=existing_tree,
+        pair_selector=make_anticentral_adaptive_v3_pair_selector(alpha, beta, gamma),
+        ancestor_selector=make_plausible_parsimony_parent_selector(baseline_cn),
+        merge_strategy=reuse_or_create_parent_internal_node,
+        distance_update=anticentral_v3_distance_update,
+        configure_state=configure_anticentral_v3_state,
+    )
+
+
 def new_alg(
     dist_matrix,
     cells,
@@ -525,6 +565,7 @@ __all__ = [
     "neighbor_joining_adaptive_centrality",
     "neighbor_joining_adaptive_centrality_nonlinear",
     "neighbor_joining_adaptive_centrality_reversed",
+    "neighbor_joining_anticentral_parent_reuse",
     "neighbor_joining_baseline",
     "neighbor_joining_classical",
     "neighbor_joining_hybrid_anticentral_adaptive_v2",

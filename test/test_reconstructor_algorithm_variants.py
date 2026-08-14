@@ -17,6 +17,7 @@ from algorithm_evaluation.tester import (
 )
 from ctbs_utils import to_newick
 from reconstructor import build_evolution_tree
+from reconstructor_algorithms import neighbor_joining_anticentral_parent_reuse
 from simulator import Genotype
 
 
@@ -147,5 +148,33 @@ def test_neighbor_joining_baseline_keeps_known_three_cell_topology():
         seed=7,
     )
 
-    assert root == 1
+    assert root == next(node for node, degree in tree.in_degree() if degree == 0)
+    assert tree.nodes[root]["cell_id"] == 1
     assert to_newick(tree) == "((1:0.0000,2:1.0000)1:0.0000,3:1.0000)1;"
+
+
+def test_anticentral_parent_reuse_can_return_one_labeled_multifurcation():
+    cells = [
+        Genotype([2, 2], 0),
+        Genotype([2, 3], 1),
+        Genotype([5, 5], 2),
+    ]
+    profiles = np.asarray([cell.genome for cell in cells], dtype=float)
+    distances = np.abs(
+        profiles[:, None, :] - profiles[None, :, :]
+    ).sum(axis=2)
+
+    tree, new_nodes, root = neighbor_joining_anticentral_parent_reuse(
+        distances,
+        cells,
+        max_id=2,
+        seed=7,
+    )
+
+    assert nx.is_arborescence(tree)
+    assert root == next(node for node, degree in tree.in_degree() if degree == 0)
+    assert tree.nodes[root]["cell_id"] == 0
+    assert tree.out_degree(root) == 3
+    assert len(new_nodes) == 1
+    assert tree.edges[root, 0]["weight"] == 0.0
+    assert {tree.nodes[node]["cell_id"] for node in tree} == {0, 1, 2}

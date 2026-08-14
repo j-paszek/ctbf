@@ -19,6 +19,7 @@ from reconstructor_merge import (
     copy_parent_equal_weight_internal_node,
     copy_parent_internal_node,
     copy_parent_without_new_node_record,
+    reuse_or_create_parent_internal_node,
 )
 from reconstructor_nj import _select_min_distance_pair, _select_sum_distance_parent
 from reconstructor_pair_selection import (
@@ -677,6 +678,38 @@ def test_copy_parent_merge_strategies_create_expected_edges(
     assert state.tree.edges[internal_node.node_id, state.node_list[0].node_id]["weight"] == expected_parent_weight
     assert state.tree.edges[internal_node.node_id, state.node_list[1].node_id]["weight"] == expected_child_weight
     assert len(state.new_nodes) == expected_new_nodes
+
+
+def test_parent_reuse_merge_creates_one_multifurcating_inferred_occurrence():
+    state = _state(n=3)
+    first_parent = state.node_list[0]
+    first_child = state.node_list[1]
+
+    internal_node = reuse_or_create_parent_internal_node(
+        state,
+        Orientation(0, 1),
+    )
+    drop_child_keep_parent_update(state, Orientation(0, 1), internal_node)
+
+    reused_node = reuse_or_create_parent_internal_node(
+        state,
+        Orientation(0, 1),
+    )
+    final_child = state.node_list[1]
+    drop_child_keep_parent_update(state, Orientation(0, 1), reused_node)
+
+    assert reused_node is internal_node
+    assert len(state.new_nodes) == 1
+    assert state.new_nodes[internal_node] == [
+        first_parent,
+        first_child,
+        final_child,
+    ]
+    assert state.tree.out_degree(internal_node.node_id) == 3
+    assert state.tree.edges[internal_node.node_id, first_parent.node_id]["weight"] == 0.0
+    assert state.tree.edges[internal_node.node_id, first_child.node_id]["weight"] == 2.0
+    assert state.tree.edges[internal_node.node_id, final_child.node_id]["weight"] == 5.0
+    assert state.node_list == [internal_node]
 
 
 def test_drop_child_keep_parent_update_replaces_parent_and_removes_child():
