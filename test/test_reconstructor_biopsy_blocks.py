@@ -6,6 +6,7 @@ import numpy as np
 
 from reconstructor_biopsy_blocks import (
     BiopsyGuidedConfig,
+    BiopsyGuidedDecisionAudit,
     BiopsySubtreeConfig,
     _minimum_distance_pair_selector,
     assign_compatible_node_ids,
@@ -24,7 +25,10 @@ from reconstructor_biopsy_blocks import (
     reconstruct_biopsy_layers,
     select_anticentral_candidate,
     select_biopsy_parent,
+    select_central_candidate,
     select_closest_candidate,
+    select_deferred_candidate,
+    select_diploid_parsimony_candidate,
     select_first_candidate,
     select_same_id_candidate,
 )
@@ -38,6 +42,10 @@ from reconstructor_engine import initialize_reconstruction_state
 from reconstructor_pair_selection import (
     make_anticentral_adaptive_v3_pair_selector,
     make_hybrid_opt_v2_pair_selector,
+)
+from reconstructor_biopsy_presets import (
+    make_anticentral_binarized_biopsy_guided_config,
+    make_anticentral_tie_binarized_biopsy_guided_config,
 )
 from simulator import Genotype
 
@@ -248,6 +256,165 @@ def test_anticentral_candidate_tie_breaker_prefers_larger_distance_sum():
             tie_breaker=select_anticentral_candidate,
         )
         is anticentral
+    )
+
+
+def test_central_candidate_tie_breaker_requires_unique_smaller_distance_sum():
+    central = Genotype([2, 2], 1)
+    peripheral = Genotype([2, 2], 2)
+    child = Genotype([2, 2], 3)
+    reference = Genotype([2, 2], 4)
+    cells = [central, peripheral, child, reference]
+    id_to_index = make_id_to_index([cell.cell_id for cell in cells])
+    distances = np.array(
+        [
+            [0.0, 4.0, 1.0, 1.0],
+            [4.0, 0.0, 1.0, 9.0],
+            [1.0, 1.0, 0.0, 1.0],
+            [1.0, 9.0, 1.0, 0.0],
+        ]
+    )
+
+    assert (
+        select_closest_candidate(
+            [central, peripheral],
+            child,
+            distances,
+            id_to_index,
+            tie_breaker=select_central_candidate,
+        )
+        is central
+    )
+
+    residual_tie = np.array(
+        [
+            [0.0, 4.0, 1.0],
+            [4.0, 0.0, 1.0],
+            [1.0, 1.0, 0.0],
+        ]
+    )
+    assert (
+        select_closest_candidate(
+            [central, peripheral],
+            child,
+            residual_tie,
+            make_id_to_index([1, 2, 3]),
+            tie_breaker=select_central_candidate,
+        )
+        is None
+    )
+
+
+def test_diploid_parsimony_tie_breaker_uses_burden_then_centrality_then_defers():
+    diploid = Genotype([2, 2], 1)
+    altered = Genotype([3, 3], 2)
+    child = Genotype([2, 3], 3)
+    reference = Genotype([2, 2], 4)
+    id_to_index = make_id_to_index([1, 2, 3, 4])
+    distances = np.array(
+        [
+            [0.0, 4.0, 1.0, 1.0],
+            [4.0, 0.0, 1.0, 9.0],
+            [1.0, 1.0, 0.0, 1.0],
+            [1.0, 9.0, 1.0, 0.0],
+        ]
+    )
+
+    assert (
+        select_closest_candidate(
+            [diploid, altered],
+            child,
+            distances,
+            id_to_index,
+            tie_breaker=select_diploid_parsimony_candidate,
+        )
+        is diploid
+    )
+
+    equally_altered_central = Genotype([1, 2], 1)
+    equally_altered_peripheral = Genotype([3, 2], 2)
+    assert (
+        select_closest_candidate(
+            [equally_altered_central, equally_altered_peripheral],
+            child,
+            distances,
+            id_to_index,
+            tie_breaker=select_diploid_parsimony_candidate,
+        )
+        is equally_altered_central
+    )
+
+    residual_tie = np.array(
+        [
+            [0.0, 4.0, 1.0],
+            [4.0, 0.0, 1.0],
+            [1.0, 1.0, 0.0],
+        ]
+    )
+    assert (
+        select_closest_candidate(
+            [equally_altered_central, equally_altered_peripheral],
+            child,
+            residual_tie,
+            make_id_to_index([1, 2, 3]),
+            tie_breaker=select_diploid_parsimony_candidate,
+        )
+        is None
+    )
+
+
+def test_deferred_parent_tie_copies_child_up_and_audits_the_decision():
+    parent_a = Genotype([2, 2], 1)
+    parent_a.node_id = 1
+    parent_b = Genotype([2, 2], 2)
+    parent_b.node_id = 2
+    child = Genotype([2, 2], 3)
+    child.node_id = 3
+    cells = [parent_a, parent_b, child]
+    tree = nx.DiGraph()
+    for cell in cells:
+        tree.add_node(cell.node_id, genome=cell.genome, cell_id=cell.cell_id)
+    audit = BiopsyGuidedDecisionAudit()
+
+    reconstruct_biopsy_layers(
+        [[parent_a, parent_b], [child]],
+        tree,
+        defaultdict(lambda: None),
+        np.array(
+            [
+                [0.0, 2.0, 1.0],
+                [2.0, 0.0, 1.0],
+                [1.0, 1.0, 0.0],
+            ]
+        ),
+        make_id_to_index([1, 2, 3]),
+        radius=2,
+        unique_node_counter=itertools.count(start=10),
+        config=BiopsyGuidedConfig(
+            candidate_tie_breaker=select_deferred_candidate,
+            decision_audit=audit,
+        ),
+    )
+
+    assert tree.has_edge(10, child.node_id)
+    assert not tree.has_edge(parent_a.node_id, child.node_id)
+    assert not tree.has_edge(parent_b.node_id, child.node_id)
+    assert audit.counters["child_decision_count"] == 1
+    assert audit.counters["multiple_plausible_parent_count"] == 1
+    assert audit.counters["minimum_distance_tie_count"] == 1
+    assert audit.counters["tie_deferred_count"] == 1
+    assert audit.counters["tie_parent_selected_count"] == 0
+    assert audit.counters["selected_parent_count"] == 0
+    assert audit.counters["copy_up_count"] == 1
+    assert (
+        audit.counters["selected_parent_count"]
+        + audit.counters["copy_up_count"]
+        == audit.counters["child_decision_count"]
+    )
+    assert (
+        audit.counters["tie_parent_selected_count"]
+        + audit.counters["tie_deferred_count"]
+        == audit.counters["minimum_distance_tie_count"]
     )
 
 
@@ -622,3 +789,48 @@ def test_binarized_group_attachment_accepts_configured_anticentral_v3_blocks():
     assert tree.out_degree(parent.node_id) == 1
     assert {child.node_id for child in children} <= nx.descendants(tree, parent.node_id)
     assert nx.is_directed_acyclic_graph(tree)
+
+
+def test_clean_anticentral_tie_binarized_preset_keeps_default_subtree_pairing():
+    def reconstruct_with(config):
+        parent = Genotype([2, 2], 1)
+        parent.node_id = 1
+        children = [Genotype([2, 2], cell_id) for cell_id in (2, 3, 4)]
+        for child in children:
+            child.node_id = child.cell_id
+        tree = nx.DiGraph()
+        for cell in [parent, *children]:
+            tree.add_node(cell.node_id, genome=cell.genome, cell_id=cell.cell_id)
+        distances = np.ones((4, 4), dtype=float)
+        np.fill_diagonal(distances, 0.0)
+        reconstruct_biopsy_layers(
+            [[parent], children],
+            tree,
+            defaultdict(lambda: None),
+            distances,
+            make_id_to_index([1, 2, 3, 4]),
+            radius=1,
+            unique_node_counter=itertools.count(start=10),
+            config=config,
+        )
+        return tree
+
+    clean = reconstruct_with(
+        make_anticentral_tie_binarized_biopsy_guided_config()
+    )
+    historical_mixed = reconstruct_with(
+        make_anticentral_binarized_biopsy_guided_config()
+    )
+
+    clean_first_pair_parent = next(
+        node
+        for node in clean.nodes
+        if node >= 10 and set(clean.successors(node)) == {2, 3}
+    )
+    historical_first_pair_parent = next(
+        node
+        for node in historical_mixed.nodes
+        if node >= 10 and set(historical_mixed.successors(node)) == {2, 4}
+    )
+    assert clean_first_pair_parent == 10
+    assert historical_first_pair_parent == 10

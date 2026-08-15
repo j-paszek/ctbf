@@ -1,6 +1,6 @@
 import itertools
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 import networkx as nx
@@ -12,7 +12,7 @@ from simulator import Genotype
 
 
 BiopsyCandidateSelector = Callable[[object, list, np.ndarray, dict, float], object | None]
-BiopsyTieBreaker = Callable[[list, object, np.ndarray, dict], object]
+BiopsyTieBreaker = Callable[[list, object, np.ndarray, dict], object | None]
 BiopsyAttachmentStrategy = Callable[[nx.DiGraph, object, object, np.ndarray, dict], None]
 BiopsyGroupAttachmentStrategy = Callable[
     [nx.DiGraph, object, list, np.ndarray, dict, object, dict, int],
@@ -24,6 +24,50 @@ BiopsyMissingParentStrategy = Callable[
 ]
 BiopsyLevelExtender = Callable[[list], list]
 FinalCellSelector = Callable[[list], list]
+
+
+BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION = "ctbf-biopsy-guided-decision-audit-v1"
+BIOPSY_GUIDED_AUDIT_COUNTERS = (
+    "child_decision_count",
+    "raw_radius_candidate_total",
+    "plausible_candidate_total",
+    "same_state_selected_count",
+    "no_plausible_parent_count",
+    "one_plausible_parent_count",
+    "multiple_plausible_parent_count",
+    "unique_minimum_parent_count",
+    "minimum_distance_tie_count",
+    "tie_parent_selected_count",
+    "tie_deferred_count",
+    "selected_parent_count",
+    "copy_up_count",
+    "shared_parent_group_count",
+    "shared_parent_child_count",
+)
+
+
+@dataclass
+class BiopsyGuidedDecisionAudit:
+    """Explicit per-reconstruction counters for biopsy-layer decisions."""
+
+    counters: dict[str, int] = field(
+        default_factory=lambda: {
+            name: 0 for name in BIOPSY_GUIDED_AUDIT_COUNTERS
+        }
+    )
+
+    def increment(self, name: str, amount: int = 1) -> None:
+        if name not in self.counters:
+            raise ValueError(f"Unknown biopsy-guided audit counter {name!r}.")
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+            raise ValueError("Biopsy-guided audit increments must be nonnegative integers.")
+        self.counters[name] += amount
+
+    def as_record(self) -> dict[str, int | str]:
+        return {
+            "schema_version": BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION,
+            **self.counters,
+        }
 
 
 @dataclass(frozen=True)
@@ -45,17 +89,26 @@ class BiopsyGuidedConfig:
     group_attachment_strategy: BiopsyGroupAttachmentStrategy = None
     missing_parent_strategy: BiopsyMissingParentStrategy = None
     only_nj_final_cell_selector: FinalCellSelector = None
+    decision_audit: BiopsyGuidedDecisionAudit | None = None
 
 
-def default_biopsy_guided_config():
+def default_biopsy_guided_config(*, decision_audit=None):
     return BiopsyGuidedConfig(
         level_extender=extend_biopsy_levels,
-        candidate_selector=select_biopsy_parent,
+        candidate_selector=(
+            select_biopsy_parent
+            if decision_audit is None
+            else make_biopsy_parent_selector(
+                select_first_candidate,
+                decision_audit,
+            )
+        ),
         candidate_tie_breaker=select_first_candidate,
         attachment_strategy=add_biopsy_attachment,
         group_attachment_strategy=make_direct_group_attachment_strategy(add_biopsy_attachment),
         missing_parent_strategy=copy_missing_parent_to_upper,
         only_nj_final_cell_selector=deduplicate_cells_by_cell_id,
+        decision_audit=decision_audit,
     )
 
 
@@ -68,7 +121,10 @@ def normalize_biopsy_guided_config(config=None):
     candidate_selector = (
         config.candidate_selector
         if config.candidate_selector is not None
-        else make_biopsy_parent_selector(candidate_tie_breaker)
+        else make_biopsy_parent_selector(
+            candidate_tie_breaker,
+            config.decision_audit,
+        )
     )
     attachment_strategy = config.attachment_strategy or defaults.attachment_strategy
     group_attachment_strategy = (
@@ -86,6 +142,7 @@ def normalize_biopsy_guided_config(config=None):
         only_nj_final_cell_selector=(
             config.only_nj_final_cell_selector or defaults.only_nj_final_cell_selector
         ),
+        decision_audit=config.decision_audit,
     )
 
 
@@ -236,6 +293,77 @@ def _select_anticentral_candidate_from_indices(candidates, candidate_indices, ro
     return candidates[int(np.argmax(row_sums[candidate_indices]))]
 
 
+def select_deferred_candidate(candidates, y, full_dist_matrix, id_to_index):
+    """Represent an unresolved exact parent tie by declining an attachment."""
+    return None
+
+
+def _select_central_candidate_from_indices(candidates, candidate_indices, row_sums):
+    centrality_values = row_sums[candidate_indices]
+    minimum = np.min(centrality_values)
+    tied_positions = np.flatnonzero(centrality_values == minimum)
+    if len(tied_positions) != 1:
+        return None
+    return candidates[int(tied_positions[0])]
+
+
+def select_central_candidate(candidates, y, full_dist_matrix, id_to_index):
+    """Choose the unique full-matrix medoid among tied closest parents.
+
+    A residual row-sum tie is deliberately unresolved and therefore returns
+    ``None`` for the caller's explicit copy-up convention.
+    """
+    if not candidates:
+        return None
+    row_sums = full_dist_matrix.sum(axis=1)
+    candidate_indices = _cell_indices(candidates, id_to_index)
+    return _select_central_candidate_from_indices(candidates, candidate_indices, row_sums)
+
+
+def _total_deviation_from_diploid(candidate):
+    genome = np.asarray(candidate.genome, dtype=float)
+    return float(np.sum(np.abs(genome - 2.0)))
+
+
+def _select_diploid_parsimony_candidate_from_indices(
+    candidates,
+    candidate_indices,
+    row_sums,
+):
+    deviations = np.fromiter(
+        (_total_deviation_from_diploid(candidate) for candidate in candidates),
+        dtype=float,
+        count=len(candidates),
+    )
+    minimum = np.min(deviations)
+    tied_mask = deviations == minimum
+    tied_candidates = [
+        candidate
+        for candidate, is_tied in zip(candidates, tied_mask)
+        if is_tied
+    ]
+    if len(tied_candidates) == 1:
+        return tied_candidates[0]
+    return _select_central_candidate_from_indices(
+        tied_candidates,
+        candidate_indices[tied_mask],
+        row_sums,
+    )
+
+
+def select_diploid_parsimony_candidate(candidates, y, full_dist_matrix, id_to_index):
+    """Break a closest-parent tie by CN2 burden, then centrality, then defer."""
+    if not candidates:
+        return None
+    row_sums = full_dist_matrix.sum(axis=1)
+    candidate_indices = _cell_indices(candidates, id_to_index)
+    return _select_diploid_parsimony_candidate_from_indices(
+        candidates,
+        candidate_indices,
+        row_sums,
+    )
+
+
 def _select_closest_candidate_from_indices(
     candidates,
     candidate_indices,
@@ -244,6 +372,7 @@ def _select_closest_candidate_from_indices(
     id_to_index,
     tie_breaker=None,
     row_sums=None,
+    decision_audit=None,
 ):
     tie_breaker = tie_breaker or select_first_candidate
     y_idx = id_to_index[y.cell_id]
@@ -268,13 +397,54 @@ def _select_closest_candidate_from_indices(
         tied_indices = candidate_indices[tied_mask]
 
     if len(tied_candidates) == 1:
+        if decision_audit is not None:
+            decision_audit.increment("unique_minimum_parent_count")
         return tied_candidates[0]
+    if decision_audit is not None:
+        decision_audit.increment("minimum_distance_tie_count")
     if tie_breaker is select_anticentral_candidate and row_sums is not None:
-        return _select_anticentral_candidate_from_indices(tied_candidates, tied_indices, row_sums)
-    return tie_breaker(tied_candidates, y, full_dist_matrix, id_to_index)
+        selected = _select_anticentral_candidate_from_indices(
+            tied_candidates,
+            tied_indices,
+            row_sums,
+        )
+    elif tie_breaker is select_central_candidate and row_sums is not None:
+        selected = _select_central_candidate_from_indices(
+            tied_candidates,
+            tied_indices,
+            row_sums,
+        )
+    elif (
+        tie_breaker is select_diploid_parsimony_candidate
+        and row_sums is not None
+    ):
+        selected = _select_diploid_parsimony_candidate_from_indices(
+            tied_candidates,
+            tied_indices,
+            row_sums,
+        )
+    else:
+        selected = tie_breaker(
+            tied_candidates,
+            y,
+            full_dist_matrix,
+            id_to_index,
+        )
+    if decision_audit is not None:
+        decision_audit.increment(
+            "tie_deferred_count" if selected is None else "tie_parent_selected_count"
+        )
+    return selected
 
 
-def select_closest_candidate(candidates, y, full_dist_matrix, id_to_index, tie_breaker=None):
+def select_closest_candidate(
+    candidates,
+    y,
+    full_dist_matrix,
+    id_to_index,
+    tie_breaker=None,
+    decision_audit=None,
+):
     candidate_indices = _cell_indices(candidates, id_to_index)
     return _select_closest_candidate_from_indices(
         candidates,
@@ -283,6 +453,7 @@ def select_closest_candidate(candidates, y, full_dist_matrix, id_to_index, tie_b
         full_dist_matrix,
         id_to_index,
         tie_breaker=tie_breaker,
+        decision_audit=decision_audit,
     )
 
 
@@ -337,25 +508,39 @@ def select_biopsy_parent(
     id_to_index,
     radius,
     tie_breaker=None,
+    decision_audit=None,
 ):
     candidates = find_radius_candidates(y, upper_cells, full_dist_matrix, id_to_index, radius)
+    if decision_audit is not None:
+        decision_audit.increment("raw_radius_candidate_total", len(candidates))
 
     same_id_candidate = select_same_id_candidate(candidates, y)
     if same_id_candidate is not None:
+        if decision_audit is not None:
+            decision_audit.increment("same_state_selected_count")
         return same_id_candidate
 
     plausible_candidates = filter_plausible_ancestor_candidates(candidates, y)
+    if decision_audit is not None:
+        decision_audit.increment("plausible_candidate_total", len(plausible_candidates))
     if len(plausible_candidates) == 1:
+        if decision_audit is not None:
+            decision_audit.increment("one_plausible_parent_count")
         return plausible_candidates[0]
     if len(plausible_candidates) > 1:
+        if decision_audit is not None:
+            decision_audit.increment("multiple_plausible_parent_count")
         return select_closest_candidate(
             plausible_candidates,
             y,
             full_dist_matrix,
             id_to_index,
             tie_breaker=tie_breaker,
+            decision_audit=decision_audit,
         )
 
+    if decision_audit is not None:
+        decision_audit.increment("no_plausible_parent_count")
     return None
 
 
@@ -368,6 +553,7 @@ def _select_biopsy_parent_from_indices(
     radius,
     tie_breaker=None,
     row_sums=None,
+    decision_audit=None,
 ):
     candidates = _find_radius_candidates_from_indices(
         y,
@@ -377,15 +563,25 @@ def _select_biopsy_parent_from_indices(
         id_to_index,
         radius,
     )
+    if decision_audit is not None:
+        decision_audit.increment("raw_radius_candidate_total", len(candidates))
 
     same_id_candidate = select_same_id_candidate(candidates, y)
     if same_id_candidate is not None:
+        if decision_audit is not None:
+            decision_audit.increment("same_state_selected_count")
         return same_id_candidate
 
     plausible_candidates = filter_plausible_ancestor_candidates(candidates, y)
+    if decision_audit is not None:
+        decision_audit.increment("plausible_candidate_total", len(plausible_candidates))
     if len(plausible_candidates) == 1:
+        if decision_audit is not None:
+            decision_audit.increment("one_plausible_parent_count")
         return plausible_candidates[0]
     if len(plausible_candidates) > 1:
+        if decision_audit is not None:
+            decision_audit.increment("multiple_plausible_parent_count")
         plausible_indices = _cell_indices(plausible_candidates, id_to_index)
         return _select_closest_candidate_from_indices(
             plausible_candidates,
@@ -395,12 +591,15 @@ def _select_biopsy_parent_from_indices(
             id_to_index,
             tie_breaker=tie_breaker,
             row_sums=row_sums,
+            decision_audit=decision_audit,
         )
 
+    if decision_audit is not None:
+        decision_audit.increment("no_plausible_parent_count")
     return None
 
 
-def make_biopsy_parent_selector(tie_breaker=None):
+def make_biopsy_parent_selector(tie_breaker=None, decision_audit=None):
     def select_parent(y, upper_cells, full_dist_matrix, id_to_index, radius):
         return select_biopsy_parent(
             y,
@@ -409,19 +608,25 @@ def make_biopsy_parent_selector(tie_breaker=None):
             id_to_index,
             radius,
             tie_breaker=tie_breaker,
+            decision_audit=decision_audit,
         )
 
     select_parent._ctbf_default_biopsy_parent_selector = True
     select_parent._ctbf_tie_breaker = tie_breaker
+    select_parent._ctbf_decision_audit = decision_audit
     return select_parent
 
 
 def _default_biopsy_parent_tie_breaker(candidate_selector):
     if candidate_selector is select_biopsy_parent:
-        return True, None
+        return True, None, None
     if getattr(candidate_selector, "_ctbf_default_biopsy_parent_selector", False):
-        return True, getattr(candidate_selector, "_ctbf_tie_breaker", None)
-    return False, None
+        return (
+            True,
+            getattr(candidate_selector, "_ctbf_tie_breaker", None),
+            getattr(candidate_selector, "_ctbf_decision_audit", None),
+        )
+    return False, None, None
 
 
 def _minimum_distance_pair_selector(state):
@@ -545,9 +750,11 @@ def reconstruct_biopsy_layers(
 ):
     config = normalize_biopsy_guided_config(config)
     row_sums = full_dist_matrix.sum(axis=1)
-    use_default_candidate_selector, default_tie_breaker = _default_biopsy_parent_tie_breaker(
-        config.candidate_selector
-    )
+    (
+        use_default_candidate_selector,
+        default_tie_breaker,
+        decision_audit,
+    ) = _default_biopsy_parent_tie_breaker(config.candidate_selector)
 
     for level_index in reversed(range(1, len(cell_lists))):
         upper_cells = cell_lists[level_index - 1]
@@ -555,6 +762,8 @@ def reconstruct_biopsy_layers(
         children_by_parent = defaultdict(list)
         upper_indices = _cell_indices(upper_cells, id_to_index)
         for y in bottom_cells:
+            if decision_audit is not None:
+                decision_audit.increment("child_decision_count")
             if use_default_candidate_selector:
                 parent = _select_biopsy_parent_from_indices(
                     y,
@@ -565,14 +774,19 @@ def reconstruct_biopsy_layers(
                     radius,
                     tie_breaker=default_tie_breaker,
                     row_sums=row_sums,
+                    decision_audit=decision_audit,
                 )
             else:
                 parent = config.candidate_selector(y, upper_cells, full_dist_matrix, id_to_index, radius)
 
             if parent is not None:
+                if decision_audit is not None:
+                    decision_audit.increment("selected_parent_count")
                 children_by_parent[parent].append(y)
                 continue
 
+            if decision_audit is not None:
+                decision_audit.increment("copy_up_count")
             upper_len_before = len(upper_cells)
             config.missing_parent_strategy(
                 y,
@@ -587,6 +801,9 @@ def reconstruct_biopsy_layers(
 
         child_level = len(cell_lists) - level_index - 1
         for parent, children in children_by_parent.items():
+            if decision_audit is not None and len(children) > 1:
+                decision_audit.increment("shared_parent_group_count")
+                decision_audit.increment("shared_parent_child_count", len(children))
             config.group_attachment_strategy(
                 tree,
                 parent,
@@ -620,7 +837,9 @@ def assign_new_node_levels(new_nodes, node_levels):
 
 
 __all__ = [
+    "BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION",
     "BiopsyGuidedConfig",
+    "BiopsyGuidedDecisionAudit",
     "BiopsySubtreeConfig",
     "add_biopsy_attachment",
     "assign_compatible_node_ids",
@@ -646,7 +865,10 @@ __all__ = [
     "reconstruct_biopsy_layers",
     "select_biopsy_parent",
     "select_anticentral_candidate",
+    "select_central_candidate",
     "select_closest_candidate",
+    "select_deferred_candidate",
+    "select_diploid_parsimony_candidate",
     "select_first_candidate",
     "select_same_id_candidate",
 ]

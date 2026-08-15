@@ -138,6 +138,75 @@ method, and the paired difference-in-differences. Positive interaction means
 that the binary-top advantage is larger at r2 than at r4. These are descriptive
 development contrasts over 300 conditions and 100 independent truth blocks.
 
+The approved seven-policy bottom-layer screen keeps radius 2 and the projected
+binary anticentral plausible-parsimony top fixed. Its default policy already
+exists as `biopsy_guided_top_anticentral_binary_r2`; run only the six missing
+rows:
+
+```bash
+python -m algorithm_evaluation.v5_algorithm_development_run \
+  --bank-root algorithm_evaluation/results/v5_development/bank_v2 \
+  --output-root algorithm_evaluation/results/v5_development/runs/partial_bottom_r2_v2 \
+  --run-id partial-bottom-r2-v2 \
+  --arms \
+    biopsy_guided_top_anticentral_binary_r2_bottom_anticentral_tie \
+    biopsy_guided_top_anticentral_binary_r2_bottom_binarized \
+    biopsy_guided_top_anticentral_binary_r2_bottom_anticentral_tie_binarized \
+    biopsy_guided_top_anticentral_binary_r2_bottom_deferred_tie \
+    biopsy_guided_top_anticentral_binary_r2_bottom_central_tie \
+    biopsy_guided_top_anticentral_binary_r2_bottom_diploid_parsimony_tie \
+  --progress
+```
+
+A complete run writes 1,800 arm records. Then merge it with the three existing
+result roots without rerunning simulations or the default control:
+
+```bash
+python -m algorithm_evaluation.v5_algorithm_development_report \
+  --result-root algorithm_evaluation/results/v5_development/runs/initial_32_v2 \
+  --result-root algorithm_evaluation/results/v5_development/runs/partial_top_r2_v2 \
+  --result-root algorithm_evaluation/results/v5_development/runs/partial_top_binary_r4_v2 \
+  --result-root algorithm_evaluation/results/v5_development/runs/partial_bottom_r2_v2 \
+  --output-root algorithm_evaluation/results/v5_development/reports/partial_bottom_r2_v4
+```
+
+The merged report writes `partial_bottom_layer_vs_default_r2.csv` for the six
+candidate-minus-default comparisons and `partial_bottom_mechanism_summary.csv`
+for tie, deferral, copy-up, and shared-parent diagnostics. The historical
+`anticentral_binarized` preset is not substituted for the clean combined row:
+it also changes pair selection inside each local child subtree.
+
+The seven-policy screen strongly favors exact-tie deferral under the binary
+top. Complete the approved attribution factorial with only the missing
+deferred-bottom/classical-top row:
+
+```bash
+python -m algorithm_evaluation.v5_algorithm_development_run \
+  --bank-root algorithm_evaluation/results/v5_development/bank_v2 \
+  --output-root algorithm_evaluation/results/v5_development/runs/partial_bottom_deferred_classical_r2_v2 \
+  --run-id partial-bottom-deferred-classical-r2-v2 \
+  --arms biopsy_guided_classical_r2_bottom_deferred_tie \
+  --progress
+```
+
+A complete run writes 300 arm records. Merge all five non-overlapping result
+roots into the report-schema-v5 factorial summary:
+
+```bash
+python -m algorithm_evaluation.v5_algorithm_development_report \
+  --result-root algorithm_evaluation/results/v5_development/runs/initial_32_v2 \
+  --result-root algorithm_evaluation/results/v5_development/runs/partial_top_r2_v2 \
+  --result-root algorithm_evaluation/results/v5_development/runs/partial_top_binary_r4_v2 \
+  --result-root algorithm_evaluation/results/v5_development/runs/partial_bottom_r2_v2 \
+  --result-root algorithm_evaluation/results/v5_development/runs/partial_bottom_deferred_classical_r2_v2 \
+  --output-root algorithm_evaluation/results/v5_development/reports/partial_bottom_top_factorial_v5
+```
+
+The new report section and CSVs show the binary-minus-classical top effect
+under each bottom policy, the deferred-minus-default bottom effect under each
+top method, and their paired difference-in-differences. This is one bounded
+attribution check, not a new broad candidate screen.
+
 ## CTBF v5 non-paper reconstruction-intuition probe
 
 `simulator_reconstruction_intuition_probe.py` implements the owner-approved

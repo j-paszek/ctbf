@@ -225,6 +225,10 @@ def test_biopsy_guided_presets_are_resolvable():
         "anticentral_tie",
         "binarized",
         "anticentral_binarized",
+        "anticentral_tie_binarized",
+        "deferred_tie",
+        "central_tie",
+        "diploid_parsimony_tie",
     }
     assert resolve_biopsy_guided_config(None) is None
     assert resolve_biopsy_guided_config("none") is None
