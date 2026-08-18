@@ -1,0 +1,1027 @@
+"""Report the block-paired CTBF v5 shortlist depth-by-placement experiment."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+from datetime import datetime, timezone
+import itertools
+import math
+from pathlib import Path
+import statistics
+from typing import Any, Mapping, Sequence
+
+from algorithm_evaluation.paper_pipeline_contract import read_json
+from algorithm_evaluation.process_isolation import (
+    CASE_ARM_WORKER_UNIT,
+    TRUTH_BLOCK_SIMULATION_WORKER_UNIT,
+    fresh_process_contract,
+    validate_fresh_process_contract,
+)
+from algorithm_evaluation.v5_algorithm_development_common import numeric_summary
+from algorithm_evaluation.v5_shortlist_robustness_common import (
+    DECLARED_METRICS,
+    DISTANCE_EXECUTION_SCHEMA_VERSION,
+    ORDERED_A_ID,
+    ORDERED_B_ID,
+    ORDERED_C_ID,
+    PLACEMENT_POLICIES,
+    POOLED_D_ID,
+    REPORT_SCHEMA_VERSION,
+    RESULT_NAME,
+    RUN_SCHEMA_VERSION,
+    SHORTLIST_ARM_IDS,
+    SHORT_LABEL_BY_ARM,
+    ensure_new_output_root,
+    load_bank_manifest,
+    shortlist_specs,
+    write_json,
+)
+
+
+TIE_TOLERANCE = 1e-12
+WORST_COUNT = 5
+DEPTH_CONTRASTS = ((14, 24), (24, 34), (34, 38), (14, 38))
+PLACEMENT_CONTRASTS = (
+    ("late", "spread"),
+    ("random", "spread"),
+    ("random", "late"),
+)
+PRINCIPAL_PAIRS = (
+    (ORDERED_A_ID, POOLED_D_ID),
+    (ORDERED_A_ID, ORDERED_B_ID),
+    (ORDERED_A_ID, ORDERED_C_ID),
+)
+
+
+def _effect_summary(values: Sequence[float]) -> dict[str, Any] | None:
+    if not values:
+        return None
+    if any(not math.isfinite(value) for value in values):
+        raise ValueError("Effect values must be finite.")
+    ordered = sorted(float(value) for value in values)
+    positive = [value for value in ordered if value > TIE_TOLERANCE]
+    negative = [value for value in ordered if value < -TIE_TOLERANCE]
+    ties = len(ordered) - len(positive) - len(negative)
+    return {
+        "count": len(ordered),
+        "minimum": ordered[0],
+        "median": float(statistics.median(ordered)),
+        "mean": float(statistics.fmean(ordered)),
+        "maximum": ordered[-1],
+        "positive_count": len(positive),
+        "tie_count": ties,
+        "negative_count": len(negative),
+        "conditional_gain_mean": (
+            float(statistics.fmean(positive)) if positive else None
+        ),
+        "conditional_loss_mean": (
+            float(statistics.fmean(negative)) if negative else None
+        ),
+        "worst_five_or_available_mean": float(
+            statistics.fmean(ordered[:WORST_COUNT])
+        ),
+    }
+
+
+def _wtl(values: Sequence[float]) -> dict[str, Any]:
+    wins = sum(value > TIE_TOLERANCE for value in values)
+    losses = sum(value < -TIE_TOLERANCE for value in values)
+    ties = len(values) - wins - losses
+    return {
+        "wins": wins,
+        "ties": ties,
+        "losses": losses,
+        "eligible": len(values),
+    }
+
+
+def _metric(record: Mapping[str, Any], metric: str) -> float:
+    value = record.get("metrics", {}).get(metric)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"Successful record has invalid {metric}.")
+    value = float(value)
+    if not math.isfinite(value):
+        raise ValueError(f"Successful record has nonfinite {metric}.")
+    return value
+
+
+def _resource_value(record: Mapping[str, Any], field: str) -> float | None:
+    resources = record.get("resources")
+    if not isinstance(resources, Mapping):
+        return None
+    stages = [
+        stage
+        for stage in (resources.get("reconstruction"), resources.get("evaluation"))
+        if isinstance(stage, Mapping)
+    ]
+    if field == "runtime_seconds":
+        values = [
+            float(stage["wall_time_ns"]) / 1_000_000_000.0
+            for stage in stages
+            if isinstance(stage.get("wall_time_ns"), (int, float))
+        ]
+        return sum(values) if values else None
+    if field == "peak_rss_bytes":
+        values = [
+            float(stage["memory"]["peak_rss_bytes"])
+            for stage in stages
+            if isinstance(stage.get("memory"), Mapping)
+            and isinstance(stage["memory"].get("peak_rss_bytes"), (int, float))
+        ]
+        return max(values) if values else None
+    raise ValueError(f"Unknown resource field {field!r}.")
+
+
+def _failure_type(record: Mapping[str, Any]) -> str:
+    failure = record.get("failure")
+    if not isinstance(failure, Mapping):
+        return "unknown_failure"
+    return str(failure.get("type", "unknown_failure"))
+
+
+def _condition_key(record: Mapping[str, Any]) -> tuple[int, int, str]:
+    return (
+        int(record["block_index"]),
+        int(record["height"]),
+        str(record["placement_policy"]),
+    )
+
+
+def _record_index(
+    records: Sequence[Mapping[str, Any]],
+) -> dict[tuple[int, int, str, str], Mapping[str, Any]]:
+    index = {}
+    for record in records:
+        key = (*_condition_key(record), str(record["arm_id"]))
+        if key in index:
+            raise ValueError(f"Duplicate shortlist result record {key}.")
+        index[key] = record
+    return index
+
+
+def _availability_summary(bank: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for height in bank["heights"]:
+        for policy in bank["placement_policies"]:
+            conditions = [
+                row
+                for row in bank["condition_inventory"]
+                if int(row["height"]) == int(height)
+                and row["placement_policy"] == policy
+            ]
+            failures: dict[str, int] = {}
+            for row in conditions:
+                if row["status"] == "available":
+                    continue
+                failure = row.get("failure")
+                name = (
+                    str(failure.get("type", "unknown_failure"))
+                    if isinstance(failure, Mapping)
+                    else "unknown_failure"
+                )
+                failures[name] = failures.get(name, 0) + 1
+            rows.append(
+                {
+                    "height": int(height),
+                    "placement_policy": policy,
+                    "declared_count": len(conditions),
+                    "available_count": sum(
+                        row["status"] == "available" for row in conditions
+                    ),
+                    "unavailable_count": sum(
+                        row["status"] != "available" for row in conditions
+                    ),
+                    "failure_types": failures,
+                }
+            )
+    return rows
+
+
+def _bank_resource_execution(bank: Mapping[str, Any]) -> dict[str, Any]:
+    resource_contract = bank.get("resource_contract")
+    simulation_execution = (
+        resource_contract.get("simulation_execution")
+        if isinstance(resource_contract, Mapping)
+        else None
+    )
+    simulation_qualified = simulation_execution == fresh_process_contract(
+        TRUTH_BLOCK_SIMULATION_WORKER_UNIT
+    )
+    distance_records = bank.get("distance_execution_by_block")
+    if not isinstance(distance_records, list):
+        distance_records = []
+    qualified_distance_records = [
+        record
+        for record in distance_records
+        if isinstance(record, Mapping)
+        and record.get("schema_version") == DISTANCE_EXECUTION_SCHEMA_VERSION
+        and record.get("worker_lifecycle")
+        == "fresh_spawn_process_per_condition"
+    ]
+    distance_qualified = (
+        len(distance_records) == int(bank["block_count"])
+        and len(qualified_distance_records) == len(distance_records)
+    )
+    return {
+        "bank_schema_version": bank.get("schema_version"),
+        "simulation_execution": (
+            dict(simulation_execution)
+            if isinstance(simulation_execution, Mapping)
+            else None
+        ),
+        "simulation_fresh_process_qualified": simulation_qualified,
+        "distance_execution_semantics": bank.get(
+            "distance_execution_semantics"
+        ),
+        "distance_execution_record_count": len(distance_records),
+        "fresh_distance_execution_record_count": len(
+            qualified_distance_records
+        ),
+        "distance_fresh_process_qualified": distance_qualified,
+        "all_bank_resources_fresh_process_qualified": (
+            simulation_qualified and distance_qualified
+        ),
+        "unqualified_bank_resources_are_historical_context_only": True,
+    }
+
+
+def _algorithm_cell_summaries(
+    *,
+    bank: Mapping[str, Any],
+    records: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    rows = []
+    for height in bank["heights"]:
+        for policy in bank["placement_policies"]:
+            for arm_id in SHORTLIST_ARM_IDS:
+                cell = [
+                    record
+                    for record in records
+                    if int(record["height"]) == int(height)
+                    and record["placement_policy"] == policy
+                    and record["arm_id"] == arm_id
+                ]
+                successful = [record for record in cell if record["status"] == "success"]
+                failures: dict[str, int] = {}
+                for record in cell:
+                    if record["status"] == "success":
+                        continue
+                    name = _failure_type(record)
+                    failures[name] = failures.get(name, 0) + 1
+                rows.append(
+                    {
+                        "height": int(height),
+                        "placement_policy": policy,
+                        "arm_id": arm_id,
+                        "short_label": SHORT_LABEL_BY_ARM[arm_id],
+                        "record_count": len(cell),
+                        "success_count": len(successful),
+                        "failure_count": len(cell) - len(successful),
+                        "failure_types": failures,
+                        "metrics": {
+                            metric: numeric_summary(
+                                _metric(record, metric) for record in successful
+                            )
+                            for metric in DECLARED_METRICS
+                        },
+                        "runtime_seconds": numeric_summary(
+                            value
+                            for record in cell
+                            if (value := _resource_value(record, "runtime_seconds"))
+                            is not None
+                        ),
+                        "peak_rss_bytes": numeric_summary(
+                            value
+                            for record in cell
+                            if (value := _resource_value(record, "peak_rss_bytes"))
+                            is not None
+                        ),
+                    }
+                )
+    return rows
+
+
+def _pairwise_cells(
+    *,
+    bank: Mapping[str, Any],
+    index: Mapping[tuple[int, int, str, str], Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    rows = []
+    for arm_a, arm_b in itertools.combinations(SHORTLIST_ARM_IDS, 2):
+        for metric in DECLARED_METRICS:
+            for height in bank["heights"]:
+                for policy in bank["placement_policies"]:
+                    values = []
+                    a_only = b_only = both_failure = 0
+                    for block_index in range(int(bank["block_count"])):
+                        record_a = index.get((block_index, int(height), policy, arm_a))
+                        record_b = index.get((block_index, int(height), policy, arm_b))
+                        if record_a is None or record_b is None:
+                            continue
+                        success_a = record_a["status"] == "success"
+                        success_b = record_b["status"] == "success"
+                        if success_a and success_b:
+                            values.append(
+                                _metric(record_a, metric) - _metric(record_b, metric)
+                            )
+                        elif success_a:
+                            a_only += 1
+                        elif success_b:
+                            b_only += 1
+                        else:
+                            both_failure += 1
+                    rows.append(
+                        {
+                            "arm_a": arm_a,
+                            "label_a": SHORT_LABEL_BY_ARM[arm_a],
+                            "arm_b": arm_b,
+                            "label_b": SHORT_LABEL_BY_ARM[arm_b],
+                            "delta_direction": "arm_a_minus_arm_b",
+                            "metric": metric,
+                            "height": int(height),
+                            "placement_policy": policy,
+                            "effect": _effect_summary(values),
+                            "wtl": _wtl(values),
+                            "a_only_success_count": a_only,
+                            "b_only_success_count": b_only,
+                            "both_failure_count": both_failure,
+                        }
+                    )
+    return rows
+
+
+def _paired_delta(
+    index: Mapping[tuple[int, int, str, str], Mapping[str, Any]],
+    *,
+    block_index: int,
+    height: int,
+    policy: str,
+    arm_a: str,
+    arm_b: str,
+    metric: str,
+) -> float | None:
+    record_a = index.get((block_index, height, policy, arm_a))
+    record_b = index.get((block_index, height, policy, arm_b))
+    if (
+        record_a is None
+        or record_b is None
+        or record_a["status"] != "success"
+        or record_b["status"] != "success"
+    ):
+        return None
+    return _metric(record_a, metric) - _metric(record_b, metric)
+
+
+def _depth_interactions(
+    *,
+    bank: Mapping[str, Any],
+    index: Mapping[tuple[int, int, str, str], Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    available_heights = set(int(value) for value in bank["heights"])
+    rows = []
+    for arm_a, arm_b in itertools.combinations(SHORTLIST_ARM_IDS, 2):
+        for metric in DECLARED_METRICS:
+            for policy in bank["placement_policies"]:
+                for lower, upper in DEPTH_CONTRASTS:
+                    if lower not in available_heights or upper not in available_heights:
+                        continue
+                    values = []
+                    for block_index in range(int(bank["block_count"])):
+                        lower_delta = _paired_delta(
+                            index,
+                            block_index=block_index,
+                            height=lower,
+                            policy=policy,
+                            arm_a=arm_a,
+                            arm_b=arm_b,
+                            metric=metric,
+                        )
+                        upper_delta = _paired_delta(
+                            index,
+                            block_index=block_index,
+                            height=upper,
+                            policy=policy,
+                            arm_a=arm_a,
+                            arm_b=arm_b,
+                            metric=metric,
+                        )
+                        if lower_delta is not None and upper_delta is not None:
+                            values.append(upper_delta - lower_delta)
+                    rows.append(
+                        {
+                            "arm_a": arm_a,
+                            "label_a": SHORT_LABEL_BY_ARM[arm_a],
+                            "arm_b": arm_b,
+                            "label_b": SHORT_LABEL_BY_ARM[arm_b],
+                            "metric": metric,
+                            "placement_policy": policy,
+                            "lower_height": lower,
+                            "upper_height": upper,
+                            "delta_direction": (
+                                "(arm_a-arm_b)_upper_minus_(arm_a-arm_b)_lower"
+                            ),
+                            "effect": _effect_summary(values),
+                            "wtl": _wtl(values),
+                        }
+                    )
+    return rows
+
+
+def _placement_interactions(
+    *,
+    bank: Mapping[str, Any],
+    index: Mapping[tuple[int, int, str, str], Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    policies = set(str(value) for value in bank["placement_policies"])
+    rows = []
+    for arm_a, arm_b in itertools.combinations(SHORTLIST_ARM_IDS, 2):
+        for metric in DECLARED_METRICS:
+            for height in bank["heights"]:
+                for policy_a, policy_b in PLACEMENT_CONTRASTS:
+                    if policy_a not in policies or policy_b not in policies:
+                        continue
+                    values = []
+                    for block_index in range(int(bank["block_count"])):
+                        delta_a = _paired_delta(
+                            index,
+                            block_index=block_index,
+                            height=int(height),
+                            policy=policy_a,
+                            arm_a=arm_a,
+                            arm_b=arm_b,
+                            metric=metric,
+                        )
+                        delta_b = _paired_delta(
+                            index,
+                            block_index=block_index,
+                            height=int(height),
+                            policy=policy_b,
+                            arm_a=arm_a,
+                            arm_b=arm_b,
+                            metric=metric,
+                        )
+                        if delta_a is not None and delta_b is not None:
+                            values.append(delta_a - delta_b)
+                    rows.append(
+                        {
+                            "arm_a": arm_a,
+                            "label_a": SHORT_LABEL_BY_ARM[arm_a],
+                            "arm_b": arm_b,
+                            "label_b": SHORT_LABEL_BY_ARM[arm_b],
+                            "metric": metric,
+                            "height": int(height),
+                            "policy_a": policy_a,
+                            "policy_b": policy_b,
+                            "delta_direction": (
+                                "(arm_a-arm_b)_policy_a_minus_"
+                                "(arm_a-arm_b)_policy_b"
+                            ),
+                            "effect": _effect_summary(values),
+                            "wtl": _wtl(values),
+                        }
+                    )
+    return rows
+
+
+def _diagnostic_summaries(
+    *,
+    bank_root: Path,
+    bank: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    by_cell: dict[tuple[int, str], list[Mapping[str, Any]]] = {}
+    for case in bank["cases"]:
+        metadata = read_json(bank_root / case["metadata_path"])
+        by_cell.setdefault(
+            (int(case["height"]), str(case["placement_policy"])),
+            [],
+        ).append(metadata)
+    rows = []
+    diagnostic_fields = (
+        "observation_to_truth_node_ratio",
+        "incomparable_pair_fraction",
+        "sampled_ancestor_coverage_fraction",
+        "minimum_invented_edges_for_observed_only_arborescence",
+        "normalized_minimum_invented_edge_fraction",
+        "unique_state_label_coverage_fraction",
+    )
+    for height in bank["heights"]:
+        for policy in bank["placement_policies"]:
+            metadata_rows = by_cell.get((int(height), policy), [])
+            rows.append(
+                {
+                    "height": int(height),
+                    "placement_policy": policy,
+                    "available_case_count": len(metadata_rows),
+                    "selected_occurrence_count": numeric_summary(
+                        float(row["selected_occurrence_count"])
+                        for row in metadata_rows
+                    ),
+                    "selected_unique_state_count": numeric_summary(
+                        float(row["selected_unique_state_count"])
+                        for row in metadata_rows
+                    ),
+                    "truth_sampling_diagnostics": {
+                        field: numeric_summary(
+                            float(value)
+                            for row in metadata_rows
+                            if (
+                                value := row["truth_sampling_diagnostics"].get(field)
+                            )
+                            is not None
+                        )
+                        for field in diagnostic_fields
+                    },
+                    "observed_only_representable_count": sum(
+                        bool(
+                            row["truth_sampling_diagnostics"].get(
+                                "observed_only_occurrence_arborescence_representable"
+                            )
+                        )
+                        for row in metadata_rows
+                    ),
+                    "distance_runtime_seconds": numeric_summary(
+                        float(row["distance_runtime"]["wall_time_ns"])
+                        / 1_000_000_000.0
+                        for row in metadata_rows
+                    ),
+                    "distance_peak_rss_bytes": numeric_summary(
+                        float(row["distance_runtime"]["memory"]["peak_rss_bytes"])
+                        for row in metadata_rows
+                        if row["distance_runtime"]["memory"].get("peak_rss_bytes")
+                        is not None
+                    ),
+                }
+            )
+    return rows
+
+
+def build_report(
+    *,
+    result_root: Path | str,
+    expected_block_count: int | None = None,
+    created_at_utc: str | None = None,
+) -> dict[str, Any]:
+    result_path = Path(result_root).expanduser().resolve() / RESULT_NAME
+    result = read_json(result_path)
+    if result.get("schema_version") != RUN_SCHEMA_VERSION:
+        raise ValueError("Unknown shortlist-robustness run schema.")
+    if result.get("status") != "complete":
+        raise ValueError("Shortlist-robustness run is not complete.")
+    resources = result.get("resources")
+    if not isinstance(resources, Mapping):
+        raise ValueError("Shortlist run has no auditable resource contract.")
+    validate_fresh_process_contract(
+        resources.get("record_execution"),
+        worker_unit=CASE_ARM_WORKER_UNIT,
+    )
+    bank_root, bank = load_bank_manifest(
+        result["bank_root"],
+        expected_block_count=expected_block_count,
+    )
+    expected_result_fields = {
+        "bank_id": bank["bank_id"],
+        "block_count": int(bank["block_count"]),
+        "declared_condition_count": int(bank["declared_condition_count"]),
+        "available_condition_count": int(bank["available_condition_count"]),
+        "unavailable_condition_count": int(bank["unavailable_condition_count"]),
+    }
+    for field, expected in expected_result_fields.items():
+        if result.get(field) != expected:
+            raise ValueError(
+                f"Shortlist run {field} does not match its immutable bank."
+            )
+    specs = shortlist_specs()
+    if result.get("arm_specs") != [spec.as_record() for spec in specs]:
+        raise ValueError("Shortlist run arm declaration changed.")
+    records = result.get("records")
+    if not isinstance(records, list) or len(records) != result["expected_record_count"]:
+        raise ValueError("Shortlist run record inventory is incomplete.")
+    expected_keys = {
+        (
+            int(case["block_index"]),
+            int(case["height"]),
+            str(case["placement_policy"]),
+            arm_id,
+        )
+        for case in bank["cases"]
+        for arm_id in SHORTLIST_ARM_IDS
+    }
+    index = _record_index(records)
+    if set(index) != expected_keys:
+        raise ValueError("Shortlist run records do not match available bank cases.")
+    for record in records:
+        if record["status"] == "success":
+            for metric in DECLARED_METRICS:
+                _metric(record, metric)
+
+    bank_resource_execution = _bank_resource_execution(bank)
+    report = {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "status": "complete",
+        "created_at_utc": created_at_utc or datetime.now(timezone.utc).isoformat(),
+        "scientific_role": bank["scientific_role"],
+        "bank_id": bank["bank_id"],
+        "bank_root": str(bank_root),
+        "run_id": result["run_id"],
+        "result_root": str(Path(result_root).expanduser().resolve()),
+        "block_count": int(bank["block_count"]),
+        "declared_condition_count": int(bank["declared_condition_count"]),
+        "available_condition_count": int(bank["available_condition_count"]),
+        "unavailable_condition_count": int(bank["unavailable_condition_count"]),
+        "arm_count": len(SHORTLIST_ARM_IDS),
+        "record_count": len(records),
+        "heights": list(bank["heights"]),
+        "placement_policies": list(bank["placement_policies"]),
+        "shortlist_arm_ids": list(SHORTLIST_ARM_IDS),
+        "short_labels": dict(SHORT_LABEL_BY_ARM),
+        "declared_metrics": list(DECLARED_METRICS),
+        "primary_metric": "ad_f1",
+        "dependence_contract": {
+            "independent_unit": "truth_block",
+            "independent_block_count": int(bank["block_count"]),
+            "conditions_within_block_are_correlated": True,
+            "condition_records_are_not_independent_replicates": True,
+        },
+        "interpretation_contract": {
+            "automatic_winner_declared": False,
+            "pooled_1200_condition_ranking_generated": False,
+            "ad_f1_and_grf_combined_into_one_score": False,
+            "placement_is_practical_policy_not_fixed_budget_causal_effect": True,
+            "h38_role": "development_boundary_stress_not_automatic_paper_height",
+        },
+        "semantic_gate_by_arm": result["semantic_gate_by_arm"],
+        "record_execution": dict(resources["record_execution"]),
+        "bank_resource_execution": bank_resource_execution,
+        "availability": _availability_summary(bank),
+        "algorithm_cell_summaries": _algorithm_cell_summaries(
+            bank=bank,
+            records=records,
+        ),
+        "pairwise_by_height_and_placement": _pairwise_cells(
+            bank=bank,
+            index=index,
+        ),
+        "depth_interactions": _depth_interactions(bank=bank, index=index),
+        "placement_interactions": _placement_interactions(bank=bank, index=index),
+        "condition_diagnostics": _diagnostic_summaries(
+            bank_root=bank_root,
+            bank=bank,
+        ),
+    }
+    return report
+
+
+def _flatten_summary(prefix: str, value: Mapping[str, Any] | None) -> dict[str, Any]:
+    fields = ("count", "minimum", "median", "mean", "maximum")
+    return {
+        f"{prefix}_{field}": None if value is None else value.get(field)
+        for field in fields
+    }
+
+
+def _flatten_effect(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    fields = (
+        "count",
+        "minimum",
+        "median",
+        "mean",
+        "maximum",
+        "conditional_gain_mean",
+        "conditional_loss_mean",
+        "worst_five_or_available_mean",
+    )
+    return {field: None if value is None else value.get(field) for field in fields}
+
+
+def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    if not rows:
+        return
+    fieldnames = list(rows[0])
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _csv_rows(report: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    metric_rows = []
+    resource_rows = []
+    for row in report["algorithm_cell_summaries"]:
+        for metric, summary in row["metrics"].items():
+            metric_rows.append(
+                {
+                    "height": row["height"],
+                    "placement_policy": row["placement_policy"],
+                    "arm_id": row["arm_id"],
+                    "short_label": row["short_label"],
+                    "metric": metric,
+                    **_flatten_summary("score", summary),
+                    "success_count": row["success_count"],
+                    "failure_count": row["failure_count"],
+                }
+            )
+        resource_rows.append(
+            {
+                "height": row["height"],
+                "placement_policy": row["placement_policy"],
+                "arm_id": row["arm_id"],
+                "short_label": row["short_label"],
+                **_flatten_summary("runtime_seconds", row["runtime_seconds"]),
+                **_flatten_summary("peak_rss_bytes", row["peak_rss_bytes"]),
+                "success_count": row["success_count"],
+                "failure_count": row["failure_count"],
+            }
+        )
+    pairwise_rows = []
+    for row in report["pairwise_by_height_and_placement"]:
+        pairwise_rows.append(
+            {
+                "arm_a": row["arm_a"],
+                "label_a": row["label_a"],
+                "arm_b": row["arm_b"],
+                "label_b": row["label_b"],
+                "metric": row["metric"],
+                "height": row["height"],
+                "placement_policy": row["placement_policy"],
+                "wins": row["wtl"]["wins"],
+                "ties": row["wtl"]["ties"],
+                "losses": row["wtl"]["losses"],
+                **_flatten_effect(row["effect"]),
+                "a_only_success_count": row["a_only_success_count"],
+                "b_only_success_count": row["b_only_success_count"],
+                "both_failure_count": row["both_failure_count"],
+            }
+        )
+    interaction_rows = {}
+    for name in ("depth_interactions", "placement_interactions"):
+        values = []
+        for row in report[name]:
+            base = {
+                key: value
+                for key, value in row.items()
+                if key not in {"effect", "wtl"}
+            }
+            values.append(
+                {
+                    **base,
+                    "wins": row["wtl"]["wins"],
+                    "ties": row["wtl"]["ties"],
+                    "losses": row["wtl"]["losses"],
+                    **_flatten_effect(row["effect"]),
+                }
+            )
+        interaction_rows[name] = values
+    diagnostic_rows = []
+    for row in report["condition_diagnostics"]:
+        diagnostic_rows.append(
+            {
+                "height": row["height"],
+                "placement_policy": row["placement_policy"],
+                "available_case_count": row["available_case_count"],
+                **_flatten_summary(
+                    "selected_occurrence_count", row["selected_occurrence_count"]
+                ),
+                **_flatten_summary(
+                    "selected_unique_state_count", row["selected_unique_state_count"]
+                ),
+                **{
+                    key: value
+                    for field, summary in row["truth_sampling_diagnostics"].items()
+                    for key, value in _flatten_summary(field, summary).items()
+                },
+                "observed_only_representable_count": row[
+                    "observed_only_representable_count"
+                ],
+                **_flatten_summary(
+                    "distance_runtime_seconds", row["distance_runtime_seconds"]
+                ),
+                **_flatten_summary(
+                    "distance_peak_rss_bytes", row["distance_peak_rss_bytes"]
+                ),
+            }
+        )
+    return {
+        "metric_summary": metric_rows,
+        "resource_summary": resource_rows,
+        "pairwise_by_cell": pairwise_rows,
+        "depth_interactions": interaction_rows["depth_interactions"],
+        "placement_interactions": interaction_rows["placement_interactions"],
+        "condition_diagnostics": diagnostic_rows,
+        "availability": [
+            {
+                **{key: value for key, value in row.items() if key != "failure_types"},
+                "failure_types": ";".join(
+                    f"{key}:{value}"
+                    for key, value in sorted(row["failure_types"].items())
+                ),
+            }
+            for row in report["availability"]
+        ],
+    }
+
+
+def _format(value: Any) -> str:
+    if value is None:
+        return "NA"
+    if isinstance(value, float):
+        return f"{value:.6f}"
+    return str(value)
+
+
+def _mean_score_table(
+    report: Mapping[str, Any],
+    metric: str,
+) -> list[str]:
+    index = {
+        (row["height"], row["placement_policy"], row["arm_id"]): row
+        for row in report["algorithm_cell_summaries"]
+    }
+    lines = [
+        f"### Mean {metric}",
+        "",
+        "| Height | Placement | A | B | C | D |",
+        "|---:|---|---:|---:|---:|---:|",
+    ]
+    for height in report["heights"]:
+        for policy in report["placement_policies"]:
+            values = []
+            for arm_id in SHORTLIST_ARM_IDS:
+                summary = index[(height, policy, arm_id)]["metrics"][metric]
+                values.append(None if summary is None else summary["mean"])
+            lines.append(
+                f"| H{height} | {policy} | "
+                + " | ".join(_format(value) for value in values)
+                + " |"
+            )
+    return lines
+
+
+def _principal_pair_table(
+    report: Mapping[str, Any],
+    metric: str,
+) -> list[str]:
+    rows = [
+        row
+        for row in report["pairwise_by_height_and_placement"]
+        if (row["arm_a"], row["arm_b"]) in PRINCIPAL_PAIRS
+        and row["metric"] == metric
+    ]
+    lines = [
+        f"### Principal paired {metric} contrasts",
+        "",
+        "Positive deltas favor the first method.",
+        "",
+        "| Pair | Height | Placement | W/T/L | Mean delta | Median | Worst five |",
+        "|---|---:|---|---:|---:|---:|---:|",
+    ]
+    for row in rows:
+        effect = row["effect"]
+        wtl = row["wtl"]
+        lines.append(
+            f"| {row['label_a']}-{row['label_b']} | H{row['height']} | "
+            f"{row['placement_policy']} | {wtl['wins']}/{wtl['ties']}/{wtl['losses']} | "
+            f"{_format(None if effect is None else effect['mean'])} | "
+            f"{_format(None if effect is None else effect['median'])} | "
+            f"{_format(None if effect is None else effect['worst_five_or_available_mean'])} |"
+        )
+    return lines
+
+
+def _h34_h38_table(report: Mapping[str, Any]) -> list[str]:
+    rows = [
+        row
+        for row in report["depth_interactions"]
+        if (row["arm_a"], row["arm_b"]) in PRINCIPAL_PAIRS
+        and row["metric"] in {"ad_f1", "grf"}
+        and row["lower_height"] == 34
+        and row["upper_height"] == 38
+    ]
+    if not rows:
+        return []
+    lines = [
+        "### H34 to H38 change in method contrast",
+        "",
+        "Positive means the first method's advantage increased at H38.",
+        "",
+        "| Pair | Metric | Placement | W/T/L | Mean change | Median |",
+        "|---|---|---|---:|---:|---:|",
+    ]
+    for row in rows:
+        effect = row["effect"]
+        wtl = row["wtl"]
+        lines.append(
+            f"| {row['label_a']}-{row['label_b']} | {row['metric']} | "
+            f"{row['placement_policy']} | {wtl['wins']}/{wtl['ties']}/{wtl['losses']} | "
+            f"{_format(None if effect is None else effect['mean'])} | "
+            f"{_format(None if effect is None else effect['median'])} |"
+        )
+    return lines
+
+
+def _markdown(report: Mapping[str, Any]) -> str:
+    lines = [
+        "# CTBF v5 shortlist robustness report",
+        "",
+        f"Schema: `{report['schema_version']}`  ",
+        f"Status: `{report['status']}`  ",
+        f"Truth blocks: `{report['block_count']}`  ",
+        f"Conditions: `{report['available_condition_count']}` available of "
+        f"`{report['declared_condition_count']}` declared  ",
+        f"Arm records: `{report['record_count']}`  ",
+        "Record execution: `fresh spawned process per case-arm`",
+        (
+            "Bank resource execution: `fresh-process qualified`."
+            if report["bank_resource_execution"][
+                "all_bank_resources_fresh_process_qualified"
+            ]
+            else "Bank resource execution: `unqualified historical context`; "
+            "stored inputs and distances remain reusable."
+        ),
+        "",
+        "The truth block is the independent unit. Heights and placements within a "
+        "block are correlated. This report deliberately provides no pooled "
+        "all-condition ranking, no automatic winner, and no AD-F1/GRF composite.",
+        "",
+        "A = deferred-bottom binary anticentral r2; B = deferred-bottom rooted-Q "
+        "r2; C = default-bottom binary anticentral r4; D = pooled plausible "
+        "parsimony.",
+        "",
+        "## Availability",
+        "",
+        "| Height | Placement | Available | Unavailable | Failures |",
+        "|---:|---|---:|---:|---|",
+    ]
+    for row in report["availability"]:
+        failures = ", ".join(
+            f"{key}={value}" for key, value in sorted(row["failure_types"].items())
+        ) or "none"
+        lines.append(
+            f"| H{row['height']} | {row['placement_policy']} | "
+            f"{row['available_count']} | {row['unavailable_count']} | {failures} |"
+        )
+    for metric in DECLARED_METRICS:
+        lines.extend(["", *_mean_score_table(report, metric)])
+    for metric in ("ad_f1", "grf"):
+        lines.extend(["", *_principal_pair_table(report, metric)])
+    h34_h38 = _h34_h38_table(report)
+    if h34_h38:
+        lines.extend(["", *h34_h38])
+    lines.extend(
+        [
+            "",
+            "## Remaining outputs",
+            "",
+            "Complete all-pair AD-F1/GRF/precision/recall contrasts, all depth "
+            "and placement interactions, condition diagnostics, tails, failures, "
+            "runtime, and memory are in the adjacent CSV files and `summary.json`.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def write_report(
+    *,
+    result_root: Path | str,
+    output_root: Path | str,
+    expected_block_count: int | None = None,
+    created_at_utc: str | None = None,
+) -> dict[str, Any]:
+    report = build_report(
+        result_root=result_root,
+        expected_block_count=expected_block_count,
+        created_at_utc=created_at_utc,
+    )
+    root = ensure_new_output_root(output_root)
+    write_json(root / "summary.json", report)
+    for name, rows in _csv_rows(report).items():
+        _write_csv(root / f"{name}.csv", rows)
+    (root / "report.md").write_text(_markdown(report), encoding="utf-8")
+    return report
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--result-root", type=Path, required=True)
+    parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--expected-block-count", type=int)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = _parser().parse_args(argv)
+    report = write_report(
+        result_root=arguments.result_root,
+        output_root=arguments.output_root,
+        expected_block_count=arguments.expected_block_count,
+    )
+    print(
+        f"complete: {report['arm_count']} algorithms on "
+        f"{report['available_condition_count']} available conditions"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

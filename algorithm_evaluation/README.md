@@ -24,6 +24,15 @@ scores. The active bank stores simulation, observation, and production
 cnp2cnp inputs once. Later algorithm variants rerun only reconstruction and
 evaluation.
 
+Production bank simulation and distance stages now use fresh spawned task
+processes, and every development case-arm reconstruction/evaluation runs in a
+fresh spawned process. Absolute process-tree RSS therefore includes the
+current input and algorithm but cannot inherit allocator high-water marks or
+truth caches from an earlier record. The development reporter exposes whether
+every merged run has this qualification; resource comparisons from an older
+long-lived execution boundary are labeled historical context, while their
+successful accuracy records remain development provenance.
+
 Generate the one-time bank (this is the large owner-run input command):
 
 ```bash
@@ -190,7 +199,7 @@ python -m algorithm_evaluation.v5_algorithm_development_run \
 ```
 
 A complete run writes 300 arm records. Merge all five non-overlapping result
-roots into the report-schema-v5 factorial summary:
+roots into the factorial summary:
 
 ```bash
 python -m algorithm_evaluation.v5_algorithm_development_report \
@@ -206,6 +215,176 @@ The new report section and CSVs show the binary-minus-classical top effect
 under each bottom policy, the deferred-minus-default bottom effect under each
 top method, and their paired difference-in-differences. This is one bounded
 attribution check, not a new broad candidate screen.
+
+The completed fully labeled biopsy-guided extension adds ten unprojected arms;
+its ordered incumbent is
+`biopsy_guided_full_anticentral_binary_r2_bottom_deferred_tie`. After combining
+that run with the initial pooled result, run the approved read-only attachment
+diagnostic with:
+
+```bash
+python -m algorithm_evaluation.v5_algorithm_development_full_attachment_audit \
+  --ordered-result-root algorithm_evaluation/results/v5_development/full_biopsy_guided_v1 \
+  --pooled-result-root algorithm_evaluation/results/v5_development/runs/initial_32_v2 \
+  --output-root algorithm_evaluation/results/v5_development/diagnostics/full_attachment_audit_v1
+```
+
+The command reads only the two target arms and their already stored counters.
+It writes a compact JSON audit and Markdown report without rerunning simulation,
+cnp2cnp, reconstruction, or evaluation. Absolute non-same-state hard-
+attachment count is reported alongside its per-child-decision fraction so
+tree-size growth is not mistaken for a changed attachment propensity. The
+audit is descriptive development evidence and never promotes an algorithm.
+
+The owner-approved missing fully labeled factorial cell combines the existing
+deferred-tie bottom with the existing rooted-labeled Q top. Run only that arm
+into a new result root:
+
+```bash
+python -m algorithm_evaluation.v5_algorithm_development_run \
+  --bank-root algorithm_evaluation/results/v5_development/bank_v2 \
+  --output-root algorithm_evaluation/results/v5_development/runs/full_rooted_q_deferred_r2_v2 \
+  --run-id full-rooted-q-deferred-r2-v2 \
+  --arms biopsy_guided_full_rooted_labeled_q_r2_bottom_deferred_tie \
+  --progress
+```
+
+This writes 300 new records and does not change the completed ten-arm
+`biopsy_guided_full` alias. Report schema v8 recognizes the resulting complete
+`{default,deferred} x {rooted-labeled Q,binary anticentral}` full-output design
+and writes its top effects, bottom effects, and difference-in-differences.
+
+## CTBF v5 fully labeled shortlist robustness workflow
+
+The final adaptive-development qualification is separate from the immutable
+v2 bank above. It fixes four existing methods, denoted A--D:
+
+- A: `biopsy_guided_full_anticentral_binary_r2_bottom_deferred_tie`;
+- B: `biopsy_guided_full_rooted_labeled_q_r2_bottom_deferred_tie`;
+- C: `biopsy_guided_full_anticentral_binary_r4`; and
+- D: `neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony`.
+
+The full bank contains 100 fresh H38 truths, paired H14/H24/H34/H38 prefixes,
+and spread, late, and prospectively random three-biopsy conditions at every
+height. It writes 1,200 declared condition inputs and, when every condition is
+available, 4,800 arm records. The truth block remains the only independent
+unit. The report never pools the 1,200 conditions into one winner and never
+combines AD-F1 with GRF.
+
+Before the full bank, run the disjoint five-block H38-late resource preflight.
+Its input generator is resumable with the identical command plus `--resume`:
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_robustness_bank \
+  --base-config simulator_examples/default.json \
+  --base-seed 20260816 \
+  --block-count 5 \
+  --heights 38 \
+  --placement-policies late \
+  --technical-preflight \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/preflight_h38_late_v1/bank \
+  --progress
+```
+
+After reviewing that bank's availability and distance resources, run A--D and
+write its compact report:
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_robustness_run \
+  --bank-root algorithm_evaluation/results/v5_development/shortlist_robustness/preflight_h38_late_v1/bank \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/preflight_h38_late_v1/run \
+  --run-id shortlist-h38-late-preflight-v1 \
+  --expected-block-count 5 \
+  --progress
+
+python -m algorithm_evaluation.v5_shortlist_robustness_report \
+  --result-root algorithm_evaluation/results/v5_development/shortlist_robustness/preflight_h38_late_v1/run \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/preflight_h38_late_v1/report \
+  --expected-block-count 5
+```
+
+Those `preflight_h38_late_v1` paths describe the already completed historical
+preflight and must not be overwritten. Its scientific inputs remain useful,
+but its old long-lived-process runtime/RSS records are not fresh-process
+resource evidence.
+
+Only after the preflight passes, generate the fresh full bank. This command is
+also resumable by adding `--resume` without changing any scientific or
+resource-limit argument:
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_robustness_bank \
+  --base-config simulator_examples/default.json \
+  --base-seed 20260817 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/bank_v1 \
+  --distance-workers 6 \
+  --progress
+```
+
+`--distance-workers` bounds concurrent condition-level worker processes. Each
+fresh worker executes exactly one condition and still runs the unchanged
+forward and reverse cnp2cnp matrix calls sequentially. Thus six workers mean
+at most six active cnp2cnp processes rather than six threads inside one
+distance calculation. Larger unique-profile
+matrices are submitted first to avoid a serial H38 tail; results are restored
+to declared condition order and checkpointed only after a complete
+12-condition truth block. The manifest records requested/effective workers and
+the submission policy for every new block; therefore a serial completed prefix
+can be resumed with six workers without changing any stored input or distance.
+`KeyboardInterrupt` and `SystemExit` abort the incomplete block and are never
+recorded as scientific condition failures.
+
+Dense truth diagnostics use exact arborescence preorder/postorder counts rather
+than a generic NetworkX LCA call per occurrence pair. Candidate and four-cycle
+summaries use aligned array operations, reuse the already computed radius-4
+graph, and do not repeat parent-pair-by-child Python scans. With `--progress`,
+simulation, preparation, distance, and post-distance summarization are printed
+as separate phases so a serial prerequisite cannot be mistaken for an inactive
+worker pool.
+
+The historical `runs/abcd_v1` result is an implementation diagnostic only: a
+long-lived runner caused two large D records to contaminate the absolute RSS
+of later records, producing 1,902 false cascade failures. Do not report or
+resume it. The completed `bank_v1` inputs and distances remain reusable and
+are not regenerated; its older generation-time RSS metadata is explicitly
+labeled unqualified historical context in the new report. First replay the two
+trigger regions under the corrected boundary:
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_resource_isolation_probe \
+  --bank-root algorithm_evaluation/results/v5_development/shortlist_robustness/bank_v1 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/isolation_probe_v1 \
+  --expected-block-count 100 \
+  --progress
+```
+
+The probe fixes the requested order to H38 late followed by random for blocks
+18 and 67, runs all A--D records in fresh workers, and is explicitly not
+accuracy evidence. After it passes, run the fixed shortlist once into a fresh
+non-overwriting result and create the block-aware report:
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_robustness_run \
+  --bank-root algorithm_evaluation/results/v5_development/shortlist_robustness/bank_v1 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/runs/abcd_v2 \
+  --run-id shortlist-abcd-v2 \
+  --expected-block-count 100 \
+  --progress
+
+python -m algorithm_evaluation.v5_shortlist_robustness_report \
+  --result-root algorithm_evaluation/results/v5_development/shortlist_robustness/runs/abcd_v2 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/reports/abcd_v2 \
+  --expected-block-count 100
+```
+
+Both bank and reconstruction runs preserve exact stored prefixes on `--resume`
+and reject changed seeds, contracts, arm order, resources, or record order.
+The bank alone permits a changed distance-worker count at a block boundary and
+records the mixed serial/parallel execution history explicitly.
+Unavailable simulation, biopsy, distance, reconstruction, and evaluation
+outcomes remain typed and are never replaced with another seed.
+The shortlist reporter requires the recorded fresh-process case-arm contract;
+it refuses `abcd_v1` and any other unqualified long-lived run.
 
 ## CTBF v5 non-paper reconstruction-intuition probe
 

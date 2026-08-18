@@ -81,6 +81,11 @@ class SimulationResourceLimitExceeded(RuntimeError):
         }
 
 
+def _new_gain_loss_counter_map():
+    """Picklable factory for per-generation interval diagnostics."""
+    return {"gain": Counter(), "loss": Counter()}
+
+
 class SimulationDiagnostics:
     """Owned counters for simulator attempts, viability, and state collisions."""
 
@@ -94,7 +99,7 @@ class SimulationDiagnostics:
             for stage in ("proposed", "retained")
         }
         self.interval_footprints_by_generation = {
-            stage: defaultdict(lambda: {"gain": Counter(), "loss": Counter()})
+            stage: defaultdict(_new_gain_loss_counter_map)
             for stage in ("proposed", "retained")
         }
         self.zero_bin_counts_by_generation = defaultdict(Counter)
