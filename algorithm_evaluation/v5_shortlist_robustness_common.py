@@ -28,11 +28,13 @@ from algorithm_evaluation.v5_algorithm_development_common import (
 from distance_semantics import validate_distance_label_coverage
 
 
-BANK_SCHEMA_VERSION = "ctbf-v5-shortlist-robustness-bank-v2"
+BANK_SCHEMA_VERSION = "ctbf-v5-shortlist-robustness-bank-v3"
+PREVIOUS_BANK_SCHEMA_VERSION = "ctbf-v5-shortlist-robustness-bank-v2"
 LEGACY_BANK_SCHEMA_VERSION = "ctbf-v5-shortlist-robustness-bank-v1"
 CASE_METADATA_SCHEMA_VERSION = "ctbf-v5-shortlist-robustness-case-v1"
-RUN_SCHEMA_VERSION = "ctbf-v5-shortlist-robustness-run-v2"
-REPORT_SCHEMA_VERSION = "ctbf-v5-shortlist-robustness-report-v2"
+RUN_SCHEMA_VERSION = "ctbf-v5-shortlist-robustness-run-v3"
+PREVIOUS_RUN_SCHEMA_VERSION = "ctbf-v5-shortlist-robustness-run-v2"
+REPORT_SCHEMA_VERSION = "ctbf-v5-shortlist-robustness-report-v3"
 BANK_MANIFEST_NAME = "bank_manifest.json"
 RESULT_NAME = "result.json"
 
@@ -62,13 +64,56 @@ POOLED_D_ID = (
     "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony"
 )
 SHORTLIST_ARM_IDS = (ORDERED_A_ID, ORDERED_B_ID, ORDERED_C_ID, POOLED_D_ID)
+POOLED_E_ID = "neighbor_joining_baseline"
+POOLED_F_ID = "neighbor_joining_hybrid_opt_refined"
+ORDERED_G_ID = "biopsy_guided_full_anticentral_binary_r2"
+FULL_EXTENSION_ARM_IDS = (POOLED_E_ID, POOLED_F_ID, ORDERED_G_ID)
+FULL_V2_ARM_IDS = SHORTLIST_ARM_IDS + FULL_EXTENSION_ARM_IDS
+
+PARTIAL_X_ID = "classical_partial"
+PARTIAL_Y_ID = (
+    "biopsy_guided_top_anticentral_binary_r2_bottom_deferred_tie"
+)
+PARTIAL_Z_ID = "biopsy_guided_classical_r2_bottom_deferred_tie"
+PARTIAL_V_ID = "biopsy_guided_top_anticentral_binary_r2"
+PARTIAL_W_ID = "biopsy_guided_top_anticentral_binary_r4"
+PARTIAL_U_ID = "biopsy_guided_classical_r2"
+PARTIAL_V2_ARM_IDS = (
+    PARTIAL_X_ID,
+    PARTIAL_Y_ID,
+    PARTIAL_Z_ID,
+    PARTIAL_V_ID,
+    PARTIAL_W_ID,
+    PARTIAL_U_ID,
+)
+V2_EXTENSION_ARM_IDS = FULL_EXTENSION_ARM_IDS + PARTIAL_V2_ARM_IDS
+V2_COMPLETE_ARM_IDS = FULL_V2_ARM_IDS + PARTIAL_V2_ARM_IDS
+
+ARM_SET_BY_NAME = {
+    "abcd": SHORTLIST_ARM_IDS,
+    "full-extension": FULL_EXTENSION_ARM_IDS,
+    "partial-comparison": PARTIAL_V2_ARM_IDS,
+    "v2-extensions": V2_EXTENSION_ARM_IDS,
+    "v2-complete": V2_COMPLETE_ARM_IDS,
+}
+
 SHORT_LABEL_BY_ARM = {
     ORDERED_A_ID: "A",
     ORDERED_B_ID: "B",
     ORDERED_C_ID: "C",
     POOLED_D_ID: "D",
+    POOLED_E_ID: "E",
+    POOLED_F_ID: "F",
+    ORDERED_G_ID: "G",
+    PARTIAL_X_ID: "X",
+    PARTIAL_Y_ID: "Y",
+    PARTIAL_Z_ID: "Z",
+    PARTIAL_V_ID: "V",
+    PARTIAL_W_ID: "W",
+    PARTIAL_U_ID: "U",
 }
 DECLARED_METRICS = ("ad_f1", "grf", "ad_precision", "ad_recall")
+PARTIAL_DECLARED_METRICS = ("grf",)
 
 
 def validate_positive_integer(value: Any, field: str) -> None:
@@ -170,12 +215,38 @@ def truth_path(block_index: int) -> str:
     return (Path("truths") / f"block_{block_index + 1:03d}.json").as_posix()
 
 
-def shortlist_specs() -> tuple[DevelopmentArmSpec, ...]:
-    specs = tuple(ARM_SPEC_BY_ID[arm_id] for arm_id in SHORTLIST_ARM_IDS)
+def resolve_shortlist_arm_ids(arm_set: str) -> tuple[str, ...]:
+    try:
+        return ARM_SET_BY_NAME[str(arm_set)]
+    except KeyError as error:
+        available = ", ".join(ARM_SET_BY_NAME)
+        raise ValueError(
+            f"Unknown shortlist arm set {arm_set!r}; available: {available}."
+        ) from error
+
+
+def shortlist_specs(
+    arm_ids: Sequence[str] = SHORTLIST_ARM_IDS,
+) -> tuple[DevelopmentArmSpec, ...]:
+    normalized = tuple(str(arm_id) for arm_id in arm_ids)
+    if not normalized or len(set(normalized)) != len(normalized):
+        raise ValueError("Shortlist arm ids must be a nonempty unique sequence.")
+    unknown = [arm_id for arm_id in normalized if arm_id not in V2_COMPLETE_ARM_IDS]
+    if unknown:
+        raise ValueError(f"Unknown v2 shortlist arm ids: {unknown!r}.")
+    specs = tuple(ARM_SPEC_BY_ID[arm_id] for arm_id in normalized)
     for spec in specs:
-        if spec.primary_metric != "ad_f1":
-            raise RuntimeError(f"Shortlist arm {spec.arm_id} changed primary metric.")
-        if tuple(spec.complementary_metrics) != ("grf", "ad_precision", "ad_recall"):
+        if spec.arm_id in FULL_V2_ARM_IDS:
+            expected_primary = "ad_f1"
+            expected_complementary = ("grf", "ad_precision", "ad_recall")
+        else:
+            expected_primary = "grf"
+            expected_complementary = ()
+        if spec.primary_metric != expected_primary:
+            raise RuntimeError(
+                f"Shortlist arm {spec.arm_id} changed primary metric."
+            )
+        if tuple(spec.complementary_metrics) != expected_complementary:
             raise RuntimeError(
                 f"Shortlist arm {spec.arm_id} changed complementary metrics."
             )
@@ -191,6 +262,7 @@ def load_bank_manifest(
     manifest = read_json(root / BANK_MANIFEST_NAME)
     if manifest.get("schema_version") not in {
         BANK_SCHEMA_VERSION,
+        PREVIOUS_BANK_SCHEMA_VERSION,
         LEGACY_BANK_SCHEMA_VERSION,
     }:
         raise ValueError("Unknown shortlist-robustness bank schema.")
@@ -228,6 +300,10 @@ def load_bank_manifest(
         raise ValueError("Unknown shortlist bank contract mode.")
     if manifest.get("shortlist_arm_ids") != list(SHORTLIST_ARM_IDS):
         raise ValueError("Shortlist bank arm declaration changed.")
+    if manifest.get("schema_version") == BANK_SCHEMA_VERSION and manifest.get(
+        "v2_reproduction_arm_ids"
+    ) != list(V2_COMPLETE_ARM_IDS):
+        raise ValueError("Shortlist bank v2 reproduction roster changed.")
     if manifest.get("sampling_rule") != SAMPLING_RULE:
         raise ValueError("Shortlist bank sampling rule changed.")
     if manifest.get("simulation_height") != max(heights):

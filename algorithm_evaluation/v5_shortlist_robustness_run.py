@@ -1,4 +1,4 @@
-"""Run the fixed A--D shortlist on a generated robustness bank."""
+"""Run a declared CTBF v5 shortlist arm set on a robustness bank."""
 
 from __future__ import annotations
 
@@ -22,13 +22,14 @@ from algorithm_evaluation.v5_algorithm_development_run import (
 )
 from algorithm_evaluation.v5_algorithm_development_common import DevelopmentArmSpec
 from algorithm_evaluation.v5_shortlist_robustness_common import (
+    ARM_SET_BY_NAME,
     PLACEMENT_POLICIES,
     RESULT_NAME,
     RUN_SCHEMA_VERSION,
-    SHORTLIST_ARM_IDS,
     ensure_new_output_root,
     load_bank_manifest,
     read_case_assets,
+    resolve_shortlist_arm_ids,
     shortlist_specs,
     validate_positive_integer,
     write_json,
@@ -79,6 +80,8 @@ def _resume_run(
     source_root: Path,
     bank: Mapping[str, Any],
     cases: Sequence[Mapping[str, Any]],
+    specs: Sequence[DevelopmentArmSpec],
+    arm_set: str,
     resources: Mapping[str, Any],
 ) -> tuple[Path, dict[str, Any], set[tuple[str, str]]]:
     root = Path(output_root).expanduser().resolve()
@@ -86,10 +89,11 @@ def _resume_run(
     if not root.is_dir() or not result_path.is_file():
         raise ValueError("A resumed shortlist run requires an existing result root.")
     result = read_json(result_path)
-    specs = shortlist_specs()
     exact_fields = {
         "schema_version": RUN_SCHEMA_VERSION,
         "run_id": run_id,
+        "arm_set": arm_set,
+        "arm_ids": [spec.arm_id for spec in specs],
         "bank_id": bank["bank_id"],
         "bank_root": str(source_root),
         "block_count": int(bank["block_count"]),
@@ -152,6 +156,7 @@ def run_shortlist(
     reconstruction_timeout_seconds: int = DEFAULT_RECONSTRUCTION_TIMEOUT_SECONDS,
     evaluation_timeout_seconds: int = DEFAULT_EVALUATION_TIMEOUT_SECONDS,
     rss_limit_bytes: int = DEFAULT_RSS_LIMIT_BYTES,
+    arm_set: str = "abcd",
     expected_block_count: int | None = None,
     created_at_utc: str | None = None,
     progress: bool = False,
@@ -167,9 +172,10 @@ def run_shortlist(
         validate_positive_integer(value, field)
     if expected_block_count is not None:
         validate_positive_integer(expected_block_count, "expected_block_count")
-    specs = shortlist_specs()
-    if tuple(spec.arm_id for spec in specs) != SHORTLIST_ARM_IDS:
-        raise RuntimeError("The fixed shortlist arm order changed.")
+    arm_ids = resolve_shortlist_arm_ids(arm_set)
+    specs = shortlist_specs(arm_ids)
+    if tuple(spec.arm_id for spec in specs) != arm_ids:
+        raise RuntimeError("The selected shortlist arm order changed.")
     source_root, bank = load_bank_manifest(
         bank_root,
         expected_block_count=expected_block_count,
@@ -187,6 +193,8 @@ def run_shortlist(
             source_root=source_root,
             bank=bank,
             cases=cases,
+            specs=specs,
+            arm_set=arm_set,
             resources=resources,
         )
         semantic_gate = result["semantic_gate_by_arm"]
@@ -200,6 +208,8 @@ def run_shortlist(
         result = {
             "schema_version": RUN_SCHEMA_VERSION,
             "run_id": run_id,
+            "arm_set": arm_set,
+            "arm_ids": [spec.arm_id for spec in specs],
             "status": "in_progress",
             "created_at_utc": created_at_utc or datetime.now(timezone.utc).isoformat(),
             "scientific_role": bank["scientific_role"],
@@ -299,6 +309,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument(
+        "--arm-set",
+        choices=tuple(ARM_SET_BY_NAME),
+        default="abcd",
+        help=(
+            "Named non-overlapping v2 arm roster. Use v2-complete only for a "
+            "future from-scratch recreation."
+        ),
+    )
+    parser.add_argument(
         "--reconstruction-timeout-seconds",
         type=int,
         default=DEFAULT_RECONSTRUCTION_TIMEOUT_SECONDS,
@@ -321,6 +340,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         bank_root=arguments.bank_root,
         output_root=arguments.output_root,
         run_id=arguments.run_id,
+        arm_set=arguments.arm_set,
         reconstruction_timeout_seconds=arguments.reconstruction_timeout_seconds,
         evaluation_timeout_seconds=arguments.evaluation_timeout_seconds,
         rss_limit_bytes=arguments.rss_limit_bytes,

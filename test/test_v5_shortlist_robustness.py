@@ -17,13 +17,17 @@ from algorithm_evaluation.process_isolation import (
 )
 from algorithm_evaluation.v5_shortlist_robustness_bank import generate_bank
 from algorithm_evaluation.v5_shortlist_robustness_common import (
+    ARM_SET_BY_NAME,
     DECLARED_METRICS,
     DISTANCE_EXECUTION_SCHEMA_VERSION,
     ORDERED_A_ID,
     ORDERED_B_ID,
     ORDERED_C_ID,
     POOLED_D_ID,
+    PREVIOUS_RUN_SCHEMA_VERSION,
     REPORT_SCHEMA_VERSION,
+    V2_COMPLETE_ARM_IDS,
+    V2_EXTENSION_ARM_IDS,
     derived_seed,
     late_schedule,
     load_bank_manifest,
@@ -152,6 +156,8 @@ def _success_record(block, height, policy, arm, value):
 
 
 def test_shortlist_schedules_are_fixed_and_random_is_prospective():
+    assert ARM_SET_BY_NAME["v2-complete"] == V2_COMPLETE_ARM_IDS
+    assert ARM_SET_BY_NAME["v2-extensions"] == V2_EXTENSION_ARM_IDS
     assert spread_schedule(14) == (9, 12, 14)
     assert spread_schedule(24) == (15, 20, 24)
     assert spread_schedule(34) == (21, 28, 34)
@@ -271,6 +277,7 @@ def test_one_block_h38_late_bank_run_report_and_resume(tmp_path):
     assert manifest["declared_condition_count"] == 1
     assert manifest["available_condition_count"] == 1
     assert manifest["unavailable_condition_count"] == 0
+    assert manifest["v2_reproduction_arm_ids"] == list(V2_COMPLETE_ARM_IDS)
     _root, loaded = load_bank_manifest(bank_root, expected_block_count=1)
     assert loaded["cases"][0]["generations"] == [36, 37, 38]
 
@@ -335,6 +342,39 @@ def test_one_block_h38_late_bank_run_report_and_resume(tmp_path):
     assert (report_root / "report.md").is_file()
     assert (report_root / "pairwise_by_cell.csv").is_file()
 
+    extension_root = tmp_path / "extension-run"
+    extension = run_shortlist(
+        bank_root=bank_root,
+        output_root=extension_root,
+        run_id="fixture-shortlist-extensions",
+        arm_set="v2-extensions",
+        expected_block_count=1,
+        created_at_utc="fixture",
+    )
+    assert extension["completed_record_count"] == len(V2_EXTENSION_ARM_IDS)
+    assert extension["failure_count"] == 0
+    assert extension["arm_ids"] == list(V2_EXTENSION_ARM_IDS)
+
+    combined_root = tmp_path / "combined-report"
+    combined = write_report(
+        result_roots=(run_root, extension_root),
+        output_root=combined_root,
+        expected_block_count=1,
+        created_at_utc="fixture",
+    )
+    assert combined["arm_count"] == len(V2_COMPLETE_ARM_IDS)
+    assert combined["record_count"] == len(V2_COMPLETE_ARM_IDS)
+    assert combined["comparison_groups"]["fully_labeled"]["arm_ids"] == list(
+        V2_COMPLETE_ARM_IDS[:7]
+    )
+    assert combined["comparison_groups"]["partial"]["arm_ids"] == list(
+        V2_COMPLETE_ARM_IDS[7:]
+    )
+    assert combined["interpretation_contract"][
+        "cross_output_family_comparisons_generated"
+    ] is False
+    assert (combined_root / "partial_pairwise_by_cell.csv").is_file()
+
     probe = run_probe(
         bank_root=bank_root,
         output_root=tmp_path / "isolation-probe",
@@ -356,6 +396,20 @@ def test_one_block_h38_late_bank_run_report_and_resume(tmp_path):
             output_root=tmp_path / "forbidden-unqualified-report",
             expected_block_count=1,
         )
+
+    previous_root = tmp_path / "previous-v2-run"
+    previous_root.mkdir()
+    previous = copy.deepcopy(resumed)
+    previous["schema_version"] = PREVIOUS_RUN_SCHEMA_VERSION
+    previous.pop("arm_set")
+    previous.pop("arm_ids")
+    write_json(previous_root / "result.json", previous)
+    previous_report = write_report(
+        result_root=previous_root,
+        output_root=tmp_path / "previous-v2-report",
+        expected_block_count=1,
+    )
+    assert previous_report["arm_count"] == 4
 
     legacy_root = tmp_path / "legacy-run"
     legacy_root.mkdir()

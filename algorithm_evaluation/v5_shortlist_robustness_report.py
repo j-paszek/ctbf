@@ -18,23 +18,31 @@ from algorithm_evaluation.process_isolation import (
     fresh_process_contract,
     validate_fresh_process_contract,
 )
-from algorithm_evaluation.v5_algorithm_development_common import numeric_summary
+from algorithm_evaluation.v5_algorithm_development_common import (
+    ARM_SPEC_BY_ID,
+    numeric_summary,
+)
 from algorithm_evaluation.v5_shortlist_robustness_common import (
+    ARM_SET_BY_NAME,
     DECLARED_METRICS,
     DISTANCE_EXECUTION_SCHEMA_VERSION,
+    FULL_V2_ARM_IDS,
     ORDERED_A_ID,
     ORDERED_B_ID,
     ORDERED_C_ID,
     PLACEMENT_POLICIES,
+    PARTIAL_DECLARED_METRICS,
+    PARTIAL_V2_ARM_IDS,
     POOLED_D_ID,
+    PREVIOUS_RUN_SCHEMA_VERSION,
     REPORT_SCHEMA_VERSION,
     RESULT_NAME,
     RUN_SCHEMA_VERSION,
     SHORTLIST_ARM_IDS,
     SHORT_LABEL_BY_ARM,
+    V2_COMPLETE_ARM_IDS,
     ensure_new_output_root,
     load_bank_manifest,
-    shortlist_specs,
     write_json,
 )
 
@@ -52,6 +60,32 @@ PRINCIPAL_PAIRS = (
     (ORDERED_A_ID, ORDERED_B_ID),
     (ORDERED_A_ID, ORDERED_C_ID),
 )
+FULL_PRINCIPAL_PAIRS = PRINCIPAL_PAIRS + tuple(
+    (ORDERED_A_ID, arm_id) for arm_id in FULL_V2_ARM_IDS[4:]
+)
+PARTIAL_PRINCIPAL_PAIRS = (
+    (PARTIAL_V2_ARM_IDS[0], PARTIAL_V2_ARM_IDS[1]),  # X-Y
+    (PARTIAL_V2_ARM_IDS[1], PARTIAL_V2_ARM_IDS[2]),  # Y-Z
+    (PARTIAL_V2_ARM_IDS[1], PARTIAL_V2_ARM_IDS[3]),  # Y-V
+    (PARTIAL_V2_ARM_IDS[2], PARTIAL_V2_ARM_IDS[5]),  # Z-U
+    (PARTIAL_V2_ARM_IDS[3], PARTIAL_V2_ARM_IDS[5]),  # V-U
+    (PARTIAL_V2_ARM_IDS[3], PARTIAL_V2_ARM_IDS[4]),  # V-W
+)
+SHORT_DESCRIPTION_BY_ARM = {
+    ORDERED_A_ID: "deferred-bottom binary-anticentral r2 full",
+    ORDERED_B_ID: "deferred-bottom rooted-Q r2 full",
+    ORDERED_C_ID: "default-bottom binary-anticentral r4 full",
+    POOLED_D_ID: "pooled plausible-parsimony full",
+    FULL_V2_ARM_IDS[4]: "pooled baseline full",
+    FULL_V2_ARM_IDS[5]: "pooled hybrid-opt-refined full",
+    FULL_V2_ARM_IDS[6]: "default-bottom binary-anticentral r2 full",
+    PARTIAL_V2_ARM_IDS[0]: "pooled classical partial",
+    PARTIAL_V2_ARM_IDS[1]: "deferred-bottom binary-anticentral r2 partial",
+    PARTIAL_V2_ARM_IDS[2]: "deferred-bottom classical r2 partial",
+    PARTIAL_V2_ARM_IDS[3]: "default-bottom binary-anticentral r2 partial",
+    PARTIAL_V2_ARM_IDS[4]: "default-bottom binary-anticentral r4 partial",
+    PARTIAL_V2_ARM_IDS[5]: "default-bottom classical r2 partial",
+}
 
 
 def _effect_summary(values: Sequence[float]) -> dict[str, Any] | None:
@@ -250,11 +284,13 @@ def _algorithm_cell_summaries(
     *,
     bank: Mapping[str, Any],
     records: Sequence[Mapping[str, Any]],
+    arm_ids: Sequence[str] = SHORTLIST_ARM_IDS,
+    metrics: Sequence[str] = DECLARED_METRICS,
 ) -> list[dict[str, Any]]:
     rows = []
     for height in bank["heights"]:
         for policy in bank["placement_policies"]:
-            for arm_id in SHORTLIST_ARM_IDS:
+            for arm_id in arm_ids:
                 cell = [
                     record
                     for record in records
@@ -283,7 +319,7 @@ def _algorithm_cell_summaries(
                             metric: numeric_summary(
                                 _metric(record, metric) for record in successful
                             )
-                            for metric in DECLARED_METRICS
+                            for metric in metrics
                         },
                         "runtime_seconds": numeric_summary(
                             value
@@ -306,10 +342,12 @@ def _pairwise_cells(
     *,
     bank: Mapping[str, Any],
     index: Mapping[tuple[int, int, str, str], Mapping[str, Any]],
+    arm_ids: Sequence[str] = SHORTLIST_ARM_IDS,
+    metrics: Sequence[str] = DECLARED_METRICS,
 ) -> list[dict[str, Any]]:
     rows = []
-    for arm_a, arm_b in itertools.combinations(SHORTLIST_ARM_IDS, 2):
-        for metric in DECLARED_METRICS:
+    for arm_a, arm_b in itertools.combinations(arm_ids, 2):
+        for metric in metrics:
             for height in bank["heights"]:
                 for policy in bank["placement_policies"]:
                     values = []
@@ -377,11 +415,13 @@ def _depth_interactions(
     *,
     bank: Mapping[str, Any],
     index: Mapping[tuple[int, int, str, str], Mapping[str, Any]],
+    arm_ids: Sequence[str] = SHORTLIST_ARM_IDS,
+    metrics: Sequence[str] = DECLARED_METRICS,
 ) -> list[dict[str, Any]]:
     available_heights = set(int(value) for value in bank["heights"])
     rows = []
-    for arm_a, arm_b in itertools.combinations(SHORTLIST_ARM_IDS, 2):
-        for metric in DECLARED_METRICS:
+    for arm_a, arm_b in itertools.combinations(arm_ids, 2):
+        for metric in metrics:
             for policy in bank["placement_policies"]:
                 for lower, upper in DEPTH_CONTRASTS:
                     if lower not in available_heights or upper not in available_heights:
@@ -432,11 +472,13 @@ def _placement_interactions(
     *,
     bank: Mapping[str, Any],
     index: Mapping[tuple[int, int, str, str], Mapping[str, Any]],
+    arm_ids: Sequence[str] = SHORTLIST_ARM_IDS,
+    metrics: Sequence[str] = DECLARED_METRICS,
 ) -> list[dict[str, Any]]:
     policies = set(str(value) for value in bank["placement_policies"])
     rows = []
-    for arm_a, arm_b in itertools.combinations(SHORTLIST_ARM_IDS, 2):
-        for metric in DECLARED_METRICS:
+    for arm_a, arm_b in itertools.combinations(arm_ids, 2):
+        for metric in metrics:
             for height in bank["heights"]:
                 for policy_a, policy_b in PLACEMENT_CONTRASTS:
                     if policy_a not in policies or policy_b not in policies:
@@ -558,25 +600,53 @@ def _diagnostic_summaries(
 
 def build_report(
     *,
-    result_root: Path | str,
+    result_root: Path | str | None = None,
+    result_roots: Sequence[Path | str] | None = None,
     expected_block_count: int | None = None,
     created_at_utc: str | None = None,
 ) -> dict[str, Any]:
-    result_path = Path(result_root).expanduser().resolve() / RESULT_NAME
-    result = read_json(result_path)
-    if result.get("schema_version") != RUN_SCHEMA_VERSION:
-        raise ValueError("Unknown shortlist-robustness run schema.")
-    if result.get("status") != "complete":
-        raise ValueError("Shortlist-robustness run is not complete.")
-    resources = result.get("resources")
-    if not isinstance(resources, Mapping):
-        raise ValueError("Shortlist run has no auditable resource contract.")
-    validate_fresh_process_contract(
-        resources.get("record_execution"),
-        worker_unit=CASE_ARM_WORKER_UNIT,
-    )
+    if result_roots is None:
+        if result_root is None:
+            raise ValueError("At least one shortlist result root is required.")
+        normalized_roots = (result_root,)
+    else:
+        if result_root is not None:
+            raise ValueError("Pass result_root or result_roots, not both.")
+        normalized_roots = tuple(result_roots)
+        if not normalized_roots:
+            raise ValueError("At least one shortlist result root is required.")
+
+    loaded = []
+    for candidate_root in normalized_roots:
+        root = Path(candidate_root).expanduser().resolve()
+        result = read_json(root / RESULT_NAME)
+        if result.get("schema_version") not in {
+            RUN_SCHEMA_VERSION,
+            PREVIOUS_RUN_SCHEMA_VERSION,
+        }:
+            raise ValueError("Unknown shortlist-robustness run schema.")
+        if result.get("status") != "complete":
+            raise ValueError("Shortlist-robustness run is not complete.")
+        resources = result.get("resources")
+        if not isinstance(resources, Mapping):
+            raise ValueError("Shortlist run has no auditable resource contract.")
+        validate_fresh_process_contract(
+            resources.get("record_execution"),
+            worker_unit=CASE_ARM_WORKER_UNIT,
+        )
+        loaded.append((root, result))
+
+    run_ids = [str(result["run_id"]) for _root, result in loaded]
+    if len(set(run_ids)) != len(run_ids):
+        raise ValueError("Shortlist result run ids must be unique.")
+    bank_roots = {str(result["bank_root"]) for _root, result in loaded}
+    bank_ids = {str(result["bank_id"]) for _root, result in loaded}
+    if len(bank_roots) != 1 or len(bank_ids) != 1:
+        raise ValueError("All shortlist runs must use the exact same stored bank.")
+
+    first_result = loaded[0][1]
     bank_root, bank = load_bank_manifest(
-        result["bank_root"],
+        first_result["bank_root"],
         expected_block_count=expected_block_count,
     )
     expected_result_fields = {
@@ -586,34 +656,148 @@ def build_report(
         "available_condition_count": int(bank["available_condition_count"]),
         "unavailable_condition_count": int(bank["unavailable_condition_count"]),
     }
-    for field, expected in expected_result_fields.items():
-        if result.get(field) != expected:
+    all_records: list[Mapping[str, Any]] = []
+    declared_arm_ids: set[str] = set()
+    semantic_gate_by_arm: dict[str, Any] = {}
+    record_execution_by_run = []
+    for root, result in loaded:
+        for field, expected in expected_result_fields.items():
+            if result.get(field) != expected:
+                raise ValueError(
+                    f"Shortlist run {field} does not match its immutable bank."
+                )
+        run_specs = result.get("arm_specs")
+        if not isinstance(run_specs, list) or not run_specs:
+            raise ValueError("Shortlist run has no arm declarations.")
+        arm_ids = tuple(str(spec.get("arm_id")) for spec in run_specs)
+        if len(set(arm_ids)) != len(arm_ids):
+            raise ValueError("A shortlist run declares duplicate arms.")
+        if any(arm_id not in V2_COMPLETE_ARM_IDS for arm_id in arm_ids):
+            raise ValueError("A shortlist run declares an unknown v2 arm.")
+        if declared_arm_ids.intersection(arm_ids):
             raise ValueError(
-                f"Shortlist run {field} does not match its immutable bank."
+                "An arm occurs in more than one merged shortlist run; use one result."
             )
-    specs = shortlist_specs()
-    if result.get("arm_specs") != [spec.as_record() for spec in specs]:
-        raise ValueError("Shortlist run arm declaration changed.")
-    records = result.get("records")
-    if not isinstance(records, list) or len(records) != result["expected_record_count"]:
-        raise ValueError("Shortlist run record inventory is incomplete.")
-    expected_keys = {
-        (
-            int(case["block_index"]),
-            int(case["height"]),
-            str(case["placement_policy"]),
-            arm_id,
-        )
-        for case in bank["cases"]
-        for arm_id in SHORTLIST_ARM_IDS
-    }
-    index = _record_index(records)
-    if set(index) != expected_keys:
-        raise ValueError("Shortlist run records do not match available bank cases.")
-    for record in records:
-        if record["status"] == "success":
-            for metric in DECLARED_METRICS:
+        expected_specs = [ARM_SPEC_BY_ID[arm_id].as_record() for arm_id in arm_ids]
+        if run_specs != expected_specs:
+            raise ValueError("Shortlist run arm declaration changed.")
+        if result.get("schema_version") == RUN_SCHEMA_VERSION:
+            if result.get("arm_ids") != list(arm_ids):
+                raise ValueError("Shortlist run arm-id declaration changed.")
+            arm_set = result.get("arm_set")
+            if arm_set not in ARM_SET_BY_NAME or ARM_SET_BY_NAME[arm_set] != arm_ids:
+                raise ValueError("Shortlist run arm-set declaration changed.")
+        records = result.get("records")
+        expected_record_count = len(bank["cases"]) * len(arm_ids)
+        if (
+            not isinstance(records, list)
+            or result.get("expected_record_count") != expected_record_count
+            or len(records) != expected_record_count
+        ):
+            raise ValueError("Shortlist run record inventory is incomplete.")
+        expected_keys = {
+            (
+                int(case["block_index"]),
+                int(case["height"]),
+                str(case["placement_policy"]),
+                arm_id,
+            )
+            for case in bank["cases"]
+            for arm_id in arm_ids
+        }
+        run_index = _record_index(records)
+        if set(run_index) != expected_keys:
+            raise ValueError("Shortlist run records do not match available bank cases.")
+        for record in records:
+            if record["status"] != "success":
+                continue
+            spec = ARM_SPEC_BY_ID[str(record["arm_id"])]
+            for metric in (spec.primary_metric, *spec.complementary_metrics):
                 _metric(record, metric)
+        gates = result.get("semantic_gate_by_arm")
+        if not isinstance(gates, Mapping) or set(gates) != set(arm_ids):
+            raise ValueError("Shortlist run has an incomplete D0 gate inventory.")
+        semantic_gate_by_arm.update(gates)
+        declared_arm_ids.update(arm_ids)
+        all_records.extend(records)
+        record_execution_by_run.append(
+            {
+                "run_id": str(result["run_id"]),
+                "result_root": str(root),
+                "record_execution": dict(result["resources"]["record_execution"]),
+            }
+        )
+
+    ordered_arm_ids = tuple(
+        arm_id for arm_id in V2_COMPLETE_ARM_IDS if arm_id in declared_arm_ids
+    )
+    index = _record_index(all_records)
+
+    def comparison_group(
+        group_name: str,
+        candidate_ids: Sequence[str],
+        metrics: Sequence[str],
+        primary_metric: str,
+    ) -> dict[str, Any] | None:
+        arm_ids = tuple(
+            arm_id for arm_id in candidate_ids if arm_id in declared_arm_ids
+        )
+        if not arm_ids:
+            return None
+        return {
+            "group": group_name,
+            "arm_ids": list(arm_ids),
+            "short_labels": {
+                arm_id: SHORT_LABEL_BY_ARM[arm_id] for arm_id in arm_ids
+            },
+            "declared_metrics": list(metrics),
+            "primary_metric": primary_metric,
+            "algorithm_cell_summaries": _algorithm_cell_summaries(
+                bank=bank,
+                records=all_records,
+                arm_ids=arm_ids,
+                metrics=metrics,
+            ),
+            "pairwise_by_height_and_placement": _pairwise_cells(
+                bank=bank,
+                index=index,
+                arm_ids=arm_ids,
+                metrics=metrics,
+            ),
+            "depth_interactions": _depth_interactions(
+                bank=bank,
+                index=index,
+                arm_ids=arm_ids,
+                metrics=metrics,
+            ),
+            "placement_interactions": _placement_interactions(
+                bank=bank,
+                index=index,
+                arm_ids=arm_ids,
+                metrics=metrics,
+            ),
+        }
+
+    full_group = comparison_group(
+        "fully_labeled",
+        FULL_V2_ARM_IDS,
+        DECLARED_METRICS,
+        "ad_f1",
+    )
+    partial_group = comparison_group(
+        "partial",
+        PARTIAL_V2_ARM_IDS,
+        PARTIAL_DECLARED_METRICS,
+        "grf",
+    )
+    groups = {
+        group["group"]: group
+        for group in (full_group, partial_group)
+        if group is not None
+    }
+    compatibility_group = full_group or partial_group
+    if compatibility_group is None:  # pragma: no cover - arm validation prevents this
+        raise ValueError("No reportable shortlist comparison group is present.")
 
     bank_resource_execution = _bank_resource_execution(bank)
     report = {
@@ -623,20 +807,25 @@ def build_report(
         "scientific_role": bank["scientific_role"],
         "bank_id": bank["bank_id"],
         "bank_root": str(bank_root),
-        "run_id": result["run_id"],
-        "result_root": str(Path(result_root).expanduser().resolve()),
+        "run_id": run_ids[0] if len(run_ids) == 1 else None,
+        "run_ids": run_ids,
+        "result_root": str(loaded[0][0]) if len(loaded) == 1 else None,
+        "result_roots": [str(root) for root, _result in loaded],
         "block_count": int(bank["block_count"]),
         "declared_condition_count": int(bank["declared_condition_count"]),
         "available_condition_count": int(bank["available_condition_count"]),
         "unavailable_condition_count": int(bank["unavailable_condition_count"]),
-        "arm_count": len(SHORTLIST_ARM_IDS),
-        "record_count": len(records),
+        "arm_count": len(ordered_arm_ids),
+        "record_count": len(all_records),
         "heights": list(bank["heights"]),
         "placement_policies": list(bank["placement_policies"]),
-        "shortlist_arm_ids": list(SHORTLIST_ARM_IDS),
-        "short_labels": dict(SHORT_LABEL_BY_ARM),
-        "declared_metrics": list(DECLARED_METRICS),
-        "primary_metric": "ad_f1",
+        "shortlist_arm_ids": list(ordered_arm_ids),
+        "short_labels": {
+            arm_id: SHORT_LABEL_BY_ARM[arm_id] for arm_id in ordered_arm_ids
+        },
+        "declared_metrics": list(compatibility_group["declared_metrics"]),
+        "primary_metric": compatibility_group["primary_metric"],
+        "comparison_groups": groups,
         "dependence_contract": {
             "independent_unit": "truth_block",
             "independent_block_count": int(bank["block_count"]),
@@ -647,23 +836,27 @@ def build_report(
             "automatic_winner_declared": False,
             "pooled_1200_condition_ranking_generated": False,
             "ad_f1_and_grf_combined_into_one_score": False,
+            "cross_output_family_comparisons_generated": False,
             "placement_is_practical_policy_not_fixed_budget_causal_effect": True,
             "h38_role": "development_boundary_stress_not_automatic_paper_height",
         },
-        "semantic_gate_by_arm": result["semantic_gate_by_arm"],
-        "record_execution": dict(resources["record_execution"]),
+        "semantic_gate_by_arm": semantic_gate_by_arm,
+        "record_execution": dict(
+            loaded[0][1]["resources"]["record_execution"]
+        ),
+        "record_execution_by_run": record_execution_by_run,
         "bank_resource_execution": bank_resource_execution,
         "availability": _availability_summary(bank),
-        "algorithm_cell_summaries": _algorithm_cell_summaries(
-            bank=bank,
-            records=records,
-        ),
-        "pairwise_by_height_and_placement": _pairwise_cells(
-            bank=bank,
-            index=index,
-        ),
-        "depth_interactions": _depth_interactions(bank=bank, index=index),
-        "placement_interactions": _placement_interactions(bank=bank, index=index),
+        "algorithm_cell_summaries": compatibility_group[
+            "algorithm_cell_summaries"
+        ],
+        "pairwise_by_height_and_placement": compatibility_group[
+            "pairwise_by_height_and_placement"
+        ],
+        "depth_interactions": compatibility_group["depth_interactions"],
+        "placement_interactions": compatibility_group[
+            "placement_interactions"
+        ],
         "condition_diagnostics": _diagnostic_summaries(
             bank_root=bank_root,
             bank=bank,
@@ -704,10 +897,12 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def _csv_rows(report: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
+def _comparison_csv_rows(
+    comparison: Mapping[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
     metric_rows = []
     resource_rows = []
-    for row in report["algorithm_cell_summaries"]:
+    for row in comparison["algorithm_cell_summaries"]:
         for metric, summary in row["metrics"].items():
             metric_rows.append(
                 {
@@ -734,7 +929,7 @@ def _csv_rows(report: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
             }
         )
     pairwise_rows = []
-    for row in report["pairwise_by_height_and_placement"]:
+    for row in comparison["pairwise_by_height_and_placement"]:
         pairwise_rows.append(
             {
                 "arm_a": row["arm_a"],
@@ -756,7 +951,7 @@ def _csv_rows(report: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
     interaction_rows = {}
     for name in ("depth_interactions", "placement_interactions"):
         values = []
-        for row in report[name]:
+        for row in comparison[name]:
             base = {
                 key: value
                 for key, value in row.items()
@@ -772,6 +967,17 @@ def _csv_rows(report: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
                 }
             )
         interaction_rows[name] = values
+    return {
+        "metric_summary": metric_rows,
+        "resource_summary": resource_rows,
+        "pairwise_by_cell": pairwise_rows,
+        "depth_interactions": interaction_rows["depth_interactions"],
+        "placement_interactions": interaction_rows["placement_interactions"],
+    }
+
+
+def _csv_rows(report: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    rows = _comparison_csv_rows(report)
     diagnostic_rows = []
     for row in report["condition_diagnostics"]:
         diagnostic_rows.append(
@@ -802,11 +1008,7 @@ def _csv_rows(report: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
             }
         )
     return {
-        "metric_summary": metric_rows,
-        "resource_summary": resource_rows,
-        "pairwise_by_cell": pairwise_rows,
-        "depth_interactions": interaction_rows["depth_interactions"],
-        "placement_interactions": interaction_rows["placement_interactions"],
+        **rows,
         "condition_diagnostics": diagnostic_rows,
         "availability": [
             {
@@ -833,6 +1035,7 @@ def _mean_score_table(
     report: Mapping[str, Any],
     metric: str,
 ) -> list[str]:
+    arm_ids = tuple(report.get("arm_ids", report["shortlist_arm_ids"]))
     index = {
         (row["height"], row["placement_policy"], row["arm_id"]): row
         for row in report["algorithm_cell_summaries"]
@@ -840,13 +1043,15 @@ def _mean_score_table(
     lines = [
         f"### Mean {metric}",
         "",
-        "| Height | Placement | A | B | C | D |",
-        "|---:|---|---:|---:|---:|---:|",
+        "| Height | Placement | "
+        + " | ".join(SHORT_LABEL_BY_ARM[arm_id] for arm_id in arm_ids)
+        + " |",
+        "|---:|---|" + "---:|" * len(arm_ids),
     ]
     for height in report["heights"]:
         for policy in report["placement_policies"]:
             values = []
-            for arm_id in SHORTLIST_ARM_IDS:
+            for arm_id in arm_ids:
                 summary = index[(height, policy, arm_id)]["metrics"][metric]
                 values.append(None if summary is None else summary["mean"])
             lines.append(
@@ -860,11 +1065,12 @@ def _mean_score_table(
 def _principal_pair_table(
     report: Mapping[str, Any],
     metric: str,
+    principal_pairs: Sequence[tuple[str, str]] = PRINCIPAL_PAIRS,
 ) -> list[str]:
     rows = [
         row
         for row in report["pairwise_by_height_and_placement"]
-        if (row["arm_a"], row["arm_b"]) in PRINCIPAL_PAIRS
+        if (row["arm_a"], row["arm_b"]) in principal_pairs
         and row["metric"] == metric
     ]
     lines = [
@@ -888,11 +1094,14 @@ def _principal_pair_table(
     return lines
 
 
-def _h34_h38_table(report: Mapping[str, Any]) -> list[str]:
+def _h34_h38_table(
+    report: Mapping[str, Any],
+    principal_pairs: Sequence[tuple[str, str]] = PRINCIPAL_PAIRS,
+) -> list[str]:
     rows = [
         row
         for row in report["depth_interactions"]
-        if (row["arm_a"], row["arm_b"]) in PRINCIPAL_PAIRS
+        if (row["arm_a"], row["arm_b"]) in principal_pairs
         and row["metric"] in {"ad_f1", "grf"}
         and row["lower_height"] == 34
         and row["upper_height"] == 38
@@ -943,9 +1152,8 @@ def _markdown(report: Mapping[str, Any]) -> str:
         "block are correlated. This report deliberately provides no pooled "
         "all-condition ranking, no automatic winner, and no AD-F1/GRF composite.",
         "",
-        "A = deferred-bottom binary anticentral r2; B = deferred-bottom rooted-Q "
-        "r2; C = default-bottom binary anticentral r4; D = pooled plausible "
-        "parsimony.",
+        "Fully labeled and partial outputs are reported as separate comparison "
+        "families; no cross-family score or ordering is generated.",
         "",
         "## Availability",
         "",
@@ -960,21 +1168,69 @@ def _markdown(report: Mapping[str, Any]) -> str:
             f"| H{row['height']} | {row['placement_policy']} | "
             f"{row['available_count']} | {row['unavailable_count']} | {failures} |"
         )
-    for metric in DECLARED_METRICS:
-        lines.extend(["", *_mean_score_table(report, metric)])
-    for metric in ("ad_f1", "grf"):
-        lines.extend(["", *_principal_pair_table(report, metric)])
-    h34_h38 = _h34_h38_table(report)
-    if h34_h38:
-        lines.extend(["", *h34_h38])
+    for group_name in ("fully_labeled", "partial"):
+        group = report["comparison_groups"].get(group_name)
+        if group is None:
+            continue
+        view = {
+            **report,
+            **group,
+            "shortlist_arm_ids": group["arm_ids"],
+        }
+        principal_pairs = (
+            FULL_PRINCIPAL_PAIRS
+            if group_name == "fully_labeled"
+            else PARTIAL_PRINCIPAL_PAIRS
+        )
+        lines.extend(
+            [
+                "",
+                (
+                    "## Fully labeled comparison"
+                    if group_name == "fully_labeled"
+                    else "## Partial comparison"
+                ),
+                "",
+                "; ".join(
+                    f"{SHORT_LABEL_BY_ARM[arm_id]} = "
+                    f"{SHORT_DESCRIPTION_BY_ARM[arm_id]}"
+                    for arm_id in group["arm_ids"]
+                )
+                + ".",
+            ]
+        )
+        for metric in group["declared_metrics"]:
+            lines.extend(["", *_mean_score_table(view, metric)])
+        principal_metrics = (
+            ("ad_f1", "grf")
+            if group_name == "fully_labeled"
+            else ("grf",)
+        )
+        for metric in principal_metrics:
+            lines.extend(
+                [
+                    "",
+                    *_principal_pair_table(
+                        view,
+                        metric,
+                        principal_pairs=principal_pairs,
+                    ),
+                ]
+            )
+        h34_h38 = _h34_h38_table(
+            view,
+            principal_pairs=principal_pairs,
+        )
+        if h34_h38:
+            lines.extend(["", *h34_h38])
     lines.extend(
         [
             "",
             "## Remaining outputs",
             "",
-            "Complete all-pair AD-F1/GRF/precision/recall contrasts, all depth "
-            "and placement interactions, condition diagnostics, tails, failures, "
-            "runtime, and memory are in the adjacent CSV files and `summary.json`.",
+            "Complete within-family contrasts, depth and placement interactions, "
+            "condition diagnostics, tails, failures, runtime, and memory are in "
+            "the adjacent CSV files and `summary.json`.",
             "",
         ]
     )
@@ -983,13 +1239,15 @@ def _markdown(report: Mapping[str, Any]) -> str:
 
 def write_report(
     *,
-    result_root: Path | str,
+    result_root: Path | str | None = None,
+    result_roots: Sequence[Path | str] | None = None,
     output_root: Path | str,
     expected_block_count: int | None = None,
     created_at_utc: str | None = None,
 ) -> dict[str, Any]:
     report = build_report(
         result_root=result_root,
+        result_roots=result_roots,
         expected_block_count=expected_block_count,
         created_at_utc=created_at_utc,
     )
@@ -997,13 +1255,29 @@ def write_report(
     write_json(root / "summary.json", report)
     for name, rows in _csv_rows(report).items():
         _write_csv(root / f"{name}.csv", rows)
+    compatibility_group = (
+        "fully_labeled"
+        if "fully_labeled" in report["comparison_groups"]
+        else "partial"
+    )
+    for group_name, group in report["comparison_groups"].items():
+        if group_name == compatibility_group:
+            continue
+        for name, rows in _comparison_csv_rows(group).items():
+            _write_csv(root / f"{group_name}_{name}.csv", rows)
     (root / "report.md").write_text(_markdown(report), encoding="utf-8")
     return report
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--result-root", type=Path, required=True)
+    parser.add_argument(
+        "--result-root",
+        type=Path,
+        action="append",
+        required=True,
+        help="Repeat for the completed A-D run and every non-overlapping extension run.",
+    )
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--expected-block-count", type=int)
     return parser
@@ -1012,7 +1286,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     report = write_report(
-        result_root=arguments.result_root,
+        result_roots=arguments.result_root,
         output_root=arguments.output_root,
         expected_block_count=arguments.expected_block_count,
     )

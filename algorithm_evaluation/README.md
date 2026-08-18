@@ -254,7 +254,7 @@ This writes 300 new records and does not change the completed ten-arm
 `{default,deferred} x {rooted-labeled Q,binary anticentral}` full-output design
 and writes its top effects, bottom effects, and difference-in-differences.
 
-## CTBF v5 fully labeled shortlist robustness workflow
+## CTBF v5 shortlist robustness workflow
 
 The final adaptive-development qualification is separate from the immutable
 v2 bank above. It fixes four existing methods, denoted A--D:
@@ -294,6 +294,7 @@ python -m algorithm_evaluation.v5_shortlist_robustness_run \
   --bank-root algorithm_evaluation/results/v5_development/shortlist_robustness/preflight_h38_late_v1/bank \
   --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/preflight_h38_late_v1/run \
   --run-id shortlist-h38-late-preflight-v1 \
+  --arm-set abcd \
   --expected-block-count 5 \
   --progress
 
@@ -392,6 +393,7 @@ python -m algorithm_evaluation.v5_shortlist_robustness_run \
   --bank-root algorithm_evaluation/results/v5_development/shortlist_robustness/bank_v1 \
   --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/runs/abcd_v2 \
   --run-id shortlist-abcd-v2 \
+  --arm-set abcd \
   --expected-block-count 100 \
   --progress
 
@@ -409,6 +411,57 @@ Unavailable simulation, biopsy, distance, reconstruction, and evaluation
 outcomes remain typed and are never replaced with another seed.
 The shortlist reporter requires the recorded fresh-process case-arm contract;
 it refuses `abcd_v1` and any other unqualified long-lived run.
+
+The completed A--D run is preserved and is not rerun.  The owner-approved v2
+extension adds three fully labeled rows without changing A--D:
+
+- E: `neighbor_joining_baseline`;
+- F: `neighbor_joining_hybrid_opt_refined`; and
+- G: `biopsy_guided_full_anticentral_binary_r2`.
+
+It also adds a separate GRF-only partial comparison.  These rows are never
+ranked against the fully labeled family:
+
+- X: `classical_partial`;
+- Y: `biopsy_guided_top_anticentral_binary_r2_bottom_deferred_tie`;
+- Z: `biopsy_guided_classical_r2_bottom_deferred_tie`;
+- V: `biopsy_guided_top_anticentral_binary_r2`;
+- W: `biopsy_guided_top_anticentral_binary_r4`; and
+- U: `biopsy_guided_classical_r2`.
+
+Run only the nine missing rows on the immutable bank into one non-overwriting
+extension root:
+
+This run has 10,800 expected case-arm records and can be resumed with the
+identical command plus `--resume`.
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_robustness_run \
+  --bank-root algorithm_evaluation/results/v5_development/shortlist_robustness/bank_v1 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/runs/v2_extensions_v1 \
+  --run-id shortlist-v2-extensions-v1 \
+  --arm-set v2-extensions \
+  --expected-block-count 100 \
+  --progress
+```
+
+Then combine the two exact same-bank roots.  Arm ids may occur in only one
+input root:
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_robustness_report \
+  --result-root algorithm_evaluation/results/v5_development/shortlist_robustness/runs/abcd_v2 \
+  --result-root algorithm_evaluation/results/v5_development/shortlist_robustness/runs/v2_extensions_v1 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/reports/v2_extended_v1 \
+  --expected-block-count 100
+```
+
+The combined report writes complete within-family contrasts and separate
+`partial_*` CSVs; it refuses cross-family comparisons.  For a future clean v2
+recreation, generate the same 100-block H14/H24/H34/H38, three-placement bank
+and run once with `--arm-set v2-complete`, which declares all 13 rows and
+15,600 expected case-arm records.  This reproduction option does not authorize
+regeneration of the completed bank or A--D result now.
 
 ## CTBF v5 non-paper reconstruction-intuition probe
 
