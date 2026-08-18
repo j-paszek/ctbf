@@ -463,6 +463,42 @@ and run once with `--arm-set v2-complete`, which declares all 13 rows and
 15,600 expected case-arm records.  This reproduction option does not authorize
 regeneration of the completed bank or A--D result now.
 
+The adaptive-radius development set is the ordered
+`{deferred,default}` bottom by `{binary-anticentral,rooted-Q}` top factorial:
+
+- A': `biopsy_guided_full_anticentral_binary_adaptive_median_prior_nn_bottom_deferred_tie`;
+- B': `biopsy_guided_full_rooted_labeled_q_adaptive_median_prior_nn_bottom_deferred_tie`;
+- C': `biopsy_guided_full_anticentral_binary_adaptive_median_prior_nn_bottom_default`; and
+- D': `biopsy_guided_full_rooted_labeled_q_adaptive_median_prior_nn_bottom_default`.
+
+Each replaces only its fixed biopsy-layer radius. After recurrence-level
+extension, it freezes each adjacent transition before any missing-parent
+copy-up, computes every later state's nearest prior-level distance, and uses
+the nearest-rank Q0.50 distance rounded upward with a minimum radius of one.
+The corresponding bottom and top mechanics are otherwise unchanged. D' is the
+missing ordered factorial cell; it is distinct from pooled D, which has no
+biopsy-layer radius and remains the unchanged radius-independent control. Run
+the four ordered rows independently on the immutable bank (4,800 expected
+records):
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_robustness_run \
+  --bank-root algorithm_evaluation/results/v5_development/shortlist_robustness/bank_v1 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/runs/adaptive_median_q50_v1 \
+  --run-id shortlist-adaptive-median-q50-v1 \
+  --arm-set adaptive-radius \
+  --expected-block-count 100 \
+  --progress
+```
+
+An interrupted run resumes only with the identical command plus `--resume`.
+The run records both transition-local radius snapshots and transition decision
+counters.  A same-bank report can merge this root with `abcd_v2` (and with the
+disjoint v2 extension root once completed) to generate direct fixed--prime,
+bottom/top factorial, and pooled-D--A' contrasts plus adaptive-radius
+diagnostics. The quantile is frozen and must not be retuned from these scores
+or separately for v2a/v2b/v2c.
+
 ## CTBF v5 non-paper reconstruction-intuition probe
 
 `simulator_reconstruction_intuition_probe.py` implements the owner-approved

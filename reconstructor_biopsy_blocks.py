@@ -27,6 +27,12 @@ FinalCellSelector = Callable[[list], list]
 
 
 BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION = "ctbf-biopsy-guided-decision-audit-v1"
+ADAPTIVE_BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION = (
+    "ctbf-biopsy-guided-decision-audit-v2"
+)
+ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY = (
+    "adaptive_median_prior_nn_q50_nearest_rank_min1"
+)
 BIOPSY_GUIDED_AUDIT_COUNTERS = (
     "child_decision_count",
     "raw_radius_candidate_total",
@@ -55,6 +61,9 @@ class BiopsyGuidedDecisionAudit:
             name: 0 for name in BIOPSY_GUIDED_AUDIT_COUNTERS
         }
     )
+    radius_policy: str | None = None
+    transition_records: dict[int, dict] = field(default_factory=dict)
+    _active_transition_index: int | None = field(default=None, init=False)
 
     def increment(self, name: str, amount: int = 1) -> None:
         if name not in self.counters:
@@ -62,11 +71,82 @@ class BiopsyGuidedDecisionAudit:
         if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
             raise ValueError("Biopsy-guided audit increments must be nonnegative integers.")
         self.counters[name] += amount
+        if self._active_transition_index is not None:
+            transition = self.transition_records[self._active_transition_index]
+            transition["decision_counters"][name] += amount
 
-    def as_record(self) -> dict[str, int | str]:
-        return {
+    def record_transition_radius(
+        self,
+        transition_index: int,
+        *,
+        radius_policy: str,
+        parent_snapshot_count: int,
+        child_snapshot_count: int,
+        nearest_prior_distances: np.ndarray,
+        quantile_distance: float,
+        effective_radius: int,
+    ) -> None:
+        if self.radius_policy not in {None, radius_policy}:
+            raise ValueError("One decision audit cannot mix biopsy radius policies.")
+        if transition_index in self.transition_records:
+            raise ValueError("A biopsy transition radius was recorded more than once.")
+        self.radius_policy = radius_policy
+        distances = np.asarray(nearest_prior_distances, dtype=float)
+        covered_count = int(np.count_nonzero(distances <= effective_radius))
+        self.transition_records[transition_index] = {
+            "parent_level": int(transition_index),
+            "child_level": int(transition_index + 1),
+            "parent_snapshot_count": int(parent_snapshot_count),
+            "child_snapshot_count": int(child_snapshot_count),
+            "quantile": 0.5,
+            "quantile_method": "nearest_rank",
+            "nearest_rank_quantile_distance": float(quantile_distance),
+            "effective_radius": int(effective_radius),
+            "nearest_prior_distance": {
+                "count": int(distances.size),
+                "minimum": float(np.min(distances)),
+                "maximum": float(np.max(distances)),
+                "mean": float(np.mean(distances)),
+                "zero_count": int(np.count_nonzero(distances == 0)),
+            },
+            "frozen_radius_candidate_covered_child_count": covered_count,
+            "frozen_radius_candidate_coverage_fraction": float(
+                covered_count / distances.size
+            ),
+            "decision_counters": {
+                name: 0 for name in BIOPSY_GUIDED_AUDIT_COUNTERS
+            },
+        }
+
+    def begin_transition(self, transition_index: int) -> None:
+        if self._active_transition_index is not None:
+            raise RuntimeError("A biopsy decision-audit transition is already active.")
+        if self.radius_policy is not None and transition_index not in self.transition_records:
+            raise RuntimeError("An adaptive biopsy transition lacks a frozen radius record.")
+        self._active_transition_index = transition_index
+
+    def end_transition(self, transition_index: int) -> None:
+        if self._active_transition_index != transition_index:
+            raise RuntimeError("The active biopsy decision-audit transition changed.")
+        self._active_transition_index = None
+
+    def as_record(self) -> dict[str, object]:
+        record = {
             "schema_version": BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION,
             **self.counters,
+        }
+        if self.radius_policy is None:
+            return record
+        if self._active_transition_index is not None:
+            raise RuntimeError("Cannot serialize an active biopsy audit transition.")
+        return {
+            **record,
+            "schema_version": ADAPTIVE_BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION,
+            "radius_policy": self.radius_policy,
+            "transition_records": [
+                self.transition_records[index]
+                for index in sorted(self.transition_records)
+            ],
         }
 
 
@@ -90,6 +170,7 @@ class BiopsyGuidedConfig:
     missing_parent_strategy: BiopsyMissingParentStrategy = None
     only_nj_final_cell_selector: FinalCellSelector = None
     decision_audit: BiopsyGuidedDecisionAudit | None = None
+    radius_policy: str | None = None
 
 
 def default_biopsy_guided_config(*, decision_audit=None):
@@ -143,6 +224,7 @@ def normalize_biopsy_guided_config(config=None):
             config.only_nj_final_cell_selector or defaults.only_nj_final_cell_selector
         ),
         decision_audit=config.decision_audit,
+        radius_policy=config.radius_policy,
     )
 
 
@@ -241,6 +323,77 @@ def _cell_indices(cells, id_to_index):
         dtype=int,
         count=len(cells),
     )
+
+
+def _nearest_rank_q50(values):
+    values = np.asarray(values, dtype=float)
+    if values.ndim != 1 or values.size == 0:
+        raise ValueError("Nearest-rank Q0.50 requires a nonempty vector.")
+    if not np.all(np.isfinite(values)) or np.any(values < 0):
+        raise ValueError("Adaptive biopsy distances must be finite and nonnegative.")
+    rank = max(1, int(np.ceil(0.5 * values.size)))
+    return float(np.partition(values, rank - 1)[rank - 1])
+
+
+def resolve_biopsy_transition_radii(
+    cell_lists,
+    full_dist_matrix,
+    id_to_index,
+    fixed_radius,
+    *,
+    radius_policy=None,
+    decision_audit=None,
+):
+    """Freeze one radius for every adjacent biopsy transition.
+
+    Adaptive radii are resolved from the level-extended observable snapshots
+    before reconstruction can append any missing-parent copies.  The returned
+    tuple is therefore independent of reverse transition execution order.
+    """
+    transition_count = max(0, len(cell_lists) - 1)
+    if radius_policy is None:
+        if (
+            isinstance(fixed_radius, bool)
+            or not isinstance(fixed_radius, (int, float, np.number))
+            or not np.isfinite(fixed_radius)
+            or fixed_radius < 0
+        ):
+            raise ValueError("A fixed biopsy radius must be finite and nonnegative.")
+        return tuple(float(fixed_radius) for _ in range(transition_count))
+    if radius_policy != ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY:
+        raise ValueError(f"Unknown biopsy radius policy {radius_policy!r}.")
+    if fixed_radius is not None:
+        raise ValueError("An adaptive biopsy radius cannot also declare a fixed radius.")
+
+    radii = []
+    for transition_index in range(transition_count):
+        parent_cells = tuple(cell_lists[transition_index])
+        child_cells = tuple(cell_lists[transition_index + 1])
+        if not parent_cells or not child_cells:
+            raise ValueError(
+                "Adaptive biopsy radii require nonempty adjacent biopsy levels."
+            )
+        parent_indices = _cell_indices(parent_cells, id_to_index)
+        child_indices = _cell_indices(child_cells, id_to_index)
+        transition_distances = np.asarray(
+            full_dist_matrix[np.ix_(child_indices, parent_indices)],
+            dtype=float,
+        )
+        nearest_prior_distances = np.min(transition_distances, axis=1)
+        quantile_distance = _nearest_rank_q50(nearest_prior_distances)
+        effective_radius = max(1, int(np.ceil(quantile_distance)))
+        radii.append(effective_radius)
+        if decision_audit is not None:
+            decision_audit.record_transition_radius(
+                transition_index,
+                radius_policy=radius_policy,
+                parent_snapshot_count=len(parent_cells),
+                child_snapshot_count=len(child_cells),
+                nearest_prior_distances=nearest_prior_distances,
+                quantile_distance=quantile_distance,
+                effective_radius=effective_radius,
+            )
+    return tuple(radii)
 
 
 def _find_radius_candidates_from_indices(y, upper_cells, upper_indices, full_dist_matrix, id_to_index, radius):
@@ -755,65 +908,94 @@ def reconstruct_biopsy_layers(
         default_tie_breaker,
         decision_audit,
     ) = _default_biopsy_parent_tie_breaker(config.candidate_selector)
+    transition_radii = resolve_biopsy_transition_radii(
+        cell_lists,
+        full_dist_matrix,
+        id_to_index,
+        radius,
+        radius_policy=config.radius_policy,
+        decision_audit=decision_audit,
+    )
 
     for level_index in reversed(range(1, len(cell_lists))):
-        upper_cells = cell_lists[level_index - 1]
-        bottom_cells = cell_lists[level_index]
-        children_by_parent = defaultdict(list)
-        upper_indices = _cell_indices(upper_cells, id_to_index)
-        for y in bottom_cells:
-            if decision_audit is not None:
-                decision_audit.increment("child_decision_count")
-            if use_default_candidate_selector:
-                parent = _select_biopsy_parent_from_indices(
+        transition_index = level_index - 1
+        effective_radius = transition_radii[transition_index]
+        audit_transition = (
+            decision_audit is not None
+            and decision_audit.radius_policy is not None
+        )
+        if audit_transition:
+            decision_audit.begin_transition(transition_index)
+        try:
+            upper_cells = cell_lists[transition_index]
+            bottom_cells = cell_lists[level_index]
+            children_by_parent = defaultdict(list)
+            upper_indices = _cell_indices(upper_cells, id_to_index)
+            for y in bottom_cells:
+                if decision_audit is not None:
+                    decision_audit.increment("child_decision_count")
+                if use_default_candidate_selector:
+                    parent = _select_biopsy_parent_from_indices(
+                        y,
+                        upper_cells,
+                        upper_indices,
+                        full_dist_matrix,
+                        id_to_index,
+                        effective_radius,
+                        tie_breaker=default_tie_breaker,
+                        row_sums=row_sums,
+                        decision_audit=decision_audit,
+                    )
+                else:
+                    parent = config.candidate_selector(
+                        y,
+                        upper_cells,
+                        full_dist_matrix,
+                        id_to_index,
+                        effective_radius,
+                    )
+
+                if parent is not None:
+                    if decision_audit is not None:
+                        decision_audit.increment("selected_parent_count")
+                    children_by_parent[parent].append(y)
+                    continue
+
+                if decision_audit is not None:
+                    decision_audit.increment("copy_up_count")
+                upper_len_before = len(upper_cells)
+                config.missing_parent_strategy(
                     y,
                     upper_cells,
-                    upper_indices,
+                    tree,
+                    node_levels,
+                    unique_node_counter,
+                    copied_level=len(cell_lists) - level_index,
+                )
+                if (
+                    use_default_candidate_selector
+                    and len(upper_cells) != upper_len_before
+                ):
+                    upper_indices = _cell_indices(upper_cells, id_to_index)
+
+            child_level = len(cell_lists) - level_index - 1
+            for parent, children in children_by_parent.items():
+                if decision_audit is not None and len(children) > 1:
+                    decision_audit.increment("shared_parent_group_count")
+                    decision_audit.increment("shared_parent_child_count", len(children))
+                config.group_attachment_strategy(
+                    tree,
+                    parent,
+                    children,
                     full_dist_matrix,
                     id_to_index,
-                    radius,
-                    tie_breaker=default_tie_breaker,
-                    row_sums=row_sums,
-                    decision_audit=decision_audit,
+                    unique_node_counter,
+                    node_levels,
+                    child_level,
                 )
-            else:
-                parent = config.candidate_selector(y, upper_cells, full_dist_matrix, id_to_index, radius)
-
-            if parent is not None:
-                if decision_audit is not None:
-                    decision_audit.increment("selected_parent_count")
-                children_by_parent[parent].append(y)
-                continue
-
-            if decision_audit is not None:
-                decision_audit.increment("copy_up_count")
-            upper_len_before = len(upper_cells)
-            config.missing_parent_strategy(
-                y,
-                upper_cells,
-                tree,
-                node_levels,
-                unique_node_counter,
-                copied_level=len(cell_lists) - level_index,
-            )
-            if use_default_candidate_selector and len(upper_cells) != upper_len_before:
-                upper_indices = _cell_indices(upper_cells, id_to_index)
-
-        child_level = len(cell_lists) - level_index - 1
-        for parent, children in children_by_parent.items():
-            if decision_audit is not None and len(children) > 1:
-                decision_audit.increment("shared_parent_group_count")
-                decision_audit.increment("shared_parent_child_count", len(children))
-            config.group_attachment_strategy(
-                tree,
-                parent,
-                children,
-                full_dist_matrix,
-                id_to_index,
-                unique_node_counter,
-                node_levels,
-                child_level,
-            )
+        finally:
+            if audit_transition:
+                decision_audit.end_transition(transition_index)
 
 
 def deduplicate_cells_by_cell_id(cells):
@@ -837,6 +1019,8 @@ def assign_new_node_levels(new_nodes, node_levels):
 
 
 __all__ = [
+    "ADAPTIVE_BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION",
+    "ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY",
     "BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION",
     "BiopsyGuidedConfig",
     "BiopsyGuidedDecisionAudit",
@@ -863,6 +1047,7 @@ __all__ = [
     "normalize_biopsy_guided_config",
     "normalize_biopsy_subtree_config",
     "reconstruct_biopsy_layers",
+    "resolve_biopsy_transition_radii",
     "select_biopsy_parent",
     "select_anticentral_candidate",
     "select_central_candidate",

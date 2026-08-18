@@ -23,9 +23,15 @@ from algorithm_evaluation.v5_algorithm_development_common import (
     numeric_summary,
 )
 from algorithm_evaluation.v5_shortlist_robustness_common import (
+    ADAPTIVE_A_PRIME_ID,
+    ADAPTIVE_B_PRIME_ID,
+    ADAPTIVE_C_PRIME_ID,
+    ADAPTIVE_D_PRIME_ID,
+    ADAPTIVE_RADIUS_ARM_IDS,
     ARM_SET_BY_NAME,
     DECLARED_METRICS,
     DISTANCE_EXECUTION_SCHEMA_VERSION,
+    FULL_DEVELOPMENT_ARM_IDS,
     FULL_V2_ARM_IDS,
     ORDERED_A_ID,
     ORDERED_B_ID,
@@ -40,7 +46,7 @@ from algorithm_evaluation.v5_shortlist_robustness_common import (
     RUN_SCHEMA_VERSION,
     SHORTLIST_ARM_IDS,
     SHORT_LABEL_BY_ARM,
-    V2_COMPLETE_ARM_IDS,
+    SUPPORTED_SHORTLIST_ARM_IDS,
     ensure_new_output_root,
     load_bank_manifest,
     write_json,
@@ -61,7 +67,15 @@ PRINCIPAL_PAIRS = (
     (ORDERED_A_ID, ORDERED_C_ID),
 )
 FULL_PRINCIPAL_PAIRS = PRINCIPAL_PAIRS + tuple(
-    (ORDERED_A_ID, arm_id) for arm_id in FULL_V2_ARM_IDS[4:]
+    (ORDERED_A_ID, arm_id) for arm_id in FULL_DEVELOPMENT_ARM_IDS[4:]
+) + (
+    (ORDERED_B_ID, ADAPTIVE_B_PRIME_ID),
+    (ORDERED_C_ID, ADAPTIVE_C_PRIME_ID),
+    (ADAPTIVE_A_PRIME_ID, ADAPTIVE_B_PRIME_ID),
+    (ADAPTIVE_A_PRIME_ID, ADAPTIVE_C_PRIME_ID),
+    (ADAPTIVE_C_PRIME_ID, ADAPTIVE_D_PRIME_ID),
+    (ADAPTIVE_B_PRIME_ID, ADAPTIVE_D_PRIME_ID),
+    (POOLED_D_ID, ADAPTIVE_A_PRIME_ID),
 )
 PARTIAL_PRINCIPAL_PAIRS = (
     (PARTIAL_V2_ARM_IDS[0], PARTIAL_V2_ARM_IDS[1]),  # X-Y
@@ -79,6 +93,16 @@ SHORT_DESCRIPTION_BY_ARM = {
     FULL_V2_ARM_IDS[4]: "pooled baseline full",
     FULL_V2_ARM_IDS[5]: "pooled hybrid-opt-refined full",
     FULL_V2_ARM_IDS[6]: "default-bottom binary-anticentral r2 full",
+    ADAPTIVE_A_PRIME_ID: (
+        "deferred-bottom binary-anticentral transition-median full"
+    ),
+    ADAPTIVE_B_PRIME_ID: (
+        "deferred-bottom rooted-Q transition-median full"
+    ),
+    ADAPTIVE_C_PRIME_ID: (
+        "default-bottom binary-anticentral transition-median full"
+    ),
+    ADAPTIVE_D_PRIME_ID: "default-bottom rooted-Q transition-median full",
     PARTIAL_V2_ARM_IDS[0]: "pooled classical partial",
     PARTIAL_V2_ARM_IDS[1]: "deferred-bottom binary-anticentral r2 partial",
     PARTIAL_V2_ARM_IDS[2]: "deferred-bottom classical r2 partial",
@@ -230,6 +254,126 @@ def _availability_summary(bank: Mapping[str, Any]) -> list[dict[str, Any]]:
                 }
             )
     return rows
+
+
+def _adaptive_radius_diagnostics(
+    records: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    diagnostics = []
+    for arm_id in ADAPTIVE_RADIUS_ARM_IDS:
+        arm_records = [
+            record
+            for record in records
+            if record.get("arm_id") == arm_id and record.get("status") == "success"
+        ]
+        if not arm_records:
+            continue
+        transition_rows = []
+        for record in arm_records:
+            metadata = record.get("reconstruction_metadata")
+            audit = (
+                metadata.get("biopsy_layer_decision_audit")
+                if isinstance(metadata, Mapping)
+                else None
+            )
+            expected_policy = ARM_SPEC_BY_ID[arm_id].radius_policy
+            if (
+                not isinstance(audit, Mapping)
+                or audit.get("radius_policy") != expected_policy
+                or not isinstance(audit.get("transition_records"), list)
+            ):
+                raise ValueError("Adaptive-radius reconstruction diagnostics changed.")
+            for transition in audit["transition_records"]:
+                counters = transition.get("decision_counters")
+                if not isinstance(counters, Mapping):
+                    raise ValueError("Adaptive transition counters are missing.")
+                transition_rows.append(
+                    {
+                        "height": int(record["height"]),
+                        "placement_policy": str(record["placement_policy"]),
+                        **transition,
+                    }
+                )
+
+        def summarize(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+            child_count = sum(
+                int(row["decision_counters"]["child_decision_count"])
+                for row in rows
+            )
+            selected_count = sum(
+                int(row["decision_counters"]["selected_parent_count"])
+                for row in rows
+            )
+            copy_up_count = sum(
+                int(row["decision_counters"]["copy_up_count"])
+                for row in rows
+            )
+            frozen_child_count = sum(int(row["child_snapshot_count"]) for row in rows)
+            frozen_covered_count = sum(
+                int(row["frozen_radius_candidate_covered_child_count"])
+                for row in rows
+            )
+            radius_frequency = {}
+            for row in rows:
+                radius = int(row["effective_radius"])
+                radius_frequency[radius] = radius_frequency.get(radius, 0) + 1
+            return {
+                "transition_count": len(rows),
+                "effective_radius": numeric_summary(
+                    float(row["effective_radius"]) for row in rows
+                ),
+                "effective_radius_frequency": [
+                    {"radius": radius, "count": radius_frequency[radius]}
+                    for radius in sorted(radius_frequency)
+                ],
+                "nearest_rank_quantile_distance": numeric_summary(
+                    float(row["nearest_rank_quantile_distance"])
+                    for row in rows
+                ),
+                "frozen_radius_candidate_coverage_fraction": (
+                    float(frozen_covered_count / frozen_child_count)
+                    if frozen_child_count
+                    else None
+                ),
+                "child_decision_count": child_count,
+                "selected_parent_count": selected_count,
+                "copy_up_count": copy_up_count,
+                "selected_parent_fraction": (
+                    float(selected_count / child_count) if child_count else None
+                ),
+                "copy_up_fraction": (
+                    float(copy_up_count / child_count) if child_count else None
+                ),
+            }
+
+        by_cell = []
+        for height in sorted({int(row["height"]) for row in transition_rows}):
+            for policy in PLACEMENT_POLICIES:
+                rows = [
+                    row
+                    for row in transition_rows
+                    if int(row["height"]) == height
+                    and row["placement_policy"] == policy
+                ]
+                if rows:
+                    by_cell.append(
+                        {
+                            "height": height,
+                            "placement_policy": policy,
+                            **summarize(rows),
+                        }
+                    )
+        diagnostics.append(
+            {
+                "arm_id": arm_id,
+                "short_label": SHORT_LABEL_BY_ARM[arm_id],
+                "radius_policy": ARM_SPEC_BY_ID[arm_id].radius_policy,
+                "successful_case_count": len(arm_records),
+                "overall": summarize(transition_rows),
+                "by_height_and_placement": by_cell,
+            }
+        )
+    return diagnostics
 
 
 def _bank_resource_execution(bank: Mapping[str, Any]) -> dict[str, Any]:
@@ -672,8 +816,8 @@ def build_report(
         arm_ids = tuple(str(spec.get("arm_id")) for spec in run_specs)
         if len(set(arm_ids)) != len(arm_ids):
             raise ValueError("A shortlist run declares duplicate arms.")
-        if any(arm_id not in V2_COMPLETE_ARM_IDS for arm_id in arm_ids):
-            raise ValueError("A shortlist run declares an unknown v2 arm.")
+        if any(arm_id not in SUPPORTED_SHORTLIST_ARM_IDS for arm_id in arm_ids):
+            raise ValueError("A shortlist run declares an unknown development arm.")
         if declared_arm_ids.intersection(arm_ids):
             raise ValueError(
                 "An arm occurs in more than one merged shortlist run; use one result."
@@ -728,8 +872,9 @@ def build_report(
             }
         )
 
+    report_arm_order = FULL_DEVELOPMENT_ARM_IDS + PARTIAL_V2_ARM_IDS
     ordered_arm_ids = tuple(
-        arm_id for arm_id in V2_COMPLETE_ARM_IDS if arm_id in declared_arm_ids
+        arm_id for arm_id in report_arm_order if arm_id in declared_arm_ids
     )
     index = _record_index(all_records)
 
@@ -780,7 +925,7 @@ def build_report(
 
     full_group = comparison_group(
         "fully_labeled",
-        FULL_V2_ARM_IDS,
+        FULL_DEVELOPMENT_ARM_IDS,
         DECLARED_METRICS,
         "ad_f1",
     )
@@ -847,6 +992,7 @@ def build_report(
         "record_execution_by_run": record_execution_by_run,
         "bank_resource_execution": bank_resource_execution,
         "availability": _availability_summary(bank),
+        "adaptive_radius_diagnostics": _adaptive_radius_diagnostics(all_records),
         "algorithm_cell_summaries": compatibility_group[
             "algorithm_cell_summaries"
         ],
@@ -1007,8 +1153,34 @@ def _csv_rows(report: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
                 ),
             }
         )
+    adaptive_rows = []
+    for diagnostic in report["adaptive_radius_diagnostics"]:
+        for row in diagnostic["by_height_and_placement"]:
+            adaptive_rows.append(
+                {
+                    "arm_id": diagnostic["arm_id"],
+                    "short_label": diagnostic["short_label"],
+                    "radius_policy": diagnostic["radius_policy"],
+                    "height": row["height"],
+                    "placement_policy": row["placement_policy"],
+                    **_flatten_summary("effective_radius", row["effective_radius"]),
+                    **_flatten_summary(
+                        "nearest_rank_quantile_distance",
+                        row["nearest_rank_quantile_distance"],
+                    ),
+                    "frozen_radius_candidate_coverage_fraction": row[
+                        "frozen_radius_candidate_coverage_fraction"
+                    ],
+                    "child_decision_count": row["child_decision_count"],
+                    "selected_parent_count": row["selected_parent_count"],
+                    "selected_parent_fraction": row["selected_parent_fraction"],
+                    "copy_up_count": row["copy_up_count"],
+                    "copy_up_fraction": row["copy_up_fraction"],
+                }
+            )
     return {
         **rows,
+        "adaptive_radius_by_cell": adaptive_rows,
         "condition_diagnostics": diagnostic_rows,
         "availability": [
             {
@@ -1223,6 +1395,27 @@ def _markdown(report: Mapping[str, Any]) -> str:
         )
         if h34_h38:
             lines.extend(["", *h34_h38])
+    for diagnostic in report["adaptive_radius_diagnostics"]:
+        lines.extend(
+            [
+                "",
+                f"## Adaptive-radius diagnostics ({diagnostic['short_label']})",
+                "",
+                f"Policy: `{diagnostic['radius_policy']}`.",
+                "",
+                "| Height | Placement | Mean radius | Frozen candidate coverage | "
+                "Selected-parent fraction | Copy-up fraction |",
+                "|---:|---|---:|---:|---:|---:|",
+            ]
+        )
+        for row in diagnostic["by_height_and_placement"]:
+            lines.append(
+                f"| H{row['height']} | {row['placement_policy']} | "
+                f"{_format(row['effective_radius']['mean'])} | "
+                f"{_format(row['frozen_radius_candidate_coverage_fraction'])} | "
+                f"{_format(row['selected_parent_fraction'])} | "
+                f"{_format(row['copy_up_fraction'])} |"
+            )
     lines.extend(
         [
             "",

@@ -313,8 +313,8 @@ def _parser() -> argparse.ArgumentParser:
         choices=tuple(ARM_SET_BY_NAME),
         default="abcd",
         help=(
-            "Named non-overlapping v2 arm roster. Use v2-complete only for a "
-            "future from-scratch recreation."
+            "Named non-overlapping development arm roster. Use v2-complete "
+            "only for a future from-scratch recreation."
         ),
     )
     parser.add_argument(

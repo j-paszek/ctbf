@@ -5,6 +5,7 @@ import networkx as nx
 import numpy as np
 
 from reconstructor_biopsy_blocks import (
+    ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
     BiopsyGuidedConfig,
     BiopsyGuidedDecisionAudit,
     BiopsySubtreeConfig,
@@ -23,6 +24,7 @@ from reconstructor_biopsy_blocks import (
     normalize_biopsy_guided_config,
     normalize_biopsy_subtree_config,
     reconstruct_biopsy_layers,
+    resolve_biopsy_transition_radii,
     select_anticentral_candidate,
     select_biopsy_parent,
     select_central_candidate,
@@ -77,6 +79,92 @@ def test_extend_biopsy_levels_copies_missing_intermediate_observation():
     assert [cell.cell_id for cell in extended[1]] == [7]
     assert extended[1][0].node_id == 7
     assert extended[1][0] is not first
+
+
+def test_adaptive_median_radius_uses_nearest_rank_q50_and_ignores_one_outlier():
+    parents = [Genotype([2, 2], 0), Genotype([2, 2], 1)]
+    children = [Genotype([2, 2], value) for value in range(2, 8)]
+    ids = list(range(8))
+    distances = np.full((8, 8), 20.0)
+    np.fill_diagonal(distances, 0.0)
+    nearest = [0.0, 1.0, 1.0, 2.0, 2.0, 9.0]
+    for child, value in zip(children, nearest):
+        distances[child.cell_id, 0] = value
+        distances[0, child.cell_id] = value
+        distances[child.cell_id, 1] = value + 1
+        distances[1, child.cell_id] = value + 1
+
+    audit = BiopsyGuidedDecisionAudit()
+    radii = resolve_biopsy_transition_radii(
+        [parents, children],
+        distances,
+        make_id_to_index(ids),
+        None,
+        radius_policy=ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
+        decision_audit=audit,
+    )
+    permuted_radii = resolve_biopsy_transition_radii(
+        [list(reversed(parents)), list(reversed(children))],
+        distances,
+        make_id_to_index(ids),
+        None,
+        radius_policy=ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
+    )
+
+    assert radii == permuted_radii == (1,)
+    record = audit.as_record()["transition_records"][0]
+    assert record["nearest_rank_quantile_distance"] == 1.0
+    assert record["effective_radius"] == 1
+    assert record["frozen_radius_candidate_covered_child_count"] == 3
+    assert record["frozen_radius_candidate_coverage_fraction"] == 0.5
+
+
+def test_adaptive_transition_radii_are_frozen_before_reverse_copy_up():
+    top = Genotype([2, 2], 0)
+    middle_a = Genotype([0, 2], 1)
+    middle_b = Genotype([2, 0], 2)
+    bottom_a = Genotype([1, 1], 3)
+    bottom_b = Genotype([1, 1], 4)
+    cell_lists = [[top], [middle_a, middle_b], [bottom_a, bottom_b]]
+    ids = [0, 1, 2, 3, 4]
+    distances = np.array(
+        [
+            [0.0, 1.0, 9.0, 9.0, 9.0],
+            [1.0, 0.0, 2.0, 1.0, 1.0],
+            [9.0, 2.0, 0.0, 1.0, 1.0],
+            [9.0, 1.0, 1.0, 0.0, 1.0],
+            [9.0, 1.0, 1.0, 1.0, 0.0],
+        ]
+    )
+    id_to_index = make_id_to_index(ids)
+    assign_compatible_node_ids(cell_lists)
+    tree, node_levels = initialize_biopsy_tree(
+        cell_lists,
+        itertools.count(start=10),
+    )
+    audit = BiopsyGuidedDecisionAudit()
+
+    reconstruct_biopsy_layers(
+        cell_lists,
+        tree,
+        node_levels,
+        distances,
+        id_to_index,
+        radius=None,
+        unique_node_counter=itertools.count(start=10),
+        config=BiopsyGuidedConfig(
+            candidate_tie_breaker=select_deferred_candidate,
+            decision_audit=audit,
+            radius_policy=ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
+        ),
+    )
+
+    transitions = audit.as_record()["transition_records"]
+    assert [row["effective_radius"] for row in transitions] == [1, 1]
+    assert transitions[0]["child_snapshot_count"] == 2
+    assert transitions[0]["decision_counters"]["child_decision_count"] == 3
+    assert transitions[1]["decision_counters"]["copy_up_count"] == 1
+    assert nx.is_directed_acyclic_graph(tree)
 
 
 def test_build_evolution_tree_does_not_mutate_caller_biopsy_inputs():

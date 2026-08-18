@@ -8,7 +8,7 @@ later disjoint protocol.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from functools import wraps
 import hashlib
 import json
@@ -62,7 +62,10 @@ from reconstructor_algorithms import (
     temporal_cnp_arborescence_no_time,
 )
 from reconstructor_biopsy_presets import resolve_biopsy_guided_config
-from reconstructor_biopsy_blocks import BiopsyGuidedDecisionAudit
+from reconstructor_biopsy_blocks import (
+    ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
+    BiopsyGuidedDecisionAudit,
+)
 from simulator import Genotype
 
 
@@ -135,6 +138,22 @@ BIOPSY_GUIDED_FULL_INCUMBENT_ID = (
 BIOPSY_GUIDED_FULL_ROOTED_Q_DEFERRED_ID = (
     "biopsy_guided_full_rooted_labeled_q_r2_bottom_deferred_tie"
 )
+BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFERRED_ID = (
+    "biopsy_guided_full_anticentral_binary_adaptive_median_prior_nn_"
+    "bottom_deferred_tie"
+)
+BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_ROOTED_Q_DEFERRED_ID = (
+    "biopsy_guided_full_rooted_labeled_q_adaptive_median_prior_nn_"
+    "bottom_deferred_tie"
+)
+BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFAULT_ID = (
+    "biopsy_guided_full_anticentral_binary_adaptive_median_prior_nn_"
+    "bottom_default"
+)
+BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_ROOTED_Q_DEFAULT_ID = (
+    "biopsy_guided_full_rooted_labeled_q_adaptive_median_prior_nn_"
+    "bottom_default"
+)
 BIOPSY_GUIDED_FULL_BOTTOM_TOP_INTERACTION_ROLE = (
     "rooted_q_bottom_top_interaction_candidate"
 )
@@ -158,16 +177,19 @@ class DevelopmentArmSpec:
     problem: str
     input_mode: str
     only_nj: bool
-    radius: float
+    radius: float | None
     primary_metric: str
     complementary_metrics: tuple[str, ...]
     role: str
     biopsy_preset: str | None = None
     top_output_projection: str = TOP_OUTPUT_PROJECTION_NONE
+    radius_policy: str | None = None
 
     def as_record(self) -> dict[str, Any]:
         value = asdict(self)
         value["complementary_metrics"] = list(self.complementary_metrics)
+        if self.radius_policy is None:
+            value.pop("radius_policy")
         return value
 
 
@@ -219,10 +241,11 @@ def _inferred_arm(algorithm_name: str, role: str = "candidate") -> DevelopmentAr
 def _biopsy_guided_full_arm(
     arm_id: str,
     *,
-    radius: float,
+    radius: float | None,
     role: str,
     biopsy_preset: str,
     algorithm_name: str,
+    radius_policy: str | None = None,
 ) -> DevelopmentArmSpec:
     """Declare an ordered, fully labeled closed-state reconstruction arm."""
     return DevelopmentArmSpec(
@@ -232,12 +255,13 @@ def _biopsy_guided_full_arm(
         problem="biopsy_guided_occurrence_aware_fully_labeled_closed_state",
         input_mode="ordered",
         only_nj=False,
-        radius=float(radius),
+        radius=None if radius is None else float(radius),
         primary_metric="ad_f1",
         complementary_metrics=("grf", "ad_precision", "ad_recall"),
         role=role,
         biopsy_preset=biopsy_preset,
         top_output_projection=TOP_OUTPUT_PROJECTION_NONE,
+        radius_policy=radius_policy,
     )
 
 
@@ -531,6 +555,41 @@ BIOPSY_GUIDED_FULL_BOTTOM_TOP_EXTENSION_ARM_SPECS: tuple[
     ),
 )
 
+ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS: tuple[DevelopmentArmSpec, ...] = (
+    _biopsy_guided_full_arm(
+        BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFERRED_ID,
+        radius=None,
+        role="adaptive_radius_candidate",
+        biopsy_preset="deferred_tie",
+        algorithm_name=INFERRED_COPY_INCUMBENT_ID,
+        radius_policy=ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
+    ),
+    _biopsy_guided_full_arm(
+        BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_ROOTED_Q_DEFERRED_ID,
+        radius=None,
+        role="adaptive_radius_top_interaction_candidate",
+        biopsy_preset="deferred_tie",
+        algorithm_name="rooted_labeled_nj",
+        radius_policy=ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
+    ),
+    _biopsy_guided_full_arm(
+        BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFAULT_ID,
+        radius=None,
+        role="adaptive_radius_bottom_interaction_candidate",
+        biopsy_preset="default",
+        algorithm_name=INFERRED_COPY_INCUMBENT_ID,
+        radius_policy=ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
+    ),
+    _biopsy_guided_full_arm(
+        BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_ROOTED_Q_DEFAULT_ID,
+        radius=None,
+        role="adaptive_radius_factorial_candidate",
+        biopsy_preset="default",
+        algorithm_name="rooted_labeled_nj",
+        radius_policy=ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
+    ),
+)
+
 BIOPSY_GUIDED_FULL_COUNTERPART_BY_PARTIAL_ID = {
     "biopsy_guided_top_rooted_labeled_q_r2": BIOPSY_GUIDED_FULL_BASELINE_ID,
     "biopsy_guided_top_anticentral_binary_r2": BIOPSY_GUIDED_FULL_DEFAULT_ID,
@@ -567,7 +626,11 @@ DEVELOPMENT_EXTENSION_ARM_SPECS: tuple[DevelopmentArmSpec, ...] = (
     + BIOPSY_GUIDED_FULL_EXTENSION_ARM_SPECS
     + BIOPSY_GUIDED_FULL_BOTTOM_TOP_EXTENSION_ARM_SPECS
 )
-ALL_ARM_SPECS = INITIAL_ARM_SPECS + DEVELOPMENT_EXTENSION_ARM_SPECS
+ALL_ARM_SPECS = (
+    INITIAL_ARM_SPECS
+    + DEVELOPMENT_EXTENSION_ARM_SPECS
+    + ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS
+)
 ARM_SPEC_BY_ID = {spec.arm_id: spec for spec in ALL_ARM_SPECS}
 
 
@@ -981,13 +1044,26 @@ def reconstruct_development_arm(
             decision_audit=biopsy_decision_audit,
         )
     )
+    if spec.radius_policy is not None:
+        if biopsy_config is None or spec.input_mode != "ordered" or spec.only_nj:
+            raise ValueError(
+                "An adaptive biopsy radius requires ordered biopsy-guided input."
+            )
+        if biopsy_config.radius_policy not in {None, spec.radius_policy}:
+            raise ValueError("The arm and biopsy preset declare different radius policies.")
+        biopsy_config = replace(
+            biopsy_config,
+            radius_policy=spec.radius_policy,
+        )
+    elif spec.radius is None:
+        raise ValueError("A fixed-radius reconstruction arm lacks its radius.")
     before_input = canonical_json_digest(reconstruction_input)
     before_ids = tuple(distance.ids)
     before_matrix = np.array(distance.matrix, copy=True)
     tree, levels, returned_root = build_evolution_tree(
         build_input,
         seed=int(reconstruction_seed),
-        r=float(spec.radius),
+        r=spec.radius,
         only_nj=bool(spec.only_nj),
         distance_matrix=distance,
         neighbor_joining=algorithm,
@@ -1002,7 +1078,7 @@ def reconstruct_development_arm(
         raise ValueError("Reconstruction mutated its stored observable input.")
     if tuple(distance.ids) != before_ids or not np.array_equal(distance.matrix, before_matrix):
         raise ValueError("Reconstruction mutated its stored distance input.")
-    return tree, dict(levels), returned_root, {
+    diagnostics = {
         "arm_id": spec.arm_id,
         "algorithm": spec.algorithm_name,
         "family": spec.family,
@@ -1022,6 +1098,9 @@ def reconstruct_development_arm(
         "returned_root": json_safe(returned_root),
         "actual_root": json_safe(root),
     }
+    if spec.radius_policy is not None:
+        diagnostics["radius_policy"] = spec.radius_policy
+    return tree, dict(levels), returned_root, diagnostics
 
 
 def tree_summary(tree: nx.DiGraph) -> dict[str, Any]:
@@ -1240,6 +1319,7 @@ def numeric_summary(values: Iterable[float]) -> dict[str, Any] | None:
 
 
 __all__ = [
+    "ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS",
     "ARM_SPEC_BY_ID",
     "ALL_ARM_SPECS",
     "BANK_CONFIG_NAME",
@@ -1249,6 +1329,10 @@ __all__ = [
     "BASELINE_BY_FAMILY",
     "BIOPSY_GUIDED_FULL_BOTTOM_TOP_EXTENSION_ARM_SPECS",
     "BIOPSY_GUIDED_FULL_BOTTOM_TOP_INTERACTION_ROLE",
+    "BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFERRED_ID",
+    "BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFAULT_ID",
+    "BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_ROOTED_Q_DEFERRED_ID",
+    "BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_ROOTED_Q_DEFAULT_ID",
     "BIOPSY_GUIDED_FULL_ROOTED_Q_DEFERRED_ID",
     "BIOPSY_LOWER_BOUND",
     "CASE_DISTANCE_SCHEMA_VERSION",

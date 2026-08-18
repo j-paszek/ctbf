@@ -12,8 +12,13 @@ from algorithm_evaluation.process_isolation import (
 )
 from algorithm_evaluation.v5_algorithm_development_bank import generate_bank
 from algorithm_evaluation.v5_algorithm_development_common import (
+    ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS,
     ARM_SPEC_BY_ID,
     BIOPSY_GUIDED_FULL_COUNTERPART_BY_PARTIAL_ID,
+    BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFERRED_ID,
+    BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFAULT_ID,
+    BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_ROOTED_Q_DEFERRED_ID,
+    BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_ROOTED_Q_DEFAULT_ID,
     BIOPSY_GUIDED_FULL_DEFAULT_ID,
     BIOPSY_GUIDED_FULL_BOTTOM_TOP_EXTENSION_ARM_SPECS,
     BIOPSY_GUIDED_FULL_BOTTOM_TOP_INTERACTION_ROLE,
@@ -72,6 +77,8 @@ from algorithm_evaluation.v5_algorithm_development_run import (
 from ctbs import DistanceMatrix
 from distance_semantics import cnp2cnp_provenance
 from reconstructor_biopsy_blocks import (
+    ADAPTIVE_BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION,
+    ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
     BIOPSY_GUIDED_AUDIT_COUNTERS,
     BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION,
 )
@@ -343,6 +350,61 @@ def test_full_bottom_top_extension_is_only_the_missing_rooted_q_cell():
     assert spec.primary_metric == "ad_f1"
     assert spec.top_output_projection == TOP_OUTPUT_PROJECTION_NONE
     assert resolve_arm_specs((spec.arm_id,)) == (spec,)
+
+
+def test_adaptive_radius_extension_is_the_ordered_bottom_top_factorial():
+    assert len(ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS) == 4
+    assert [spec.arm_id for spec in ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS] == [
+        BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFERRED_ID,
+        BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_ROOTED_Q_DEFERRED_ID,
+        BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFAULT_ID,
+        BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_ROOTED_Q_DEFAULT_ID,
+    ]
+    spec = ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS[0]
+    assert spec.arm_id == BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFERRED_ID
+    assert spec.radius is None
+    assert spec.radius_policy == ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY
+    assert spec.biopsy_preset == "deferred_tie"
+    assert spec.algorithm_name == INFERRED_COPY_INCUMBENT_ID
+    assert spec.family == BIOPSY_GUIDED_FULL_FAMILY
+    assert ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS[1].algorithm_name == (
+        "rooted_labeled_nj"
+    )
+    assert ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS[1].biopsy_preset == "deferred_tie"
+    assert ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS[2].algorithm_name == (
+        INFERRED_COPY_INCUMBENT_ID
+    )
+    assert ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS[2].biopsy_preset == "default"
+    assert ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS[3].algorithm_name == (
+        "rooted_labeled_nj"
+    )
+    assert ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS[3].biopsy_preset == "default"
+    assert all(
+        candidate.radius_policy == ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY
+        and candidate.radius is None
+        for candidate in ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS
+    )
+    assert spec.as_record()["radius_policy"] == (
+        ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY
+    )
+    assert "radius_policy" not in ARM_SPEC_BY_ID[
+        BIOPSY_GUIDED_FULL_INCUMBENT_ID
+    ].as_record()
+
+    payload = _input_payload()
+    tree, _levels, _root, metadata = reconstruct_development_arm(
+        spec,
+        payload,
+        _distance(payload),
+        reconstruction_seed=17,
+    )
+
+    assert nx.is_arborescence(tree)
+    assert metadata["radius"] is None
+    assert metadata["radius_policy"] == ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY
+    audit = metadata["biopsy_layer_decision_audit"]
+    assert audit["schema_version"] == ADAPTIVE_BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION
+    assert len(audit["transition_records"]) == 2
 
 
 def test_projected_parent_reuse_preserves_copy_up_labels_and_permits_polytomy():

@@ -17,9 +17,15 @@ from algorithm_evaluation.process_isolation import (
 )
 from algorithm_evaluation.v5_shortlist_robustness_bank import generate_bank
 from algorithm_evaluation.v5_shortlist_robustness_common import (
+    ADAPTIVE_A_PRIME_ID,
+    ADAPTIVE_B_PRIME_ID,
+    ADAPTIVE_C_PRIME_ID,
+    ADAPTIVE_D_PRIME_ID,
+    ADAPTIVE_RADIUS_ARM_IDS,
     ARM_SET_BY_NAME,
     DECLARED_METRICS,
     DISTANCE_EXECUTION_SCHEMA_VERSION,
+    FULL_DEVELOPMENT_ARM_IDS,
     ORDERED_A_ID,
     ORDERED_B_ID,
     ORDERED_C_ID,
@@ -36,6 +42,7 @@ from algorithm_evaluation.v5_shortlist_robustness_common import (
     write_json,
 )
 from algorithm_evaluation.v5_shortlist_robustness_report import (
+    FULL_PRINCIPAL_PAIRS,
     _bank_resource_execution,
     _depth_interactions,
     _placement_interactions,
@@ -158,6 +165,17 @@ def _success_record(block, height, policy, arm, value):
 def test_shortlist_schedules_are_fixed_and_random_is_prospective():
     assert ARM_SET_BY_NAME["v2-complete"] == V2_COMPLETE_ARM_IDS
     assert ARM_SET_BY_NAME["v2-extensions"] == V2_EXTENSION_ARM_IDS
+    assert ARM_SET_BY_NAME["adaptive-radius"] == ADAPTIVE_RADIUS_ARM_IDS
+    assert ADAPTIVE_RADIUS_ARM_IDS == (
+        ADAPTIVE_A_PRIME_ID,
+        ADAPTIVE_B_PRIME_ID,
+        ADAPTIVE_C_PRIME_ID,
+        ADAPTIVE_D_PRIME_ID,
+    )
+    assert (ADAPTIVE_A_PRIME_ID, ADAPTIVE_B_PRIME_ID) in FULL_PRINCIPAL_PAIRS
+    assert (ADAPTIVE_A_PRIME_ID, ADAPTIVE_C_PRIME_ID) in FULL_PRINCIPAL_PAIRS
+    assert (ADAPTIVE_C_PRIME_ID, ADAPTIVE_D_PRIME_ID) in FULL_PRINCIPAL_PAIRS
+    assert (ADAPTIVE_B_PRIME_ID, ADAPTIVE_D_PRIME_ID) in FULL_PRINCIPAL_PAIRS
     assert spread_schedule(14) == (9, 12, 14)
     assert spread_schedule(24) == (15, 20, 24)
     assert spread_schedule(34) == (21, 28, 34)
@@ -374,6 +392,57 @@ def test_one_block_h38_late_bank_run_report_and_resume(tmp_path):
         "cross_output_family_comparisons_generated"
     ] is False
     assert (combined_root / "partial_pairwise_by_cell.csv").is_file()
+
+    adaptive_root = tmp_path / "adaptive-run"
+    adaptive = run_shortlist(
+        bank_root=bank_root,
+        output_root=adaptive_root,
+        run_id="fixture-shortlist-adaptive-radius",
+        arm_set="adaptive-radius",
+        expected_block_count=1,
+        created_at_utc="fixture",
+    )
+    assert adaptive["completed_record_count"] == len(ADAPTIVE_RADIUS_ARM_IDS)
+    assert adaptive["failure_count"] == 0
+    assert adaptive["arm_ids"] == list(ADAPTIVE_RADIUS_ARM_IDS)
+    d_prime = next(
+        record
+        for record in adaptive["records"]
+        if record["arm_id"] == ADAPTIVE_D_PRIME_ID
+    )
+    assert d_prime["reconstruction_metadata"]["algorithm"] == "rooted_labeled_nj"
+    assert d_prime["reconstruction_metadata"]["biopsy_preset"] == "default"
+    assert all(
+        len(
+            record["reconstruction_metadata"]["biopsy_layer_decision_audit"][
+                "transition_records"
+            ]
+        )
+        == 2
+        for record in adaptive["records"]
+    )
+
+    adaptive_report_root = tmp_path / "adaptive-combined-report"
+    adaptive_report = write_report(
+        result_roots=(run_root, extension_root, adaptive_root),
+        output_root=adaptive_report_root,
+        expected_block_count=1,
+        created_at_utc="fixture",
+    )
+    assert adaptive_report["arm_count"] == (
+        len(V2_COMPLETE_ARM_IDS) + len(ADAPTIVE_RADIUS_ARM_IDS)
+    )
+    assert adaptive_report["comparison_groups"]["fully_labeled"]["arm_ids"] == list(
+        FULL_DEVELOPMENT_ARM_IDS
+    )
+    assert [
+        row["arm_id"] for row in adaptive_report["adaptive_radius_diagnostics"]
+    ] == list(ADAPTIVE_RADIUS_ARM_IDS)
+    assert all(
+        row["successful_case_count"] == 1
+        for row in adaptive_report["adaptive_radius_diagnostics"]
+    )
+    assert (adaptive_report_root / "adaptive_radius_by_cell.csv").is_file()
 
     probe = run_probe(
         bank_root=bank_root,
