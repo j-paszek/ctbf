@@ -3,8 +3,11 @@ from functools import lru_cache
 import numpy as np
 
 
-@lru_cache(maxsize=None)
+@lru_cache(maxsize=1)
 def upper_triangle_indices(n):
+    # Agglomerative reconstruction visits matrix sizes monotonically.  Retain
+    # only the current size so repeated consumers within one iteration share
+    # the arrays without keeping O(n^3) indices from all preceding sizes.
     indices = np.triu_indices(n, k=1)
     for index_array in indices:
         index_array.flags.writeable = False

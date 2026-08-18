@@ -360,8 +360,32 @@ python -m algorithm_evaluation.v5_shortlist_resource_isolation_probe \
 
 The probe fixes the requested order to H38 late followed by random for blocks
 18 and 67, runs all A--D records in fresh workers, and is explicitly not
-accuracy evidence. After it passes, run the fixed shortlist once into a fresh
-non-overwriting result and create the block-aware report:
+accuracy evidence. It completed 14/16 records: pooled D alone exceeded 4 GiB
+on both H38-late cases (`5.76` and `4.62` GB), while both following H38-random
+pooled-D records and all ordered records succeeded. This validates isolation
+and exposes a separate implementation defect: an unbounded cache retained the
+two int64 upper-triangle index arrays for every decreasing matrix size, making
+the pooled reconstruction retain O(N^3) memory. The semantics-preserving fix
+keeps only the current size. Two four-arm fresh replays, including one with
+299 pooled states, match the corresponding `abcd_v1` scientific payloads
+exactly.
+
+The cache-fix trigger probe is retained as the reproducible resource gate:
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_resource_isolation_probe \
+  --bank-root algorithm_evaluation/results/v5_development/shortlist_robustness/bank_v1 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/isolation_probe_cache_fix_v1 \
+  --expected-block-count 100 \
+  --progress
+```
+
+It completed all `16/16` records. Pooled D on the formerly failing 1,336- and
+1,168-state H38-late cases peaked at `743` and `656` MiB, respectively. All 14
+scientific payloads with successful pre-fix probe references remained exactly
+unchanged after excluding resource measurements. The unchanged 4-GiB gate is
+therefore satisfied. Run the fixed shortlist once into a fresh non-overwriting
+result and create the block-aware report:
 
 ```bash
 python -m algorithm_evaluation.v5_shortlist_robustness_run \

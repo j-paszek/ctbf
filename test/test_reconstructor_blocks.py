@@ -44,6 +44,7 @@ from reconstructor_metrics import (
     nj_q_matrix,
     reversed_adaptive_centrality,
     sum_distance_centrality,
+    upper_triangle_indices,
 )
 from simulator import Genotype
 
@@ -62,6 +63,32 @@ def _state(n=3):
         dtype=float,
     )
     return initialize_reconstruction_state(D[:n, :n], _cells(n), max_id=n, seed=7)
+
+
+def test_upper_triangle_indices_reuses_only_the_current_matrix_size():
+    upper_triangle_indices.cache_clear()
+    try:
+        first = upper_triangle_indices(8)
+        repeated = upper_triangle_indices(8)
+
+        assert repeated[0] is first[0]
+        assert repeated[1] is first[1]
+        expected = np.triu_indices(8, k=1)
+        assert np.array_equal(first[0], expected[0])
+        assert np.array_equal(first[1], expected[1])
+
+        upper_triangle_indices(7)
+        cache_info = upper_triangle_indices.cache_info()
+        assert cache_info.maxsize == 1
+        assert cache_info.currsize == 1
+
+        rebuilt = upper_triangle_indices(8)
+        assert rebuilt[0] is not first[0]
+        assert rebuilt[1] is not first[1]
+        assert np.array_equal(rebuilt[0], expected[0])
+        assert np.array_equal(rebuilt[1], expected[1])
+    finally:
+        upper_triangle_indices.cache_clear()
 
 
 def _anticentral_adaptive_v3_score_matrix_loop_reference(D, c, rng, alpha=1.0, beta=1.0, gamma=0.5):
