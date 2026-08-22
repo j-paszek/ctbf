@@ -1503,6 +1503,7 @@ def build_report(
                 for partial_id, full_id in (
                     BIOPSY_GUIDED_FULL_COUNTERPART_BY_PARTIAL_ID.items()
                 )
+                if partial_id in specs and full_id in specs
             ],
             "pairwise_records": [
                 pairwise_comparison(

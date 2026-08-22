@@ -256,6 +256,18 @@ and writes its top effects, bottom effects, and difference-in-differences.
 
 ## CTBF v5 shortlist robustness workflow
 
+**Current-contract boundary (2026-08-22).** Every completed result root named
+below was generated before biopsy parent eligibility changed from online
+copy-up to one frozen parent snapshot followed by batched copy-up. Preserve
+those roots as development provenance, but do not resume them, merge them into
+a current-method report, or cite their biopsy-guided rows as current evidence.
+The underlying CTBF v5 banks and distance matrices remain reusable. Current
+reconstruction must use fresh non-overwriting result roots and emits decision-
+audit schema `ctbf-biopsy-guided-decision-audit-v3` with policy
+`frozen_transition_parent_snapshot_batch_copy_up`. The reporters reject the
+older adaptive audit contract. Commands below document the historical runs;
+prepare a fresh-root owner handoff before executing a replacement run.
+
 The final adaptive-development qualification is separate from the immutable
 v2 bank above. It fixes four existing methods, denoted A--D:
 
@@ -472,14 +484,15 @@ The adaptive-radius development set is the ordered
 - D': `biopsy_guided_full_rooted_labeled_q_adaptive_median_prior_nn_bottom_default`.
 
 Each replaces only its fixed biopsy-layer radius. After recurrence-level
-extension, it freezes each adjacent transition before any missing-parent
-copy-up, computes every later state's nearest prior-level distance, and uses
-the nearest-rank Q0.50 distance rounded upward with a minimum radius of one.
-The corresponding bottom and top mechanics are otherwise unchanged. D' is the
-missing ordered factorial cell; it is distinct from pooled D, which has no
-biopsy-layer radius and remains the unchanged radius-independent control. Run
-the four ordered rows independently on the immutable bank (4,800 expected
-records):
+extension, it freezes all adaptive radii before any missing-parent copy-up,
+computes every later state's nearest prior-level distance, and uses the
+nearest-rank Q0.50 distance rounded upward with a minimum radius of one. Under
+the current contract, each later transition additionally freezes its eligible
+parent occurrences, decides every child, and only then batches unresolved
+copies. The completed commands below used the superseded online-copy schedule.
+D' is distinct from pooled D, which has no biopsy-layer radius and remains the
+unchanged radius-independent control. The historical four-row run contained
+4,800 expected records:
 
 ```bash
 python -m algorithm_evaluation.v5_shortlist_robustness_run \
@@ -498,6 +511,220 @@ disjoint v2 extension root once completed) to generate direct fixed--prime,
 bottom/top factorial, and pooled-D--A' contrasts plus adaptive-radius
 diagnostics. The quantile is frozen and must not be retuned from these scores
 or separately for v2a/v2b/v2c.
+
+The partial-output adaptive extension reuses the same frozen policy. Pooled
+X (`classical_partial`) has no biopsy-guided bottom and therefore no radius;
+there is no duplicate X'. The four genuine new rows are:
+
+- Y': `biopsy_guided_top_anticentral_binary_adaptive_median_prior_nn_bottom_deferred_tie`;
+- Z': `biopsy_guided_classical_adaptive_median_prior_nn_bottom_deferred_tie`;
+- V': `biopsy_guided_top_anticentral_binary_adaptive_median_prior_nn_bottom_default`; and
+- U': `biopsy_guided_classical_adaptive_median_prior_nn_bottom_default`.
+
+Y'/V' retain the created-top-node unlabeled projection used by fixed Y/V;
+Z'/U' retain the classical partial top used by fixed Z/U. W has no separate
+prime because V' is the adaptive counterpart of the fixed default-bottom
+radius comparison. Run only the four non-overlapping new rows (4,800 expected
+records):
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_robustness_run \
+  --bank-root algorithm_evaluation/results/v5_development/shortlist_robustness/bank_v1 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/runs/partial_adaptive_median_q50_v1 \
+  --run-id shortlist-partial-adaptive-median-q50-v1 \
+  --arm-set partial-adaptive-radius \
+  --expected-block-count 100 \
+  --record-workers 8 \
+  --resume \
+  --progress
+```
+
+This command resumes the preserved 2,639-record prefix. The runner accepts
+one to eight concurrent case-arm workers; each record still executes in its
+own freshly spawned process (`maxtasksperchild=1`). Results and checkpoints
+are committed in declared case-arm order, and the result records the inferred
+serial prefix and the eight-worker suffix as separate execution segments.
+Changing `--record-workers` does not change any scientific input, algorithm,
+metric, or stored record.
+
+After completion, merge that root with `abcd_v2`, `v2_extensions_v1`, and
+`adaptive_median_q50_v1`. The report retains X from `v2_extensions_v1`, adds
+fixed--prime and adaptive bottom/top partial contrasts, and reports GRF only
+for the partial family.
+
+### V2a high-initiation sensitivity
+
+V2a is a distinct, non-overwriting simulator bank. Relative to v2, it changes
+only `CNA_EVENT_PROBABILITY` from `0.001` to `0.002`, retains the same base seed
+and coordinate-derived seed namespace for block-paired comparison, and limits
+the factorial to H14/H24 with spread, late, and random biopsy placement. Its
+manifest records a distinct regime and bank id, the one-field override, the
+resolved simulator-config digest, and the v2 bank as its paired-seed reference.
+
+First run the five-block H24-late production-distance resource preflight:
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_robustness_bank \
+  --simulator-regime v2a-high-initiation-cna-0.002 \
+  --base-config simulator_examples/default.json \
+  --base-seed 20260817 \
+  --block-count 5 \
+  --heights 24 \
+  --placement-policies late \
+  --technical-preflight \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2a/preflight_h24_late_v1/bank \
+  --distance-workers 6 \
+  --progress
+```
+
+Only after its `5/5` availability and resource record have been reviewed,
+generate the 100-block H14/H24 bank. Omitting `--heights` selects the complete
+height set frozen for v2a:
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_robustness_bank \
+  --simulator-regime v2a-high-initiation-cna-0.002 \
+  --base-config simulator_examples/default.json \
+  --base-seed 20260817 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2a/bank_v1 \
+  --distance-workers 6 \
+  --progress
+```
+
+The completed bank has `591/600 conditions available`. Three H24 truth blocks
+(indices 65, 87, and 91) crossed the frozen 2,000-representative generation
+guard; all three placement conditions in each block remain typed unavailable
+without seed replacement. Run all 21 labeled selected algorithms in one
+declared roster: full A--G and A'--D', plus partial X/Y/Z/V/W/U and
+Y'/Z'/V'/U'. Fully labeled and partial results remain separate comparison
+families in the report.
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_robustness_run \
+  --bank-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2a/bank_v1 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2a/runs/selected_all_v1 \
+  --run-id shortlist-v2a-selected-all-v1 \
+  --arm-set selected-all \
+  --expected-block-count 100 \
+  --record-workers 8 \
+  --progress
+
+python -m algorithm_evaluation.v5_shortlist_robustness_report \
+  --result-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2a/runs/selected_all_v1 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2a/reports/selected_all_v1 \
+  --expected-block-count 100
+```
+
+The completed reconstruction has all 12,411 available case-arm records and no
+failures. An interrupted bank or reconstruction resumes only with its
+identical command plus `--resume`; do not reuse a v2 output root for any v2a
+stage.
+
+### V2b event-severity sensitivity
+
+V2b is paired to v2 and retains `CNA_EVENT_PROBABILITY=0.001`. It changes
+interval/singleton probability from 10/90 to 25/75 and conditional interval
+gain `+1/+2` probability from 80/20 to 60/40. The unchanged
+`ADDITIVE_GAIN_LAMBDA=0` makes the additive operator exactly `+2`. At the
+owner's request this run uses the complete H14/H24/H34/H38 factorial without a
+separate resource preflight.
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_robustness_bank \
+  --simulator-regime v2b-event-severity-interval-0.25-gain-plus2-0.40 \
+  --base-config simulator_examples/default.json \
+  --base-seed 20260817 \
+  --block-count 100 \
+  --heights 14 24 34 38 \
+  --placement-policies spread late random \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2b/bank_v1 \
+  --distance-workers 6 \
+  --progress
+
+python -m algorithm_evaluation.v5_shortlist_robustness_run \
+  --bank-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2b/bank_v1 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2b/runs/selected_all_v1 \
+  --run-id shortlist-v2b-selected-all-v1 \
+  --arm-set selected-all \
+  --expected-block-count 100 \
+  --record-workers 8 \
+  --progress
+
+python -m algorithm_evaluation.v5_shortlist_robustness_report \
+  --result-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2b/runs/selected_all_v1 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2b/reports/selected_all_v1 \
+  --expected-block-count 100
+```
+
+### V2c sparse-WGD sensitivity
+
+V2c is otherwise identical and seed-paired to v2, changing only
+`WGD_PROBABILITY` from zero to `0.0002`. It also uses the complete
+H14/H24/H34/H38 factorial without a separate resource preflight.
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_robustness_bank \
+  --simulator-regime v2c-sparse-wgd-0.0002 \
+  --base-config simulator_examples/default.json \
+  --base-seed 20260817 \
+  --block-count 100 \
+  --heights 14 24 34 38 \
+  --placement-policies spread late random \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2c/bank_v1 \
+  --distance-workers 6 \
+  --progress
+
+python -m algorithm_evaluation.v5_shortlist_robustness_run \
+  --bank-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2c/bank_v1 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2c/runs/selected_all_v1 \
+  --run-id shortlist-v2c-selected-all-v1 \
+  --arm-set selected-all \
+  --expected-block-count 100 \
+  --record-workers 8 \
+  --progress
+
+python -m algorithm_evaluation.v5_shortlist_robustness_report \
+  --result-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2c/runs/selected_all_v1 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2c/reports/selected_all_v1 \
+  --expected-block-count 100
+```
+
+Each bank declares 1,200 conditions before typed no-replacement attrition, and
+each reconstruction declares 21 records per available condition. Resume an
+interrupted bank or reconstruction only by repeating its exact command with
+`--resume`.
+
+### Block-paired v2/v2a/v2b/v2c report
+
+The compact cross-regime reporter validates the exact 21-arm roster, passing
+semantic gates, bank identities, coordinate seed fields, and zero run
+failures. Each sensitivity is compared only with v2 on blocks for which all
+three placement conditions are available in both regimes. Placement W/T/L is
+descriptive; the independent block effect is the mean of the three paired
+placement deltas. Full and partial output families, heights, and simulator
+regimes are never pooled into one ranking.
+
+The current reporter also requires the frozen-transition adaptive decision-
+audit schema. Consequently, the preserved command and result roots below are
+historical provenance and will not produce a current-contract report without
+fresh reconstruction roots.
+
+```bash
+python -m algorithm_evaluation.v5_shortlist_regime_comparison \
+  --v2-result-root algorithm_evaluation/results/v5_development/shortlist_robustness/runs/abcd_v2 \
+  --v2-result-root algorithm_evaluation/results/v5_development/shortlist_robustness/runs/v2_extensions_v1 \
+  --v2-result-root algorithm_evaluation/results/v5_development/shortlist_robustness/runs/adaptive_median_q50_v1 \
+  --v2-result-root algorithm_evaluation/results/v5_development/shortlist_robustness/runs/partial_adaptive_median_q50_v1 \
+  --v2a-result-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2a/runs/selected_all_v1 \
+  --v2b-result-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2b/runs/selected_all_v1 \
+  --v2c-result-root algorithm_evaluation/results/v5_development/shortlist_robustness/v2c/runs/selected_all_v1 \
+  --output-root algorithm_evaluation/results/v5_development/shortlist_robustness/reports/v2_v2a_v2b_v2c_block_paired_v1
+```
+
+The non-overwriting output contains a compact `report.md`, complete JSON, and
+separate CSV tables for pairing inventory, all-arm metrics by height and
+placement, method-contrast shifts, truth/input diagnostics, and adaptive-radius
+response.
 
 ## CTBF v5 non-paper reconstruction-intuition probe
 

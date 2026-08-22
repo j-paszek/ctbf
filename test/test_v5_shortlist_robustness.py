@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import multiprocessing
 import os
+import time
 
 import networkx as nx
 import numpy as np
@@ -12,28 +13,50 @@ from algorithm_evaluation.paper_pipeline_contract import read_json
 from algorithm_evaluation.process_isolation import (
     CASE_ARM_WORKER_UNIT,
     TRUTH_BLOCK_SIMULATION_WORKER_UNIT,
+    FreshProcessTimeoutError,
     FreshSpawnPerTaskExecutor,
+    FreshSpawnTaskPool,
     fresh_process_contract,
 )
-from algorithm_evaluation.v5_shortlist_robustness_bank import generate_bank
+from algorithm_evaluation.v5_shortlist_robustness_bank import (
+    DEFAULT_BASE_CONFIG,
+    generate_bank,
+)
 from algorithm_evaluation.v5_shortlist_robustness_common import (
     ADAPTIVE_A_PRIME_ID,
     ADAPTIVE_B_PRIME_ID,
     ADAPTIVE_C_PRIME_ID,
     ADAPTIVE_D_PRIME_ID,
     ADAPTIVE_RADIUS_ARM_IDS,
+    ALL_ADAPTIVE_RADIUS_ARM_IDS,
     ARM_SET_BY_NAME,
     DECLARED_METRICS,
     DISTANCE_EXECUTION_SCHEMA_VERSION,
     FULL_DEVELOPMENT_ARM_IDS,
+    INTERMEDIATE_RUN_SCHEMA_VERSION,
     ORDERED_A_ID,
     ORDERED_B_ID,
     ORDERED_C_ID,
+    PARTIAL_ADAPTIVE_RADIUS_ARM_IDS,
+    PARTIAL_ADAPTIVE_U_PRIME_ID,
+    PARTIAL_ADAPTIVE_V_PRIME_ID,
+    PARTIAL_ADAPTIVE_Y_PRIME_ID,
+    PARTIAL_ADAPTIVE_Z_PRIME_ID,
+    PARTIAL_DEVELOPMENT_ARM_IDS,
+    PARTIAL_W_ID,
+    PARTIAL_X_ID,
     POOLED_D_ID,
     PREVIOUS_RUN_SCHEMA_VERSION,
     REPORT_SCHEMA_VERSION,
+    SELECTED_V2_ARM_IDS,
     V2_COMPLETE_ARM_IDS,
     V2_EXTENSION_ARM_IDS,
+    V2A_BANK_ID,
+    V2A_SIMULATOR_REGIME,
+    V2B_BANK_ID,
+    V2B_SIMULATOR_REGIME,
+    V2C_BANK_ID,
+    V2C_SIMULATOR_REGIME,
     derived_seed,
     late_schedule,
     load_bank_manifest,
@@ -43,6 +66,7 @@ from algorithm_evaluation.v5_shortlist_robustness_common import (
 )
 from algorithm_evaluation.v5_shortlist_robustness_report import (
     FULL_PRINCIPAL_PAIRS,
+    PARTIAL_PRINCIPAL_PAIRS,
     _bank_resource_execution,
     _depth_interactions,
     _placement_interactions,
@@ -151,6 +175,16 @@ def _isolation_worker_identity():
     return os.getpid(), _ISOLATION_WORKER_COUNTER
 
 
+def _ordered_isolation_worker_identity(value):
+    pid, counter = _isolation_worker_identity()
+    return value, pid, counter
+
+
+def _sleeping_isolation_worker(delay_seconds):
+    time.sleep(delay_seconds)
+    return delay_seconds
+
+
 def _success_record(block, height, policy, arm, value):
     return {
         "block_index": block,
@@ -176,6 +210,30 @@ def test_shortlist_schedules_are_fixed_and_random_is_prospective():
     assert (ADAPTIVE_A_PRIME_ID, ADAPTIVE_C_PRIME_ID) in FULL_PRINCIPAL_PAIRS
     assert (ADAPTIVE_C_PRIME_ID, ADAPTIVE_D_PRIME_ID) in FULL_PRINCIPAL_PAIRS
     assert (ADAPTIVE_B_PRIME_ID, ADAPTIVE_D_PRIME_ID) in FULL_PRINCIPAL_PAIRS
+    assert ARM_SET_BY_NAME["partial-adaptive-radius"] == (
+        PARTIAL_ADAPTIVE_RADIUS_ARM_IDS
+    )
+    assert ARM_SET_BY_NAME["selected-all"] == SELECTED_V2_ARM_IDS
+    assert SELECTED_V2_ARM_IDS == (
+        FULL_DEVELOPMENT_ARM_IDS + PARTIAL_DEVELOPMENT_ARM_IDS
+    )
+    assert len(SELECTED_V2_ARM_IDS) == len(set(SELECTED_V2_ARM_IDS)) == 21
+    assert PARTIAL_ADAPTIVE_RADIUS_ARM_IDS == (
+        PARTIAL_ADAPTIVE_Y_PRIME_ID,
+        PARTIAL_ADAPTIVE_Z_PRIME_ID,
+        PARTIAL_ADAPTIVE_V_PRIME_ID,
+        PARTIAL_ADAPTIVE_U_PRIME_ID,
+    )
+    assert PARTIAL_X_ID not in PARTIAL_ADAPTIVE_RADIUS_ARM_IDS
+    assert PARTIAL_W_ID not in PARTIAL_ADAPTIVE_RADIUS_ARM_IDS
+    assert (
+        PARTIAL_ADAPTIVE_Y_PRIME_ID,
+        PARTIAL_ADAPTIVE_Z_PRIME_ID,
+    ) in PARTIAL_PRINCIPAL_PAIRS
+    assert (
+        PARTIAL_ADAPTIVE_Y_PRIME_ID,
+        PARTIAL_ADAPTIVE_V_PRIME_ID,
+    ) in PARTIAL_PRINCIPAL_PAIRS
     assert spread_schedule(14) == (9, 12, 14)
     assert spread_schedule(24) == (15, 20, 24)
     assert spread_schedule(34) == (21, 28, 34)
@@ -195,12 +253,147 @@ def test_shortlist_schedules_are_fixed_and_random_is_prospective():
     assert seed != derived_seed("sampling", 20260817, 0, first[0])
 
 
+def test_v2a_preflight_bank_has_a_paired_distinct_resolved_contract(tmp_path):
+    bank_root = tmp_path / "v2a-preflight-bank"
+    manifest = generate_bank(
+        output_root=bank_root,
+        simulator_regime_id=V2A_SIMULATOR_REGIME,
+        block_count=1,
+        heights=(24,),
+        placement_policies=("late",),
+        technical_preflight=True,
+        distance_compute=_injected_distance,
+        simulator_factory=lambda mapping, seed: _TinyH38Simulator(mapping, seed),
+        created_at_utc="fixture",
+    )
+
+    assert manifest["bank_id"] == V2A_BANK_ID
+    assert manifest["simulator_regime_id"] == V2A_SIMULATOR_REGIME
+    assert manifest["simulator_overrides"] == {"CNA_EVENT_PROBABILITY": 0.002}
+    assert manifest["paired_seed_reference_bank_id"] is not None
+    assert manifest["paired_seed_semantics"] == (
+        "same_coordinate_seed_map_changed_simulator_parameter"
+    )
+    assert manifest["selected_algorithm_arm_ids"] == list(SELECTED_V2_ARM_IDS)
+    assert manifest["contract_mode"] == (
+        "technical_v2a_h24_late_resource_preflight"
+    )
+
+    resolved = read_json(bank_root / "simulator_config.json")
+    expected = read_json(DEFAULT_BASE_CONFIG)
+    expected["CNA_EVENT_PROBABILITY"] = 0.002
+    expected["NUMBER_OF_GENERATIONS"] = 24
+    assert resolved == expected
+
+    _root, loaded = load_bank_manifest(bank_root, expected_block_count=1)
+    assert loaded == manifest
+    assert loaded["cases"][0]["generations"] == [22, 23, 24]
+
+
+@pytest.mark.parametrize(
+    ("simulator_regime", "bank_id", "overrides"),
+    (
+        (
+            V2B_SIMULATOR_REGIME,
+            V2B_BANK_ID,
+            {
+                "INTERVAL_CNA_PROBABILITY": 0.25,
+                "INTERVAL_GAIN_OPERATOR_PROBABILITIES": {
+                    "unit": 0.6,
+                    "additive": 0.4,
+                    "multiplicative": 0,
+                },
+            },
+        ),
+        (
+            V2C_SIMULATOR_REGIME,
+            V2C_BANK_ID,
+            {"WGD_PROBABILITY": 0.0002},
+        ),
+    ),
+)
+def test_v2b_v2c_banks_have_exact_paired_resolved_contracts(
+    tmp_path,
+    simulator_regime,
+    bank_id,
+    overrides,
+):
+    bank_root = tmp_path / simulator_regime
+    manifest = generate_bank(
+        output_root=bank_root,
+        simulator_regime_id=simulator_regime,
+        block_count=1,
+        heights=(38,),
+        placement_policies=("late",),
+        technical_preflight=True,
+        distance_compute=_injected_distance,
+        simulator_factory=lambda mapping, seed: _TinyH38Simulator(mapping, seed),
+        created_at_utc="fixture",
+    )
+
+    assert manifest["bank_id"] == bank_id
+    assert manifest["simulator_regime_id"] == simulator_regime
+    assert manifest["simulator_overrides"] == overrides
+    assert manifest["paired_seed_reference_bank_id"] is not None
+    assert manifest["paired_seed_semantics"] == (
+        "same_coordinate_seed_map_changed_simulator_parameter"
+    )
+    assert manifest["selected_algorithm_arm_ids"] == list(SELECTED_V2_ARM_IDS)
+
+    resolved = read_json(bank_root / "simulator_config.json")
+    expected = read_json(DEFAULT_BASE_CONFIG)
+    expected.update(overrides)
+    expected["NUMBER_OF_GENERATIONS"] = 38
+    assert resolved == expected
+
+    _root, loaded = load_bank_manifest(bank_root, expected_block_count=1)
+    assert loaded == manifest
+    assert loaded["cases"][0]["generations"] == [36, 37, 38]
+
+
 def test_fresh_spawn_executor_reclaims_every_previous_task_process():
     with FreshSpawnPerTaskExecutor() as executor:
         first = executor.run(_isolation_worker_identity, timeout_seconds=30)
         second = executor.run(_isolation_worker_identity, timeout_seconds=30)
     assert first[0] != second[0]
     assert first[1] == second[1] == 1
+
+
+def test_fresh_spawn_task_pool_preserves_order_and_one_task_per_process():
+    with FreshSpawnTaskPool(8) as executor:
+        outcomes = list(
+            executor.map_ordered(
+                _ordered_isolation_worker_identity,
+                [(value,) for value in range(16)],
+                timeout_seconds=30,
+            )
+        )
+    assert executor.worker_count == 8
+    assert [value for value, _pid, _counter in outcomes] == list(range(16))
+    assert len({pid for _value, pid, _counter in outcomes}) == len(outcomes)
+    assert [counter for _value, _pid, counter in outcomes] == [1] * len(outcomes)
+
+
+def test_fresh_spawn_task_pool_applies_outer_timeout_after_task_start():
+    with pytest.raises(FreshProcessTimeoutError, match="outer 0.05-second"):
+        with FreshSpawnTaskPool(2) as executor:
+            list(
+                executor.map_ordered(
+                    _sleeping_isolation_worker,
+                    [(0.2,), (0.2,)],
+                    timeout_seconds=0.05,
+                )
+            )
+
+
+def test_shortlist_run_rejects_more_than_eight_record_workers(tmp_path):
+    with pytest.raises(ValueError, match="may not exceed 8"):
+        run_shortlist(
+            bank_root=tmp_path / "unused-bank",
+            output_root=tmp_path / "unused-run",
+            run_id="fixture-too-many-workers",
+            record_workers=9,
+        )
 
 
 def test_bank_resource_qualification_requires_fresh_simulation_and_distance():
@@ -313,9 +506,17 @@ def test_one_block_h38_late_bank_run_report_and_resume(tmp_path):
     assert run["resources"]["record_execution"] == fresh_process_contract(
         CASE_ARM_WORKER_UNIT
     )
+    assert len(run["record_execution_segments"]) == 1
+    assert run["record_execution_segments"][0]["requested_worker_count"] == 1
+    assert run["record_execution_segments"][0]["record_start_index"] == 0
+    assert run["record_execution_segments"][0][
+        "record_end_index_exclusive"
+    ] == 4
     assert {record["placement_policy"] for record in run["records"]} == {"late"}
 
     interrupted = copy.deepcopy(run)
+    interrupted["schema_version"] = PREVIOUS_RUN_SCHEMA_VERSION
+    interrupted.pop("record_execution_segments")
     interrupted["status"] = "failure"
     interrupted["records"] = interrupted["records"][:1]
     interrupted["completed_record_count"] = 1
@@ -334,10 +535,24 @@ def test_one_block_h38_late_bank_run_report_and_resume(tmp_path):
         output_root=run_root,
         run_id="fixture-shortlist",
         expected_block_count=1,
+        record_workers=2,
         resume=True,
     )
     assert resumed["completed_record_count"] == 4
     assert resumed["resume_history"][-1]["preserved_record_count"] == 1
+    assert resumed["schema_version"] != PREVIOUS_RUN_SCHEMA_VERSION
+    assert [
+        (
+            segment["record_start_index"],
+            segment["record_end_index_exclusive"],
+            segment["requested_worker_count"],
+            segment["effective_worker_count"],
+        )
+        for segment in resumed["record_execution_segments"]
+    ] == [(0, 1, 1, 1), (1, 4, 2, 2)]
+    assert resumed["resume_history"][-1]["previous_schema_version"] == (
+        PREVIOUS_RUN_SCHEMA_VERSION
+    )
 
     report_root = tmp_path / "report"
     report = write_report(
@@ -357,7 +572,16 @@ def test_one_block_h38_late_bank_run_report_and_resume(tmp_path):
     assert report["interpretation_contract"][
         "ad_f1_and_grf_combined_into_one_score"
     ] is False
+    assert [
+        segment["effective_worker_count"]
+        for segment in report["record_execution_by_run"][0][
+            "record_execution_segments"
+        ]
+    ] == [1, 2]
     assert (report_root / "report.md").is_file()
+    assert "records 1--3 with 2 worker(s)" in (
+        report_root / "report.md"
+    ).read_text(encoding="utf-8")
     assert (report_root / "pairwise_by_cell.csv").is_file()
 
     extension_root = tmp_path / "extension-run"
@@ -367,11 +591,15 @@ def test_one_block_h38_late_bank_run_report_and_resume(tmp_path):
         run_id="fixture-shortlist-extensions",
         arm_set="v2-extensions",
         expected_block_count=1,
+        record_workers=8,
         created_at_utc="fixture",
     )
     assert extension["completed_record_count"] == len(V2_EXTENSION_ARM_IDS)
     assert extension["failure_count"] == 0
     assert extension["arm_ids"] == list(V2_EXTENSION_ARM_IDS)
+    assert extension["record_execution_segments"][0][
+        "effective_worker_count"
+    ] == 8
 
     combined_root = tmp_path / "combined-report"
     combined = write_report(
@@ -444,6 +672,50 @@ def test_one_block_h38_late_bank_run_report_and_resume(tmp_path):
     )
     assert (adaptive_report_root / "adaptive_radius_by_cell.csv").is_file()
 
+    partial_adaptive_root = tmp_path / "partial-adaptive-run"
+    partial_adaptive = run_shortlist(
+        bank_root=bank_root,
+        output_root=partial_adaptive_root,
+        run_id="fixture-shortlist-partial-adaptive-radius",
+        arm_set="partial-adaptive-radius",
+        expected_block_count=1,
+        created_at_utc="fixture",
+    )
+    assert partial_adaptive["completed_record_count"] == len(
+        PARTIAL_ADAPTIVE_RADIUS_ARM_IDS
+    )
+    assert partial_adaptive["failure_count"] == 0
+    assert partial_adaptive["arm_ids"] == list(PARTIAL_ADAPTIVE_RADIUS_ARM_IDS)
+    assert all(
+        set(record["metrics"]) == {"grf"}
+        and record["reconstruction_metadata"]["family"] == "partial"
+        for record in partial_adaptive["records"]
+    )
+
+    all_adaptive_report = write_report(
+        result_roots=(
+            run_root,
+            extension_root,
+            adaptive_root,
+            partial_adaptive_root,
+        ),
+        output_root=tmp_path / "all-adaptive-combined-report",
+        expected_block_count=1,
+        created_at_utc="fixture",
+    )
+    assert all_adaptive_report["arm_count"] == (
+        len(V2_COMPLETE_ARM_IDS)
+        + len(ADAPTIVE_RADIUS_ARM_IDS)
+        + len(PARTIAL_ADAPTIVE_RADIUS_ARM_IDS)
+    )
+    assert all_adaptive_report["comparison_groups"]["partial"][
+        "arm_ids"
+    ] == list(PARTIAL_DEVELOPMENT_ARM_IDS)
+    assert [
+        row["arm_id"]
+        for row in all_adaptive_report["adaptive_radius_diagnostics"]
+    ] == list(ALL_ADAPTIVE_RADIUS_ARM_IDS)
+
     probe = run_probe(
         bank_root=bank_root,
         output_root=tmp_path / "isolation-probe",
@@ -466,12 +738,11 @@ def test_one_block_h38_late_bank_run_report_and_resume(tmp_path):
             expected_block_count=1,
         )
 
-    previous_root = tmp_path / "previous-v2-run"
+    previous_root = tmp_path / "previous-v3-run"
     previous_root.mkdir()
     previous = copy.deepcopy(resumed)
     previous["schema_version"] = PREVIOUS_RUN_SCHEMA_VERSION
-    previous.pop("arm_set")
-    previous.pop("arm_ids")
+    previous.pop("record_execution_segments")
     write_json(previous_root / "result.json", previous)
     previous_report = write_report(
         result_root=previous_root,
@@ -479,6 +750,20 @@ def test_one_block_h38_late_bank_run_report_and_resume(tmp_path):
         expected_block_count=1,
     )
     assert previous_report["arm_count"] == 4
+
+    intermediate_root = tmp_path / "intermediate-v2-run"
+    intermediate_root.mkdir()
+    intermediate = copy.deepcopy(previous)
+    intermediate["schema_version"] = INTERMEDIATE_RUN_SCHEMA_VERSION
+    intermediate.pop("arm_set")
+    intermediate.pop("arm_ids")
+    write_json(intermediate_root / "result.json", intermediate)
+    intermediate_report = write_report(
+        result_root=intermediate_root,
+        output_root=tmp_path / "intermediate-v2-report",
+        expected_block_count=1,
+    )
+    assert intermediate_report["arm_count"] == 4
 
     legacy_root = tmp_path / "legacy-run"
     legacy_root.mkdir()

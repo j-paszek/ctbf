@@ -27,17 +27,23 @@ from algorithm_evaluation.v5_shortlist_robustness_common import (
     ADAPTIVE_B_PRIME_ID,
     ADAPTIVE_C_PRIME_ID,
     ADAPTIVE_D_PRIME_ID,
-    ADAPTIVE_RADIUS_ARM_IDS,
+    ALL_ADAPTIVE_RADIUS_ARM_IDS,
     ARM_SET_BY_NAME,
     DECLARED_METRICS,
     DISTANCE_EXECUTION_SCHEMA_VERSION,
     FULL_DEVELOPMENT_ARM_IDS,
     FULL_V2_ARM_IDS,
+    INTERMEDIATE_RUN_SCHEMA_VERSION,
     ORDERED_A_ID,
     ORDERED_B_ID,
     ORDERED_C_ID,
     PLACEMENT_POLICIES,
     PARTIAL_DECLARED_METRICS,
+    PARTIAL_ADAPTIVE_U_PRIME_ID,
+    PARTIAL_ADAPTIVE_V_PRIME_ID,
+    PARTIAL_ADAPTIVE_Y_PRIME_ID,
+    PARTIAL_ADAPTIVE_Z_PRIME_ID,
+    PARTIAL_DEVELOPMENT_ARM_IDS,
     PARTIAL_V2_ARM_IDS,
     POOLED_D_ID,
     PREVIOUS_RUN_SCHEMA_VERSION,
@@ -48,8 +54,14 @@ from algorithm_evaluation.v5_shortlist_robustness_common import (
     SHORT_LABEL_BY_ARM,
     SUPPORTED_SHORTLIST_ARM_IDS,
     ensure_new_output_root,
+    inferred_serial_record_execution_segment,
     load_bank_manifest,
+    validate_record_execution_segments,
     write_json,
+)
+from reconstructor_biopsy_blocks import (
+    ADAPTIVE_BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION,
+    FROZEN_TRANSITION_PARENT_ELIGIBILITY_POLICY,
 )
 
 
@@ -84,6 +96,15 @@ PARTIAL_PRINCIPAL_PAIRS = (
     (PARTIAL_V2_ARM_IDS[2], PARTIAL_V2_ARM_IDS[5]),  # Z-U
     (PARTIAL_V2_ARM_IDS[3], PARTIAL_V2_ARM_IDS[5]),  # V-U
     (PARTIAL_V2_ARM_IDS[3], PARTIAL_V2_ARM_IDS[4]),  # V-W
+    (PARTIAL_V2_ARM_IDS[0], PARTIAL_ADAPTIVE_Y_PRIME_ID),  # X-Y'
+    (PARTIAL_V2_ARM_IDS[1], PARTIAL_ADAPTIVE_Y_PRIME_ID),  # Y-Y'
+    (PARTIAL_V2_ARM_IDS[2], PARTIAL_ADAPTIVE_Z_PRIME_ID),  # Z-Z'
+    (PARTIAL_V2_ARM_IDS[3], PARTIAL_ADAPTIVE_V_PRIME_ID),  # V-V'
+    (PARTIAL_V2_ARM_IDS[5], PARTIAL_ADAPTIVE_U_PRIME_ID),  # U-U'
+    (PARTIAL_ADAPTIVE_Y_PRIME_ID, PARTIAL_ADAPTIVE_Z_PRIME_ID),
+    (PARTIAL_ADAPTIVE_Y_PRIME_ID, PARTIAL_ADAPTIVE_V_PRIME_ID),
+    (PARTIAL_ADAPTIVE_Z_PRIME_ID, PARTIAL_ADAPTIVE_U_PRIME_ID),
+    (PARTIAL_ADAPTIVE_V_PRIME_ID, PARTIAL_ADAPTIVE_U_PRIME_ID),
 )
 SHORT_DESCRIPTION_BY_ARM = {
     ORDERED_A_ID: "deferred-bottom binary-anticentral r2 full",
@@ -109,6 +130,18 @@ SHORT_DESCRIPTION_BY_ARM = {
     PARTIAL_V2_ARM_IDS[3]: "default-bottom binary-anticentral r2 partial",
     PARTIAL_V2_ARM_IDS[4]: "default-bottom binary-anticentral r4 partial",
     PARTIAL_V2_ARM_IDS[5]: "default-bottom classical r2 partial",
+    PARTIAL_ADAPTIVE_Y_PRIME_ID: (
+        "deferred-bottom binary-anticentral transition-median partial"
+    ),
+    PARTIAL_ADAPTIVE_Z_PRIME_ID: (
+        "deferred-bottom classical transition-median partial"
+    ),
+    PARTIAL_ADAPTIVE_V_PRIME_ID: (
+        "default-bottom binary-anticentral transition-median partial"
+    ),
+    PARTIAL_ADAPTIVE_U_PRIME_ID: (
+        "default-bottom classical transition-median partial"
+    ),
 }
 
 
@@ -260,7 +293,7 @@ def _adaptive_radius_diagnostics(
     records: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     diagnostics = []
-    for arm_id in ADAPTIVE_RADIUS_ARM_IDS:
+    for arm_id in ALL_ADAPTIVE_RADIUS_ARM_IDS:
         arm_records = [
             record
             for record in records
@@ -279,7 +312,11 @@ def _adaptive_radius_diagnostics(
             expected_policy = ARM_SPEC_BY_ID[arm_id].radius_policy
             if (
                 not isinstance(audit, Mapping)
+                or audit.get("schema_version")
+                != ADAPTIVE_BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION
                 or audit.get("radius_policy") != expected_policy
+                or audit.get("parent_eligibility_policy")
+                != FROZEN_TRANSITION_PARENT_ELIGIBILITY_POLICY
                 or not isinstance(audit.get("transition_records"), list)
             ):
                 raise ValueError("Adaptive-radius reconstruction diagnostics changed.")
@@ -767,6 +804,7 @@ def build_report(
         if result.get("schema_version") not in {
             RUN_SCHEMA_VERSION,
             PREVIOUS_RUN_SCHEMA_VERSION,
+            INTERMEDIATE_RUN_SCHEMA_VERSION,
         }:
             raise ValueError("Unknown shortlist-robustness run schema.")
         if result.get("status") != "complete":
@@ -825,7 +863,10 @@ def build_report(
         expected_specs = [ARM_SPEC_BY_ID[arm_id].as_record() for arm_id in arm_ids]
         if run_specs != expected_specs:
             raise ValueError("Shortlist run arm declaration changed.")
-        if result.get("schema_version") == RUN_SCHEMA_VERSION:
+        if result.get("schema_version") in {
+            RUN_SCHEMA_VERSION,
+            PREVIOUS_RUN_SCHEMA_VERSION,
+        }:
             if result.get("arm_ids") != list(arm_ids):
                 raise ValueError("Shortlist run arm-id declaration changed.")
             arm_set = result.get("arm_set")
@@ -864,15 +905,28 @@ def build_report(
         semantic_gate_by_arm.update(gates)
         declared_arm_ids.update(arm_ids)
         all_records.extend(records)
+        if result.get("schema_version") == RUN_SCHEMA_VERSION:
+            execution_segments = validate_record_execution_segments(
+                result.get("record_execution_segments"),
+                record_count=len(records),
+            )
+        else:
+            execution_segments = [
+                inferred_serial_record_execution_segment(
+                    record_count=len(records),
+                    source_schema_version=str(result["schema_version"]),
+                )
+            ]
         record_execution_by_run.append(
             {
                 "run_id": str(result["run_id"]),
                 "result_root": str(root),
                 "record_execution": dict(result["resources"]["record_execution"]),
+                "record_execution_segments": execution_segments,
             }
         )
 
-    report_arm_order = FULL_DEVELOPMENT_ARM_IDS + PARTIAL_V2_ARM_IDS
+    report_arm_order = FULL_DEVELOPMENT_ARM_IDS + PARTIAL_DEVELOPMENT_ARM_IDS
     ordered_arm_ids = tuple(
         arm_id for arm_id in report_arm_order if arm_id in declared_arm_ids
     )
@@ -931,7 +985,7 @@ def build_report(
     )
     partial_group = comparison_group(
         "partial",
-        PARTIAL_V2_ARM_IDS,
+        PARTIAL_DEVELOPMENT_ARM_IDS,
         PARTIAL_DECLARED_METRICS,
         "grf",
     )
@@ -1301,6 +1355,18 @@ def _h34_h38_table(
 
 
 def _markdown(report: Mapping[str, Any]) -> str:
+    execution_summary = "; ".join(
+        f"{run['run_id']}: "
+        + ", ".join(
+            f"records {segment['record_start_index']}--"
+            f"{segment['record_end_index_exclusive'] - 1} with "
+            f"{segment['effective_worker_count']} worker(s)"
+            for segment in run["record_execution_segments"]
+            if segment["record_end_index_exclusive"]
+            > segment["record_start_index"]
+        )
+        for run in report["record_execution_by_run"]
+    )
     lines = [
         "# CTBF v5 shortlist robustness report",
         "",
@@ -1310,7 +1376,8 @@ def _markdown(report: Mapping[str, Any]) -> str:
         f"Conditions: `{report['available_condition_count']}` available of "
         f"`{report['declared_condition_count']}` declared  ",
         f"Arm records: `{report['record_count']}`  ",
-        "Record execution: `fresh spawned process per case-arm`",
+        "Record execution: `fresh spawned process per case-arm`  ",
+        f"Execution segments: {execution_summary or 'none'}",
         (
             "Bank resource execution: `fresh-process qualified`."
             if report["bank_resource_execution"][

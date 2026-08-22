@@ -41,11 +41,12 @@ from algorithm_evaluation.v5_algorithm_development_run import (
 from reconstructor_biopsy_blocks import (
     BIOPSY_GUIDED_AUDIT_COUNTERS,
     BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION,
+    FROZEN_TRANSITION_PARENT_ELIGIBILITY_POLICY,
 )
 
 
 FULL_ATTACHMENT_AUDIT_SCHEMA_VERSION = (
-    "ctbf-v5-full-attachment-mechanism-audit-v1"
+    "ctbf-v5-full-attachment-mechanism-audit-v2"
 )
 RESULT_NAME = "full_attachment_audit.json"
 REPORT_NAME = "report.md"
@@ -104,6 +105,11 @@ def derive_attachment_measures(audit: Mapping[str, Any]) -> dict[str, int | floa
 
     if audit.get("schema_version") != BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION:
         raise ValueError("Unknown biopsy-layer decision-audit schema.")
+    if (
+        audit.get("parent_eligibility_policy")
+        != FROZEN_TRANSITION_PARENT_ELIGIBILITY_POLICY
+    ):
+        raise ValueError("Unknown biopsy-layer parent-eligibility policy.")
     missing = set(BIOPSY_GUIDED_AUDIT_COUNTERS) - set(audit)
     if missing:
         raise ValueError(

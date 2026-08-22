@@ -121,6 +121,20 @@ PARTIAL_BOTTOM_TOP_INTERACTION_ARM_ID = (
     "biopsy_guided_classical_r2_bottom_deferred_tie"
 )
 PARTIAL_BOTTOM_TOP_INTERACTION_ROLE = "bottom_top_interaction_candidate"
+PARTIAL_ADAPTIVE_MEDIAN_Y_ID = (
+    "biopsy_guided_top_anticentral_binary_adaptive_median_prior_nn_"
+    "bottom_deferred_tie"
+)
+PARTIAL_ADAPTIVE_MEDIAN_Z_ID = (
+    "biopsy_guided_classical_adaptive_median_prior_nn_bottom_deferred_tie"
+)
+PARTIAL_ADAPTIVE_MEDIAN_V_ID = (
+    "biopsy_guided_top_anticentral_binary_adaptive_median_prior_nn_"
+    "bottom_default"
+)
+PARTIAL_ADAPTIVE_MEDIAN_U_ID = (
+    "biopsy_guided_classical_adaptive_median_prior_nn_bottom_default"
+)
 
 PARTIAL_INCUMBENT_ID = "biopsy_guided_classical_r4"
 INFERRED_COPY_INCUMBENT_ID = (
@@ -196,12 +210,13 @@ class DevelopmentArmSpec:
 def _partial_arm(
     arm_id: str,
     *,
-    radius: float,
+    radius: float | None,
     role: str,
     biopsy_preset: str | None = None,
     only_nj: bool = False,
     algorithm_name: str = "neighbor_joining_classical",
     top_output_projection: str = TOP_OUTPUT_PROJECTION_NONE,
+    radius_policy: str | None = None,
 ) -> DevelopmentArmSpec:
     if top_output_projection not in TOP_OUTPUT_PROJECTIONS:
         raise ValueError(
@@ -214,12 +229,13 @@ def _partial_arm(
         problem="partial",
         input_mode="pooled" if only_nj else "ordered",
         only_nj=only_nj,
-        radius=float(radius),
+        radius=None if radius is None else float(radius),
         primary_metric="grf",
         complementary_metrics=(),
         role=role,
         biopsy_preset=biopsy_preset,
         top_output_projection=top_output_projection,
+        radius_policy=radius_policy,
     )
 
 
@@ -590,6 +606,41 @@ ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS: tuple[DevelopmentArmSpec, ...] = (
     ),
 )
 
+ADAPTIVE_PARTIAL_RADIUS_EXTENSION_ARM_SPECS: tuple[DevelopmentArmSpec, ...] = (
+    _partial_arm(
+        PARTIAL_ADAPTIVE_MEDIAN_Y_ID,
+        radius=None,
+        role="adaptive_radius_candidate",
+        biopsy_preset="deferred_tie",
+        algorithm_name=INFERRED_COPY_INCUMBENT_ID,
+        top_output_projection=TOP_OUTPUT_PROJECTION_CREATED_NODES_UNLABELED,
+        radius_policy=ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
+    ),
+    _partial_arm(
+        PARTIAL_ADAPTIVE_MEDIAN_Z_ID,
+        radius=None,
+        role="adaptive_radius_top_interaction_candidate",
+        biopsy_preset="deferred_tie",
+        radius_policy=ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
+    ),
+    _partial_arm(
+        PARTIAL_ADAPTIVE_MEDIAN_V_ID,
+        radius=None,
+        role="adaptive_radius_bottom_interaction_candidate",
+        biopsy_preset="default",
+        algorithm_name=INFERRED_COPY_INCUMBENT_ID,
+        top_output_projection=TOP_OUTPUT_PROJECTION_CREATED_NODES_UNLABELED,
+        radius_policy=ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
+    ),
+    _partial_arm(
+        PARTIAL_ADAPTIVE_MEDIAN_U_ID,
+        radius=None,
+        role="adaptive_radius_factorial_candidate",
+        biopsy_preset="default",
+        radius_policy=ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
+    ),
+)
+
 BIOPSY_GUIDED_FULL_COUNTERPART_BY_PARTIAL_ID = {
     "biopsy_guided_top_rooted_labeled_q_r2": BIOPSY_GUIDED_FULL_BASELINE_ID,
     "biopsy_guided_top_anticentral_binary_r2": BIOPSY_GUIDED_FULL_DEFAULT_ID,
@@ -617,6 +668,8 @@ BIOPSY_GUIDED_FULL_COUNTERPART_BY_PARTIAL_ID = {
     "biopsy_guided_top_anticentral_binary_r2_bottom_diploid_parsimony_tie": (
         "biopsy_guided_full_anticentral_binary_r2_bottom_diploid_parsimony_tie"
     ),
+    PARTIAL_ADAPTIVE_MEDIAN_Y_ID: BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFERRED_ID,
+    PARTIAL_ADAPTIVE_MEDIAN_V_ID: BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFAULT_ID,
 }
 
 DEVELOPMENT_EXTENSION_ARM_SPECS: tuple[DevelopmentArmSpec, ...] = (
@@ -630,6 +683,7 @@ ALL_ARM_SPECS = (
     INITIAL_ARM_SPECS
     + DEVELOPMENT_EXTENSION_ARM_SPECS
     + ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS
+    + ADAPTIVE_PARTIAL_RADIUS_EXTENSION_ARM_SPECS
 )
 ARM_SPEC_BY_ID = {spec.arm_id: spec for spec in ALL_ARM_SPECS}
 
@@ -652,9 +706,16 @@ def validate_initial_roster() -> None:
             "Every projected biopsy-guided arm must have exactly one declared "
             "fully labeled counterpart."
         )
-    if set(BIOPSY_GUIDED_FULL_COUNTERPART_BY_PARTIAL_ID.values()) != {
+    expected_full_counterparts = {
         spec.arm_id for spec in BIOPSY_GUIDED_FULL_EXTENSION_ARM_SPECS
-    }:
+    } | {
+        BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFERRED_ID,
+        BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFAULT_ID,
+    }
+    if (
+        set(BIOPSY_GUIDED_FULL_COUNTERPART_BY_PARTIAL_ID.values())
+        != expected_full_counterparts
+    ):
         raise RuntimeError(
             "The fully labeled biopsy-guided roster contains an undeclared or "
             "missing projected-arm counterpart."
@@ -663,6 +724,19 @@ def validate_initial_roster() -> None:
         if spec.top_output_projection not in TOP_OUTPUT_PROJECTIONS:
             raise RuntimeError(
                 f"Arm {spec.arm_id!r} has an unknown top-output projection."
+            )
+        if spec.radius_policy is not None and (
+            spec.radius is not None
+            or spec.biopsy_preset is None
+            or spec.input_mode != "ordered"
+            or spec.only_nj
+        ):
+            raise RuntimeError(
+                f"Arm {spec.arm_id!r} violates the adaptive-radius contract."
+            )
+        if spec.radius_policy is None and spec.radius is None:
+            raise RuntimeError(
+                f"Arm {spec.arm_id!r} lacks a fixed or adaptive radius."
             )
         if (
             spec.top_output_projection
@@ -1319,6 +1393,7 @@ def numeric_summary(values: Iterable[float]) -> dict[str, Any] | None:
 
 
 __all__ = [
+    "ADAPTIVE_PARTIAL_RADIUS_EXTENSION_ARM_SPECS",
     "ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS",
     "ARM_SPEC_BY_ID",
     "ALL_ARM_SPECS",
@@ -1357,6 +1432,10 @@ __all__ = [
     "PARTIAL_BOTTOM_TOP_EXTENSION_ARM_SPECS",
     "PARTIAL_BOTTOM_TOP_INTERACTION_ARM_ID",
     "PARTIAL_BOTTOM_TOP_INTERACTION_ROLE",
+    "PARTIAL_ADAPTIVE_MEDIAN_U_ID",
+    "PARTIAL_ADAPTIVE_MEDIAN_V_ID",
+    "PARTIAL_ADAPTIVE_MEDIAN_Y_ID",
+    "PARTIAL_ADAPTIVE_MEDIAN_Z_ID",
     "PARTIAL_TOP_EXTENSION_ARM_SPECS",
     "REPORT_SCHEMA_VERSION",
     "LEGACY_RUN_SCHEMA_VERSION",

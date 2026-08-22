@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import gc
@@ -48,21 +49,32 @@ from algorithm_evaluation.simulator_sampling_fraction_truth_probe import (
     hybrid_sample_size,
 )
 from algorithm_evaluation.v5_shortlist_robustness_common import (
+    BANK_ID_BY_SIMULATOR_REGIME,
     BANK_CONFIG_NAME,
     BANK_MANIFEST_NAME,
     BANK_SCHEMA_VERSION,
+    BASELINE_SIMULATOR_REGIME,
     BIOPSY_LOWER_BOUND,
     CASE_METADATA_SCHEMA_VERSION,
+    CNA_EVENT_PROBABILITY_BY_SIMULATOR_REGIME,
     DEFAULT_BANK_ID,
     DEFAULT_BASE_SEED,
     DEFAULT_BLOCK_COUNT,
     DISTANCE_EXECUTION_SCHEMA_VERSION,
     DISTANCE_EXECUTION_SEMANTICS,
     HEIGHTS,
+    HEIGHTS_BY_SIMULATOR_REGIME,
     PLACEMENT_POLICIES,
+    PREFLIGHT_CONTRACT_MODE_BY_SIMULATOR_REGIME,
+    PRODUCTION_CONTRACT_MODE_BY_SIMULATOR_REGIME,
+    PRODUCTION_SCIENTIFIC_ROLE_BY_SIMULATOR_REGIME,
     SAMPLING_RULE,
     SEED_NAMESPACE,
+    SELECTED_V2_ARM_IDS,
     SHORTLIST_ARM_IDS,
+    SIMULATOR_OVERRIDES_BY_REGIME,
+    SIMULATOR_REGIMES,
+    SMOKE_CONTRACT_MODE_BY_SIMULATOR_REGIME,
     V2_COMPLETE_ARM_IDS,
     TARGET_FRACTION,
     case_id,
@@ -75,6 +87,9 @@ from algorithm_evaluation.v5_shortlist_robustness_common import (
     truth_path,
     validate_positive_integer,
     write_json,
+)
+from algorithm_evaluation.v5_algorithm_development_common import (
+    canonical_json_digest,
 )
 from ctbs import (
     Cnp2CnpFileDistanceProvider,
@@ -601,6 +616,8 @@ def _condition_declaration(
 def _new_manifest(
     *,
     config_path: Path,
+    simulator_regime_id: str,
+    resolved_simulator_config: Mapping[str, Any],
     block_count: int,
     base_seed: int,
     heights: Sequence[int],
@@ -610,28 +627,47 @@ def _new_manifest(
     created_at_utc: str | None,
     resources: Mapping[str, int],
 ) -> dict[str, Any]:
+    simulator_overrides = deepcopy(
+        SIMULATOR_OVERRIDES_BY_REGIME[simulator_regime_id]
+    )
+    if technical_preflight:
+        scientific_role = "resource_preflight_not_accuracy_evidence"
+        contract_mode = PREFLIGHT_CONTRACT_MODE_BY_SIMULATOR_REGIME[
+            simulator_regime_id
+        ]
+    elif nonproduction_full_factorial_smoke:
+        scientific_role = "nonproduction_technical_smoke"
+        contract_mode = SMOKE_CONTRACT_MODE_BY_SIMULATOR_REGIME[
+            simulator_regime_id
+        ]
+    else:
+        scientific_role = PRODUCTION_SCIENTIFIC_ROLE_BY_SIMULATOR_REGIME[
+            simulator_regime_id
+        ]
+        contract_mode = PRODUCTION_CONTRACT_MODE_BY_SIMULATOR_REGIME[
+            simulator_regime_id
+        ]
     return {
         "schema_version": BANK_SCHEMA_VERSION,
-        "bank_id": DEFAULT_BANK_ID,
+        "bank_id": BANK_ID_BY_SIMULATOR_REGIME[simulator_regime_id],
         "status": "in_progress",
         "created_at_utc": created_at_utc or datetime.now(timezone.utc).isoformat(),
-        "scientific_role": (
-            "resource_preflight_not_accuracy_evidence"
-            if technical_preflight
-            else (
-                "nonproduction_technical_smoke"
-                if nonproduction_full_factorial_smoke
-                else "adaptive_method_development_only_not_paper_accuracy_evidence"
-            )
+        "scientific_role": scientific_role,
+        "contract_mode": contract_mode,
+        "simulator_regime_id": simulator_regime_id,
+        "simulator_overrides": simulator_overrides,
+        "resolved_simulator_config_sha256": canonical_json_digest(
+            resolved_simulator_config
         ),
-        "contract_mode": (
-            "technical_h38_late_resource_preflight"
-            if technical_preflight
-            else (
-                "nonproduction_full_factorial_smoke"
-                if nonproduction_full_factorial_smoke
-                else "production_100_block_four_height_three_placement_shortlist"
-            )
+        "paired_seed_reference_bank_id": (
+            None
+            if simulator_regime_id == BASELINE_SIMULATOR_REGIME
+            else DEFAULT_BANK_ID
+        ),
+        "paired_seed_semantics": (
+            "reference_regime"
+            if simulator_regime_id == BASELINE_SIMULATOR_REGIME
+            else "same_coordinate_seed_map_changed_simulator_parameter"
         ),
         "base_seed": int(base_seed),
         "seed_namespace": SEED_NAMESPACE,
@@ -646,6 +682,7 @@ def _new_manifest(
         "sampling_rule": SAMPLING_RULE,
         "shortlist_arm_ids": list(SHORTLIST_ARM_IDS),
         "v2_reproduction_arm_ids": list(V2_COMPLETE_ARM_IDS),
+        "selected_algorithm_arm_ids": list(SELECTED_V2_ARM_IDS),
         "independent_unit": "truth_block",
         "resource_contract": dict(resources),
         "distance_execution_semantics": DISTANCE_EXECUTION_SEMANTICS,
@@ -732,6 +769,11 @@ def _resume_manifest(
         "schema_version",
         "bank_id",
         "contract_mode",
+        "simulator_regime_id",
+        "simulator_overrides",
+        "resolved_simulator_config_sha256",
+        "paired_seed_reference_bank_id",
+        "paired_seed_semantics",
         "base_seed",
         "seed_namespace",
         "base_config_sha256",
@@ -740,12 +782,20 @@ def _resume_manifest(
         "placement_policies",
         "simulation_height",
         "declared_condition_count",
+        "selected_algorithm_arm_ids",
         "resource_contract",
     ):
         if manifest.get(field) != expected.get(field):
             raise ValueError(
                 f"Cannot resume because stored {field} does not match this command."
             )
+    stored_config_path = root / BANK_CONFIG_NAME
+    if not stored_config_path.is_file() or canonical_json_digest(
+        read_json(stored_config_path)
+    ) != expected.get("resolved_simulator_config_sha256"):
+        raise ValueError(
+            "Cannot resume because the resolved simulator config changed."
+        )
     if manifest.get("status") == "complete":
         raise ValueError("A completed shortlist bank cannot be resumed.")
     if manifest.get("status") not in {"in_progress", "failure"}:
@@ -797,6 +847,7 @@ def generate_bank(
     *,
     output_root: Path | str,
     base_config_path: Path | str = DEFAULT_BASE_CONFIG,
+    simulator_regime_id: str = BASELINE_SIMULATOR_REGIME,
     base_seed: int = DEFAULT_BASE_SEED,
     block_count: int = DEFAULT_BLOCK_COUNT,
     heights: Sequence[int] = HEIGHTS,
@@ -816,6 +867,13 @@ def generate_bank(
     resume: bool = False,
 ) -> dict[str, Any]:
     """Generate every declared input once; failures remain typed and unreplaced."""
+    simulator_regime_id = str(simulator_regime_id)
+    if simulator_regime_id not in SIMULATOR_REGIMES:
+        raise ValueError(
+            "simulator_regime_id must be one of "
+            f"{SIMULATOR_REGIMES}."
+        )
+    regime_heights = HEIGHTS_BY_SIMULATOR_REGIME[simulator_regime_id]
     if isinstance(base_seed, bool) or not isinstance(base_seed, int) or base_seed < 0:
         raise ValueError("base_seed must be a nonnegative integer.")
     validate_positive_integer(block_count, "block_count")
@@ -824,9 +882,12 @@ def generate_bank(
     if (
         not normalized_heights
         or tuple(sorted(set(normalized_heights))) != normalized_heights
-        or any(value not in HEIGHTS for value in normalized_heights)
+        or any(value not in regime_heights for value in normalized_heights)
     ):
-        raise ValueError(f"heights must be an ordered subset of {HEIGHTS}.")
+        raise ValueError(
+            f"heights must be an ordered subset of {regime_heights} for "
+            f"{simulator_regime_id}."
+        )
     if (
         not normalized_policies
         or len(set(normalized_policies)) != len(normalized_policies)
@@ -837,17 +898,21 @@ def generate_bank(
         )
     if not technical_preflight and (
         (block_count != DEFAULT_BLOCK_COUNT and not allow_nonproduction_size)
-        or normalized_heights != HEIGHTS
+        or normalized_heights != regime_heights
         or normalized_policies != PLACEMENT_POLICIES
     ):
         raise ValueError(
             "The production shortlist bank requires exactly 100 blocks, "
-            "H14/H24/H34/H38, and spread/late/random policies."
+            f"heights {regime_heights}, and spread/late/random policies."
         )
     if technical_preflight and not (
-        normalized_heights == (38,) and normalized_policies == ("late",)
+        normalized_heights == (regime_heights[-1],)
+        and normalized_policies == ("late",)
     ):
-        raise ValueError("The technical resource preflight is fixed to H38-late.")
+        raise ValueError(
+            "The technical resource preflight is fixed to "
+            f"H{regime_heights[-1]}-late for {simulator_regime_id}."
+        )
     for field, value in (
         ("simulation_timeout_seconds", simulation_timeout_seconds),
         ("distance_timeout_seconds", distance_timeout_seconds),
@@ -875,6 +940,12 @@ def generate_bank(
     base_config = read_json(config_path)
     _validate_standard_base_config(base_config)
     simulation_config = dict(base_config)
+    simulation_config["CNA_EVENT_PROBABILITY"] = (
+        CNA_EVENT_PROBABILITY_BY_SIMULATOR_REGIME[simulator_regime_id]
+    )
+    simulation_config.update(
+        deepcopy(SIMULATOR_OVERRIDES_BY_REGIME[simulator_regime_id])
+    )
     simulation_config["NUMBER_OF_GENERATIONS"] = max(normalized_heights)
     load_simulator_inputs(simulation_config)
     resource_contract = {
@@ -897,6 +968,8 @@ def generate_bank(
     }
     expected = _new_manifest(
         config_path=config_path,
+        simulator_regime_id=simulator_regime_id,
+        resolved_simulator_config=simulation_config,
         block_count=block_count,
         base_seed=base_seed,
         heights=normalized_heights,
@@ -1299,9 +1372,24 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--base-config", type=Path, default=DEFAULT_BASE_CONFIG)
+    parser.add_argument(
+        "--simulator-regime",
+        dest="simulator_regime_id",
+        choices=SIMULATOR_REGIMES,
+        default=BASELINE_SIMULATOR_REGIME,
+        help=(
+            "Frozen baseline or paired sensitivity regime; each sensitivity "
+            "retains the baseline coordinate-derived seed map."
+        ),
+    )
     parser.add_argument("--base-seed", type=int, default=DEFAULT_BASE_SEED)
     parser.add_argument("--block-count", type=int, default=DEFAULT_BLOCK_COUNT)
-    parser.add_argument("--heights", type=int, nargs="+", default=list(HEIGHTS))
+    parser.add_argument(
+        "--heights",
+        type=int,
+        nargs="+",
+        help="Defaults to the complete height set frozen for the selected regime.",
+    )
     parser.add_argument(
         "--placement-policies",
         nargs="+",
@@ -1349,9 +1437,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     manifest = generate_bank(
         output_root=arguments.output_root,
         base_config_path=arguments.base_config,
+        simulator_regime_id=arguments.simulator_regime_id,
         base_seed=arguments.base_seed,
         block_count=arguments.block_count,
-        heights=arguments.heights,
+        heights=(
+            arguments.heights
+            if arguments.heights is not None
+            else HEIGHTS_BY_SIMULATOR_REGIME[arguments.simulator_regime_id]
+        ),
         placement_policies=arguments.placement_policies,
         simulation_timeout_seconds=arguments.simulation_timeout_seconds,
         distance_timeout_seconds=arguments.distance_timeout_seconds,

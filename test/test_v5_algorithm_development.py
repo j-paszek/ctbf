@@ -12,6 +12,7 @@ from algorithm_evaluation.process_isolation import (
 )
 from algorithm_evaluation.v5_algorithm_development_bank import generate_bank
 from algorithm_evaluation.v5_algorithm_development_common import (
+    ADAPTIVE_PARTIAL_RADIUS_EXTENSION_ARM_SPECS,
     ADAPTIVE_RADIUS_EXTENSION_ARM_SPECS,
     ARM_SPEC_BY_ID,
     BIOPSY_GUIDED_FULL_COUNTERPART_BY_PARTIAL_ID,
@@ -41,6 +42,10 @@ from algorithm_evaluation.v5_algorithm_development_common import (
     PARTIAL_BOTTOM_TOP_EXTENSION_ARM_SPECS,
     PARTIAL_BOTTOM_TOP_INTERACTION_ARM_ID,
     PARTIAL_BOTTOM_TOP_INTERACTION_ROLE,
+    PARTIAL_ADAPTIVE_MEDIAN_U_ID,
+    PARTIAL_ADAPTIVE_MEDIAN_V_ID,
+    PARTIAL_ADAPTIVE_MEDIAN_Y_ID,
+    PARTIAL_ADAPTIVE_MEDIAN_Z_ID,
     PARTIAL_FAMILY,
     PARTIAL_TOP_EXTENSION_ARM_SPECS,
     REPORT_SCHEMA_VERSION,
@@ -81,6 +86,7 @@ from reconstructor_biopsy_blocks import (
     ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
     BIOPSY_GUIDED_AUDIT_COUNTERS,
     BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION,
+    FROZEN_TRANSITION_PARENT_ELIGIBILITY_POLICY,
 )
 
 
@@ -171,6 +177,9 @@ def _success_record(case: dict, arm_id: str, family: str, score: float) -> dict:
 def test_full_attachment_audit_derives_the_prespecified_hard_burden():
     audit = {
         "schema_version": BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION,
+        "parent_eligibility_policy": (
+            FROZEN_TRANSITION_PARENT_ELIGIBILITY_POLICY
+        ),
         **{field: 0 for field in BIOPSY_GUIDED_AUDIT_COUNTERS},
         "child_decision_count": 10,
         "raw_radius_candidate_total": 20,
@@ -201,6 +210,9 @@ def test_full_attachment_audit_derives_the_prespecified_hard_burden():
 def test_full_attachment_audit_rejects_inconsistent_decision_categories():
     audit = {
         "schema_version": BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION,
+        "parent_eligibility_policy": (
+            FROZEN_TRANSITION_PARENT_ELIGIBILITY_POLICY
+        ),
         **{field: 0 for field in BIOPSY_GUIDED_AUDIT_COUNTERS},
         "child_decision_count": 1,
         "selected_parent_count": 1,
@@ -304,11 +316,17 @@ def test_fully_labeled_biopsy_guided_roster_covers_every_projected_arm_once():
         for spec in (
             PARTIAL_TOP_EXTENSION_ARM_SPECS
             + PARTIAL_BOTTOM_EXTENSION_ARM_SPECS
+            + ADAPTIVE_PARTIAL_RADIUS_EXTENSION_ARM_SPECS
         )
+        if spec.top_output_projection
+        == TOP_OUTPUT_PROJECTION_CREATED_NODES_UNLABELED
     }
     assert set(BIOPSY_GUIDED_FULL_COUNTERPART_BY_PARTIAL_ID) == projected_ids
     assert set(BIOPSY_GUIDED_FULL_COUNTERPART_BY_PARTIAL_ID.values()) == {
         spec.arm_id for spec in BIOPSY_GUIDED_FULL_EXTENSION_ARM_SPECS
+    } | {
+        BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFERRED_ID,
+        BIOPSY_GUIDED_FULL_ADAPTIVE_MEDIAN_DEFAULT_ID,
     }
     assert len(BIOPSY_GUIDED_FULL_EXTENSION_ARM_SPECS) == 10
     assert BIOPSY_GUIDED_FULL_DEFAULT_ID in {
@@ -404,7 +422,61 @@ def test_adaptive_radius_extension_is_the_ordered_bottom_top_factorial():
     assert metadata["radius_policy"] == ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY
     audit = metadata["biopsy_layer_decision_audit"]
     assert audit["schema_version"] == ADAPTIVE_BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION
+    assert audit["parent_eligibility_policy"] == (
+        FROZEN_TRANSITION_PARENT_ELIGIBILITY_POLICY
+    )
     assert len(audit["transition_records"]) == 2
+
+
+def test_adaptive_partial_radius_extension_is_the_ordered_bottom_top_factorial():
+    assert len(ADAPTIVE_PARTIAL_RADIUS_EXTENSION_ARM_SPECS) == 4
+    assert [
+        spec.arm_id for spec in ADAPTIVE_PARTIAL_RADIUS_EXTENSION_ARM_SPECS
+    ] == [
+        PARTIAL_ADAPTIVE_MEDIAN_Y_ID,
+        PARTIAL_ADAPTIVE_MEDIAN_Z_ID,
+        PARTIAL_ADAPTIVE_MEDIAN_V_ID,
+        PARTIAL_ADAPTIVE_MEDIAN_U_ID,
+    ]
+    expected = (
+        (
+            "deferred_tie",
+            INFERRED_COPY_INCUMBENT_ID,
+            TOP_OUTPUT_PROJECTION_CREATED_NODES_UNLABELED,
+        ),
+        ("deferred_tie", "neighbor_joining_classical", TOP_OUTPUT_PROJECTION_NONE),
+        (
+            "default",
+            INFERRED_COPY_INCUMBENT_ID,
+            TOP_OUTPUT_PROJECTION_CREATED_NODES_UNLABELED,
+        ),
+        ("default", "neighbor_joining_classical", TOP_OUTPUT_PROJECTION_NONE),
+    )
+    payload = _input_payload()
+    for spec, (preset, algorithm, projection) in zip(
+        ADAPTIVE_PARTIAL_RADIUS_EXTENSION_ARM_SPECS,
+        expected,
+        strict=True,
+    ):
+        assert spec.family == PARTIAL_FAMILY
+        assert spec.primary_metric == "grf"
+        assert spec.radius is None
+        assert spec.radius_policy == ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY
+        assert spec.biopsy_preset == preset
+        assert spec.algorithm_name == algorithm
+        assert spec.top_output_projection == projection
+        tree, _levels, _root, metadata = reconstruct_development_arm(
+            spec,
+            payload,
+            _distance(payload),
+            reconstruction_seed=23,
+        )
+        assert nx.is_arborescence(tree)
+        assert metadata["radius"] is None
+        assert metadata["radius_policy"] == ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY
+        assert metadata["biopsy_layer_decision_audit"]["schema_version"] == (
+            ADAPTIVE_BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION
+        )
 
 
 def test_projected_parent_reuse_preserves_copy_up_labels_and_permits_polytomy():
@@ -1014,7 +1086,10 @@ def test_every_development_extension_is_deterministic_on_the_semantic_fixture(sp
     assert canonical_topology_digest(first) == canonical_topology_digest(second)
     assert first_metadata == second_metadata
     audit = first_metadata["biopsy_layer_decision_audit"]
-    assert audit["schema_version"] == "ctbf-biopsy-guided-decision-audit-v1"
+    assert audit["schema_version"] == BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION
+    assert audit["parent_eligibility_policy"] == (
+        FROZEN_TRANSITION_PARENT_ELIGIBILITY_POLICY
+    )
     assert (
         audit["selected_parent_count"] + audit["copy_up_count"]
         == audit["child_decision_count"]

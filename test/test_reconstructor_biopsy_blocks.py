@@ -162,8 +162,8 @@ def test_adaptive_transition_radii_are_frozen_before_reverse_copy_up():
     transitions = audit.as_record()["transition_records"]
     assert [row["effective_radius"] for row in transitions] == [1, 1]
     assert transitions[0]["child_snapshot_count"] == 2
-    assert transitions[0]["decision_counters"]["child_decision_count"] == 3
-    assert transitions[1]["decision_counters"]["copy_up_count"] == 1
+    assert transitions[0]["decision_counters"]["child_decision_count"] == 4
+    assert transitions[1]["decision_counters"]["copy_up_count"] == 2
     assert nx.is_directed_acyclic_graph(tree)
 
 
@@ -658,31 +658,58 @@ def test_reconstruct_biopsy_layers_uses_configured_candidate_selector():
     assert tree.edges[parent_b.node_id, child.node_id]["weight"] == 2.0
 
 
-def test_reconstruct_biopsy_layers_reuses_missing_parent_added_within_level():
-    child_a = Genotype([2, 2], 1)
-    child_a.node_id = 10
-    child_b = Genotype([2, 2], 1)
-    child_b.node_id = 11
-    cell_lists = [[], [child_a, child_b]]
-    distances = np.array([[0.0]])
-    id_to_index = make_id_to_index([1])
-    tree = nx.DiGraph()
-    for cell in [child_a, child_b]:
-        tree.add_node(cell.node_id, genome=cell.genome, cell_id=cell.cell_id)
-
-    reconstruct_biopsy_layers(
-        cell_lists,
-        tree,
-        defaultdict(lambda: None),
-        distances,
-        id_to_index,
-        radius=0,
-        unique_node_counter=itertools.count(start=20),
+def test_transition_parent_snapshot_prevents_copy_up_order_dependence():
+    distances = np.array(
+        [
+            [0.0, 5.0, 1.0],
+            [5.0, 0.0, 0.5],
+            [1.0, 0.5, 0.0],
+        ]
     )
 
-    assert [cell.node_id for cell in cell_lists[0]] == [20]
-    assert tree.has_edge(20, child_a.node_id)
-    assert tree.has_edge(20, child_b.node_id)
+    def reconstruct(child_order):
+        cells = {
+            0: Genotype([2, 2], 0),
+            1: Genotype([3, 2], 1),
+            2: Genotype([2, 3], 2),
+        }
+        for cell in cells.values():
+            cell.node_id = cell.cell_id
+        cell_lists = [[cells[0]], [cells[cell_id] for cell_id in child_order]]
+        tree = nx.DiGraph()
+        for cell in cells.values():
+            tree.add_node(cell.node_id, genome=cell.genome, cell_id=cell.cell_id)
+
+        reconstruct_biopsy_layers(
+            cell_lists,
+            tree,
+            defaultdict(lambda: None),
+            distances,
+            make_id_to_index([0, 1, 2]),
+            radius=None,
+            unique_node_counter=itertools.count(start=10),
+            config=BiopsyGuidedConfig(
+                candidate_tie_breaker=select_deferred_candidate,
+                radius_policy=ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY,
+            ),
+        )
+        labeled_edges = {
+            (
+                tree.nodes[parent]["cell_id"],
+                tree.nodes[child]["cell_id"],
+                float(tree.edges[parent, child]["weight"]),
+            )
+            for parent, child in tree.edges
+        }
+        return cell_lists, labeled_edges
+
+    forward_levels, forward_edges = reconstruct((1, 2))
+    reverse_levels, reverse_edges = reconstruct((2, 1))
+
+    expected_edges = {(1, 1, 0.0), (0, 2, 1.0)}
+    assert forward_edges == reverse_edges == expected_edges
+    assert [cell.cell_id for cell in forward_levels[0]] == [0, 1]
+    assert [cell.cell_id for cell in reverse_levels[0]] == [0, 1]
 
 
 def test_biopsy_guided_config_can_use_anticentral_candidate_tie_breaker():

@@ -1,7 +1,7 @@
 import itertools
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Sequence
 
 import networkx as nx
 import numpy as np
@@ -11,7 +11,10 @@ from reconstructor_plausibility import is_biologically_plausible_ancestor
 from simulator import Genotype
 
 
-BiopsyCandidateSelector = Callable[[object, list, np.ndarray, dict, float], object | None]
+BiopsyCandidateSelector = Callable[
+    [object, Sequence, np.ndarray, dict, float],
+    object | None,
+]
 BiopsyTieBreaker = Callable[[list, object, np.ndarray, dict], object | None]
 BiopsyAttachmentStrategy = Callable[[nx.DiGraph, object, object, np.ndarray, dict], None]
 BiopsyGroupAttachmentStrategy = Callable[
@@ -26,9 +29,12 @@ BiopsyLevelExtender = Callable[[list], list]
 FinalCellSelector = Callable[[list], list]
 
 
-BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION = "ctbf-biopsy-guided-decision-audit-v1"
+BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION = "ctbf-biopsy-guided-decision-audit-v3"
 ADAPTIVE_BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION = (
-    "ctbf-biopsy-guided-decision-audit-v2"
+    BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION
+)
+FROZEN_TRANSITION_PARENT_ELIGIBILITY_POLICY = (
+    "frozen_transition_parent_snapshot_batch_copy_up"
 )
 ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY = (
     "adaptive_median_prior_nn_q50_nearest_rank_min1"
@@ -133,6 +139,9 @@ class BiopsyGuidedDecisionAudit:
     def as_record(self) -> dict[str, object]:
         record = {
             "schema_version": BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION,
+            "parent_eligibility_policy": (
+                FROZEN_TRANSITION_PARENT_ELIGIBILITY_POLICY
+            ),
             **self.counters,
         }
         if self.radius_policy is None:
@@ -928,17 +937,22 @@ def reconstruct_biopsy_layers(
             decision_audit.begin_transition(transition_index)
         try:
             upper_cells = cell_lists[transition_index]
-            bottom_cells = cell_lists[level_index]
+            eligible_parent_cells = tuple(upper_cells)
+            bottom_cells = tuple(cell_lists[level_index])
             children_by_parent = defaultdict(list)
-            upper_indices = _cell_indices(upper_cells, id_to_index)
+            children_requiring_copy = []
+            eligible_parent_indices = _cell_indices(
+                eligible_parent_cells,
+                id_to_index,
+            )
             for y in bottom_cells:
                 if decision_audit is not None:
                     decision_audit.increment("child_decision_count")
                 if use_default_candidate_selector:
                     parent = _select_biopsy_parent_from_indices(
                         y,
-                        upper_cells,
-                        upper_indices,
+                        eligible_parent_cells,
+                        eligible_parent_indices,
                         full_dist_matrix,
                         id_to_index,
                         effective_radius,
@@ -949,7 +963,7 @@ def reconstruct_biopsy_layers(
                 else:
                     parent = config.candidate_selector(
                         y,
-                        upper_cells,
+                        eligible_parent_cells,
                         full_dist_matrix,
                         id_to_index,
                         effective_radius,
@@ -963,7 +977,13 @@ def reconstruct_biopsy_layers(
 
                 if decision_audit is not None:
                     decision_audit.increment("copy_up_count")
-                upper_len_before = len(upper_cells)
+                children_requiring_copy.append(y)
+
+            # Parent eligibility is frozen for the complete transition.  A
+            # missing-parent copy inferred for one child must not become a
+            # candidate for a later child merely because that child appears
+            # later in the input list.
+            for y in children_requiring_copy:
                 config.missing_parent_strategy(
                     y,
                     upper_cells,
@@ -972,11 +992,6 @@ def reconstruct_biopsy_layers(
                     unique_node_counter,
                     copied_level=len(cell_lists) - level_index,
                 )
-                if (
-                    use_default_candidate_selector
-                    and len(upper_cells) != upper_len_before
-                ):
-                    upper_indices = _cell_indices(upper_cells, id_to_index)
 
             child_level = len(cell_lists) - level_index - 1
             for parent, children in children_by_parent.items():
@@ -1022,6 +1037,7 @@ __all__ = [
     "ADAPTIVE_BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION",
     "ADAPTIVE_MEDIAN_PRIOR_NN_RADIUS_POLICY",
     "BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION",
+    "FROZEN_TRANSITION_PARENT_ELIGIBILITY_POLICY",
     "BiopsyGuidedConfig",
     "BiopsyGuidedDecisionAudit",
     "BiopsySubtreeConfig",
