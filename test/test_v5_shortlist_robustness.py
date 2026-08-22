@@ -30,6 +30,7 @@ from algorithm_evaluation.v5_shortlist_robustness_common import (
     ADAPTIVE_RADIUS_ARM_IDS,
     ALL_ADAPTIVE_RADIUS_ARM_IDS,
     ARM_SET_BY_NAME,
+    CURRENT_PAPER_DEVELOPMENT_ARM_IDS,
     DECLARED_METRICS,
     DISTANCE_EXECUTION_SCHEMA_VERSION,
     FULL_DEVELOPMENT_ARM_IDS,
@@ -46,6 +47,7 @@ from algorithm_evaluation.v5_shortlist_robustness_common import (
     PARTIAL_W_ID,
     PARTIAL_X_ID,
     POOLED_D_ID,
+    POOLED_E_ID,
     PREVIOUS_RUN_SCHEMA_VERSION,
     REPORT_SCHEMA_VERSION,
     SELECTED_V2_ARM_IDS,
@@ -75,8 +77,13 @@ from algorithm_evaluation.v5_shortlist_robustness_report import (
 )
 from algorithm_evaluation.v5_shortlist_robustness_run import run_shortlist
 from algorithm_evaluation.v5_shortlist_resource_isolation_probe import run_probe
+from algorithm_evaluation import v5_frozen_transition_development_report
 from ctbs import DistanceMatrix
 from distance_semantics import cnp2cnp_provenance
+from reconstructor_biopsy_blocks import (
+    BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION,
+    FROZEN_TRANSITION_PARENT_ELIGIBILITY_POLICY,
+)
 from simulator import Genotype, SimulationResourceLimitExceeded
 
 
@@ -214,6 +221,14 @@ def test_shortlist_schedules_are_fixed_and_random_is_prospective():
         PARTIAL_ADAPTIVE_RADIUS_ARM_IDS
     )
     assert ARM_SET_BY_NAME["selected-all"] == SELECTED_V2_ARM_IDS
+    assert ARM_SET_BY_NAME["current-paper-development"] == (
+        POOLED_E_ID,
+        POOLED_D_ID,
+        ADAPTIVE_A_PRIME_ID,
+        ADAPTIVE_B_PRIME_ID,
+        PARTIAL_X_ID,
+        PARTIAL_ADAPTIVE_Y_PRIME_ID,
+    ) == CURRENT_PAPER_DEVELOPMENT_ARM_IDS
     assert SELECTED_V2_ARM_IDS == (
         FULL_DEVELOPMENT_ARM_IDS + PARTIAL_DEVELOPMENT_ARM_IDS
     )
@@ -827,6 +842,100 @@ def test_one_block_full_factorial_reuses_generation_samples_and_reports_interact
     assert report["depth_interactions"]
     assert report["placement_interactions"]
     assert report["dependence_contract"]["independent_block_count"] == 1
+
+
+def test_current_paper_development_roster_runs_with_current_audits(
+    tmp_path,
+    monkeypatch,
+):
+    bank_root = tmp_path / "current-paper-bank"
+    manifest = generate_bank(
+        output_root=bank_root,
+        block_count=1,
+        allow_nonproduction_size=True,
+        distance_compute=_injected_distance,
+        simulator_factory=lambda mapping, seed: _TinyH38Simulator(mapping, seed),
+        created_at_utc="fixture",
+    )
+
+    run_root = tmp_path / "current-paper-run"
+    result = run_shortlist(
+        bank_root=bank_root,
+        output_root=run_root,
+        run_id="fixture-current-paper-development",
+        arm_set="current-paper-development",
+        expected_block_count=1,
+        created_at_utc="fixture",
+    )
+
+    assert result["arm_ids"] == list(CURRENT_PAPER_DEVELOPMENT_ARM_IDS)
+    assert result["completed_record_count"] == (
+        manifest["available_condition_count"]
+        * len(CURRENT_PAPER_DEVELOPMENT_ARM_IDS)
+    )
+    assert result["failure_count"] == 0
+    for record in result["records"]:
+        if record["arm_id"] not in {
+            ADAPTIVE_A_PRIME_ID,
+            ADAPTIVE_B_PRIME_ID,
+            PARTIAL_ADAPTIVE_Y_PRIME_ID,
+        }:
+            continue
+        audit = record["reconstruction_metadata"][
+            "biopsy_layer_decision_audit"
+        ]
+        assert audit["schema_version"] == BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION
+        assert audit["parent_eligibility_policy"] == (
+            FROZEN_TRANSITION_PARENT_ELIGIBILITY_POLICY
+        )
+
+    report = write_report(
+        result_root=run_root,
+        output_root=tmp_path / "current-paper-report",
+        expected_block_count=1,
+        created_at_utc="fixture",
+    )
+    assert report["arm_count"] == len(CURRENT_PAPER_DEVELOPMENT_ARM_IDS)
+    assert set(report["shortlist_arm_ids"]) == set(
+        CURRENT_PAPER_DEVELOPMENT_ARM_IDS
+    )
+
+    historical_root = tmp_path / "historical-current-paper-run"
+    historical_root.mkdir()
+    historical = copy.deepcopy(result)
+    for record in historical["records"]:
+        if record["arm_id"] not in {
+            ADAPTIVE_A_PRIME_ID,
+            ADAPTIVE_B_PRIME_ID,
+            PARTIAL_ADAPTIVE_Y_PRIME_ID,
+        }:
+            continue
+        audit = record["reconstruction_metadata"][
+            "biopsy_layer_decision_audit"
+        ]
+        audit["schema_version"] = "ctbf-biopsy-guided-decision-audit-v2"
+        audit.pop("parent_eligibility_policy")
+    write_json(historical_root / "result.json", historical)
+
+    monkeypatch.setattr(
+        v5_frozen_transition_development_report,
+        "DEFAULT_BLOCK_COUNT",
+        1,
+    )
+    current_bundle = (
+        v5_frozen_transition_development_report._load_current_bundle(
+            "v2-baseline-cna-0.001",
+            run_root,
+        )
+    )
+    historical_bundle = (
+        v5_frozen_transition_development_report._load_historical_bundle(
+            "v2-baseline-cna-0.001",
+            (historical_root,),
+            current=current_bundle,
+        )
+    )
+    assert set(current_bundle.records) == set(historical_bundle.records)
 
 
 def test_shortlist_bank_resume_preserves_completed_block_prefix(tmp_path):

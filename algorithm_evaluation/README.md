@@ -726,6 +726,45 @@ separate CSV tables for pairing inventory, all-arm metrics by height and
 placement, method-contrast shifts, truth/input diagnostics, and adaptive-radius
 response.
 
+### Frozen-transition six-arm development refresh
+
+The G3-00 correction changed every biopsy-guided transition from online copy
+reuse to one frozen eligible-parent snapshot followed by batched copy-up. The
+preserved v2/v2a/v2b/v2c banks and cnp2cnp matrices remain valid, while their
+completed biopsy-guided records are historical provenance only. The bounded
+refresh reruns the exact current theory portfolio:
+
+- partial: X and Y';
+- fully labeled: E, D, A', and B'.
+
+The pipeline first validates all four banks and the complete historical
+six-arm inventory, then writes corrected runs and within-regime reports under
+`frozen_transition_v3/`. It automatically resumes interrupted run prefixes
+and reuses already completed regimes. Finally it writes a paired verification
+report comparing current method contrasts, A'/B'/Y' score changes, and exact
+X/E/D reproducibility. It does not regenerate simulation, biopsy, or distance
+assets and does not treat this repeatedly used development bank as held-out
+confirmation.
+
+```bash
+python -m algorithm_evaluation.v5_frozen_transition_development_run \
+  --experiment-root algorithm_evaluation/results/v5_development/shortlist_robustness \
+  --record-workers 8 \
+  --progress
+```
+
+The four runs contain 25,146 records in total: 7,200 for v2, 3,546 for the
+591-condition v2a bank, and 7,200 each for v2b and v2c. The default output is:
+
+- `frozen_transition_v3/{v2,v2a,v2b,v2c}/run/result.json`;
+- `frozen_transition_v3/{v2,v2a,v2b,v2c}/report/`;
+- `frozen_transition_v3/verification/report.md`, `summary.json`, and the
+  complete CSV tables; and
+- `frozen_transition_v3/pipeline_manifest.json`.
+
+Rerun the identical command after a normal interruption or hard process
+termination. Existing completed roots are validated rather than overwritten.
+
 ## CTBF v5 non-paper reconstruction-intuition probe
 
 `simulator_reconstruction_intuition_probe.py` implements the owner-approved
