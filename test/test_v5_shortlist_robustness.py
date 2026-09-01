@@ -30,9 +30,12 @@ from algorithm_evaluation.v5_shortlist_robustness_common import (
     ADAPTIVE_RADIUS_ARM_IDS,
     ALL_ADAPTIVE_RADIUS_ARM_IDS,
     ARM_SET_BY_NAME,
+    BASELINE_SIMULATOR_REGIME,
     CURRENT_PAPER_DEVELOPMENT_ARM_IDS,
+    CURRENT_PAPER_DEVELOPMENT_WITH_POOLED_Q_ARM_IDS,
     DECLARED_METRICS,
     DISTANCE_EXECUTION_SCHEMA_VERSION,
+    FIXED_RADIUS_CORRECTION_ARM_IDS,
     FULL_DEVELOPMENT_ARM_IDS,
     INTERMEDIATE_RUN_SCHEMA_VERSION,
     ORDERED_A_ID,
@@ -46,8 +49,11 @@ from algorithm_evaluation.v5_shortlist_robustness_common import (
     PARTIAL_DEVELOPMENT_ARM_IDS,
     PARTIAL_W_ID,
     PARTIAL_X_ID,
+    PARTIAL_Y_ID,
     POOLED_D_ID,
     POOLED_E_ID,
+    POOLED_Q_EXTENSION_ARM_IDS,
+    POOLED_Q_ID,
     PREVIOUS_RUN_SCHEMA_VERSION,
     REPORT_SCHEMA_VERSION,
     SELECTED_V2_ARM_IDS,
@@ -77,7 +83,13 @@ from algorithm_evaluation.v5_shortlist_robustness_report import (
 )
 from algorithm_evaluation.v5_shortlist_robustness_run import run_shortlist
 from algorithm_evaluation.v5_shortlist_resource_isolation_probe import run_probe
-from algorithm_evaluation import v5_frozen_transition_development_report
+from algorithm_evaluation import (
+    v5_frozen_transition_development_report,
+    v5_frozen_transition_development_run,
+)
+from algorithm_evaluation.v5_frozen_transition_development_run import (
+    _assert_existing_report_values_preserved,
+)
 from ctbs import DistanceMatrix
 from distance_semantics import cnp2cnp_provenance
 from reconstructor_biopsy_blocks import (
@@ -229,6 +241,20 @@ def test_shortlist_schedules_are_fixed_and_random_is_prospective():
         PARTIAL_X_ID,
         PARTIAL_ADAPTIVE_Y_PRIME_ID,
     ) == CURRENT_PAPER_DEVELOPMENT_ARM_IDS
+    assert ARM_SET_BY_NAME["fixed-radius-correction"] == (
+        ORDERED_A_ID,
+        ORDERED_B_ID,
+        PARTIAL_Y_ID,
+    ) == FIXED_RADIUS_CORRECTION_ARM_IDS
+    assert ARM_SET_BY_NAME["pooled-q-extension"] == (
+        POOLED_Q_ID,
+    ) == POOLED_Q_EXTENSION_ARM_IDS
+    assert CURRENT_PAPER_DEVELOPMENT_WITH_POOLED_Q_ARM_IDS == (
+        *CURRENT_PAPER_DEVELOPMENT_ARM_IDS,
+        POOLED_Q_ID,
+    )
+    assert (POOLED_Q_ID, POOLED_E_ID) in FULL_PRINCIPAL_PAIRS
+    assert (POOLED_Q_ID, POOLED_D_ID) in FULL_PRINCIPAL_PAIRS
     assert SELECTED_V2_ARM_IDS == (
         FULL_DEVELOPMENT_ARM_IDS + PARTIAL_DEVELOPMENT_ARM_IDS
     )
@@ -900,6 +926,87 @@ def test_current_paper_development_roster_runs_with_current_audits(
         CURRENT_PAPER_DEVELOPMENT_ARM_IDS
     )
 
+    pooled_q_root = tmp_path / "pooled-q-run"
+    pooled_q = run_shortlist(
+        bank_root=bank_root,
+        output_root=pooled_q_root,
+        run_id="fixture-pooled-q-extension",
+        arm_set="pooled-q-extension",
+        expected_block_count=1,
+        created_at_utc="fixture",
+    )
+    assert pooled_q["arm_ids"] == [POOLED_Q_ID]
+    assert pooled_q["completed_record_count"] == manifest[
+        "available_condition_count"
+    ]
+    assert pooled_q["failure_count"] == 0
+    assert all(
+        record["reconstruction_metadata"]["algorithm"] == POOLED_Q_ID
+        and record["reconstruction_metadata"]["input_mode"] == "pooled"
+        for record in pooled_q["records"]
+    )
+
+    expanded_report = write_report(
+        result_roots=(run_root, pooled_q_root),
+        output_root=tmp_path / "current-paper-plus-pooled-q-report",
+        expected_block_count=1,
+        created_at_utc="fixture",
+    )
+    assert expanded_report["arm_count"] == len(
+        CURRENT_PAPER_DEVELOPMENT_WITH_POOLED_Q_ARM_IDS
+    )
+    assert set(expanded_report["shortlist_arm_ids"]) == set(
+        CURRENT_PAPER_DEVELOPMENT_WITH_POOLED_Q_ARM_IDS
+    )
+    assert expanded_report["comparison_groups"]["fully_labeled"][
+        "arm_ids"
+    ][0] == POOLED_Q_ID
+    _assert_existing_report_values_preserved(report, expanded_report)
+    expanded_markdown = (
+        tmp_path / "current-paper-plus-pooled-q-report" / "report.md"
+    ).read_text(encoding="utf-8")
+    assert "Pooled-Q-E" in expanded_markdown
+    assert "Pooled-Q-D" in expanded_markdown
+
+    fixed_radius_root = tmp_path / "fixed-radius-run"
+    fixed_radius = run_shortlist(
+        bank_root=bank_root,
+        output_root=fixed_radius_root,
+        run_id="fixture-fixed-radius-correction",
+        arm_set="fixed-radius-correction",
+        expected_block_count=1,
+        created_at_utc="fixture",
+    )
+    assert fixed_radius["arm_ids"] == list(FIXED_RADIUS_CORRECTION_ARM_IDS)
+    assert fixed_radius["completed_record_count"] == (
+        manifest["available_condition_count"]
+        * len(FIXED_RADIUS_CORRECTION_ARM_IDS)
+    )
+    assert fixed_radius["failure_count"] == 0
+    for record in fixed_radius["records"]:
+        audit = record["reconstruction_metadata"][
+            "biopsy_layer_decision_audit"
+        ]
+        assert audit["schema_version"] == BIOPSY_GUIDED_AUDIT_SCHEMA_VERSION
+        assert audit["parent_eligibility_policy"] == (
+            FROZEN_TRANSITION_PARENT_ELIGIBILITY_POLICY
+        )
+
+    combined_report = write_report(
+        result_roots=(run_root, fixed_radius_root),
+        output_root=tmp_path / "current-paper-plus-fixed-radius-report",
+        expected_block_count=1,
+        created_at_utc="fixture",
+    )
+    assert combined_report["arm_count"] == (
+        len(CURRENT_PAPER_DEVELOPMENT_ARM_IDS)
+        + len(FIXED_RADIUS_CORRECTION_ARM_IDS)
+    )
+    assert set(combined_report["shortlist_arm_ids"]) == {
+        *CURRENT_PAPER_DEVELOPMENT_ARM_IDS,
+        *FIXED_RADIUS_CORRECTION_ARM_IDS,
+    }
+
     historical_root = tmp_path / "historical-current-paper-run"
     historical_root.mkdir()
     historical = copy.deepcopy(result)
@@ -936,6 +1043,86 @@ def test_current_paper_development_roster_runs_with_current_audits(
         )
     )
     assert set(current_bundle.records) == set(historical_bundle.records)
+
+
+def test_pooled_q_extension_pipeline_preserves_completed_six_arm_outputs(
+    tmp_path,
+    monkeypatch,
+):
+    experiment_root = (tmp_path / "experiment").resolve()
+    bank_root = experiment_root / "bank_v1"
+    bank = generate_bank(
+        output_root=bank_root,
+        block_count=1,
+        allow_nonproduction_size=True,
+        distance_compute=_injected_distance,
+        simulator_factory=lambda mapping, seed: _TinyH38Simulator(mapping, seed),
+        created_at_utc="fixture",
+    )
+    base_output_root = experiment_root / "frozen_transition_v3"
+    base_run_root = base_output_root / "v2" / "run"
+    run_shortlist(
+        bank_root=bank_root,
+        output_root=base_run_root,
+        run_id="shortlist-v2-frozen-transition-v3",
+        arm_set="current-paper-development",
+        expected_block_count=1,
+        created_at_utc="fixture",
+    )
+    base_report_root = base_output_root / "v2" / "report"
+    write_report(
+        result_root=base_run_root,
+        output_root=base_report_root,
+        expected_block_count=1,
+        created_at_utc="fixture",
+    )
+
+    monkeypatch.setattr(
+        v5_frozen_transition_development_run,
+        "DEFAULT_BLOCK_COUNT",
+        1,
+    )
+    monkeypatch.setattr(
+        v5_frozen_transition_development_run,
+        "REGIME_IDS",
+        (BASELINE_SIMULATOR_REGIME,),
+    )
+    base_manifest = {
+        **v5_frozen_transition_development_run._manifest_contract(
+            experiment_root=experiment_root,
+            output_root=base_output_root,
+        ),
+        "status": "complete",
+    }
+    base_output_root.mkdir(parents=True, exist_ok=True)
+    write_json(base_output_root / "pipeline_manifest.json", base_manifest)
+
+    base_result_bytes = (base_run_root / "result.json").read_bytes()
+    base_summary_bytes = (base_report_root / "summary.json").read_bytes()
+    extension = v5_frozen_transition_development_run.run_pooled_q_extension(
+        experiment_root=experiment_root,
+        output_root=base_output_root,
+        record_workers=2,
+    )
+
+    assert extension["status"] == "complete"
+    assert extension["record_count"] == bank["available_condition_count"]
+    assert extension["failure_count"] == 0
+    assert extension["existing_report_values_preserved"] is True
+    assert (base_run_root / "result.json").read_bytes() == base_result_bytes
+    assert (base_report_root / "summary.json").read_bytes() == base_summary_bytes
+
+    expanded_root = base_output_root / "pooled_q_v1" / "v2" / "report"
+    expanded = read_json(expanded_root / "summary.json")
+    assert set(expanded["shortlist_arm_ids"]) == set(
+        CURRENT_PAPER_DEVELOPMENT_WITH_POOLED_Q_ARM_IDS
+    )
+    assert "Pooled-Q-E" in (expanded_root / "report.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Pooled-Q-D" in (expanded_root / "report.md").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_shortlist_bank_resume_preserves_completed_block_prefix(tmp_path):

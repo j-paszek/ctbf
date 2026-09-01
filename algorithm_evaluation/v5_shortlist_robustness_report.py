@@ -32,6 +32,7 @@ from algorithm_evaluation.v5_shortlist_robustness_common import (
     DECLARED_METRICS,
     DISTANCE_EXECUTION_SCHEMA_VERSION,
     FULL_DEVELOPMENT_ARM_IDS,
+    FULL_REPORT_ARM_IDS,
     FULL_V2_ARM_IDS,
     INTERMEDIATE_RUN_SCHEMA_VERSION,
     ORDERED_A_ID,
@@ -46,6 +47,8 @@ from algorithm_evaluation.v5_shortlist_robustness_common import (
     PARTIAL_DEVELOPMENT_ARM_IDS,
     PARTIAL_V2_ARM_IDS,
     POOLED_D_ID,
+    POOLED_E_ID,
+    POOLED_Q_ID,
     PREVIOUS_RUN_SCHEMA_VERSION,
     REPORT_SCHEMA_VERSION,
     RESULT_NAME,
@@ -88,6 +91,8 @@ FULL_PRINCIPAL_PAIRS = PRINCIPAL_PAIRS + tuple(
     (ADAPTIVE_C_PRIME_ID, ADAPTIVE_D_PRIME_ID),
     (ADAPTIVE_B_PRIME_ID, ADAPTIVE_D_PRIME_ID),
     (POOLED_D_ID, ADAPTIVE_A_PRIME_ID),
+    (POOLED_Q_ID, POOLED_E_ID),
+    (POOLED_Q_ID, POOLED_D_ID),
 )
 PARTIAL_PRINCIPAL_PAIRS = (
     (PARTIAL_V2_ARM_IDS[0], PARTIAL_V2_ARM_IDS[1]),  # X-Y
@@ -111,6 +116,7 @@ SHORT_DESCRIPTION_BY_ARM = {
     ORDERED_B_ID: "deferred-bottom rooted-Q r2 full",
     ORDERED_C_ID: "default-bottom binary-anticentral r4 full",
     POOLED_D_ID: "pooled plausible-parsimony full",
+    POOLED_Q_ID: "pooled rooted labeled-Q full",
     FULL_V2_ARM_IDS[4]: "pooled baseline full",
     FULL_V2_ARM_IDS[5]: "pooled hybrid-opt-refined full",
     FULL_V2_ARM_IDS[6]: "default-bottom binary-anticentral r2 full",
@@ -926,7 +932,7 @@ def build_report(
             }
         )
 
-    report_arm_order = FULL_DEVELOPMENT_ARM_IDS + PARTIAL_DEVELOPMENT_ARM_IDS
+    report_arm_order = FULL_REPORT_ARM_IDS + PARTIAL_DEVELOPMENT_ARM_IDS
     ordered_arm_ids = tuple(
         arm_id for arm_id in report_arm_order if arm_id in declared_arm_ids
     )
@@ -979,7 +985,7 @@ def build_report(
 
     full_group = comparison_group(
         "fully_labeled",
-        FULL_DEVELOPMENT_ARM_IDS,
+        FULL_REPORT_ARM_IDS,
         DECLARED_METRICS,
         "ad_f1",
     )

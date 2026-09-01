@@ -182,6 +182,7 @@ POOLED_D_ID = (
 )
 SHORTLIST_ARM_IDS = (ORDERED_A_ID, ORDERED_B_ID, ORDERED_C_ID, POOLED_D_ID)
 POOLED_E_ID = "neighbor_joining_baseline"
+POOLED_Q_ID = "rooted_labeled_nj"
 POOLED_F_ID = "neighbor_joining_hybrid_opt_refined"
 ORDERED_G_ID = "biopsy_guided_full_anticentral_binary_r2"
 FULL_EXTENSION_ARM_IDS = (POOLED_E_ID, POOLED_F_ID, ORDERED_G_ID)
@@ -197,6 +198,10 @@ ADAPTIVE_RADIUS_ARM_IDS = (
     ADAPTIVE_D_PRIME_ID,
 )
 FULL_DEVELOPMENT_ARM_IDS = FULL_V2_ARM_IDS + ADAPTIVE_RADIUS_ARM_IDS
+POOLED_Q_EXTENSION_ARM_IDS = (POOLED_Q_ID,)
+# Keep the frozen selected-v2 roster unchanged.  Pooled-Q is an additive
+# reportable arm executed in its own non-overlapping run.
+FULL_REPORT_ARM_IDS = POOLED_Q_EXTENSION_ARM_IDS + FULL_DEVELOPMENT_ARM_IDS
 
 PARTIAL_X_ID = "classical_partial"
 PARTIAL_Y_ID = (
@@ -230,12 +235,15 @@ ALL_ADAPTIVE_RADIUS_ARM_IDS = (
 )
 V2_EXTENSION_ARM_IDS = FULL_EXTENSION_ARM_IDS + PARTIAL_V2_ARM_IDS
 V2_COMPLETE_ARM_IDS = FULL_V2_ARM_IDS + PARTIAL_V2_ARM_IDS
-SUPPORTED_SHORTLIST_ARM_IDS = (
+FROZEN_SELECTED_V2_ARM_IDS = (
     V2_COMPLETE_ARM_IDS
     + ADAPTIVE_RADIUS_ARM_IDS
     + PARTIAL_ADAPTIVE_RADIUS_ARM_IDS
 )
 SELECTED_V2_ARM_IDS = FULL_DEVELOPMENT_ARM_IDS + PARTIAL_DEVELOPMENT_ARM_IDS
+SUPPORTED_SHORTLIST_ARM_IDS = (
+    FROZEN_SELECTED_V2_ARM_IDS + POOLED_Q_EXTENSION_ARM_IDS
+)
 CURRENT_PAPER_DEVELOPMENT_ARM_IDS = (
     POOLED_E_ID,
     POOLED_D_ID,
@@ -244,10 +252,18 @@ CURRENT_PAPER_DEVELOPMENT_ARM_IDS = (
     PARTIAL_X_ID,
     PARTIAL_ADAPTIVE_Y_PRIME_ID,
 )
+CURRENT_PAPER_DEVELOPMENT_WITH_POOLED_Q_ARM_IDS = (
+    CURRENT_PAPER_DEVELOPMENT_ARM_IDS + POOLED_Q_EXTENSION_ARM_IDS
+)
+FIXED_RADIUS_CORRECTION_ARM_IDS = (
+    ORDERED_A_ID,
+    ORDERED_B_ID,
+    PARTIAL_Y_ID,
+)
 
 if (
-    len(SELECTED_V2_ARM_IDS) != len(SUPPORTED_SHORTLIST_ARM_IDS)
-    or set(SELECTED_V2_ARM_IDS) != set(SUPPORTED_SHORTLIST_ARM_IDS)
+    len(SELECTED_V2_ARM_IDS) != len(FROZEN_SELECTED_V2_ARM_IDS)
+    or set(SELECTED_V2_ARM_IDS) != set(FROZEN_SELECTED_V2_ARM_IDS)
 ):
     raise RuntimeError("The labeled selected-v2 roster changed unexpectedly.")
 
@@ -261,6 +277,8 @@ ARM_SET_BY_NAME = {
     "partial-adaptive-radius": PARTIAL_ADAPTIVE_RADIUS_ARM_IDS,
     "selected-all": SELECTED_V2_ARM_IDS,
     "current-paper-development": CURRENT_PAPER_DEVELOPMENT_ARM_IDS,
+    "fixed-radius-correction": FIXED_RADIUS_CORRECTION_ARM_IDS,
+    "pooled-q-extension": POOLED_Q_EXTENSION_ARM_IDS,
 }
 
 SHORT_LABEL_BY_ARM = {
@@ -269,6 +287,7 @@ SHORT_LABEL_BY_ARM = {
     ORDERED_C_ID: "C",
     POOLED_D_ID: "D",
     POOLED_E_ID: "E",
+    POOLED_Q_ID: "Pooled-Q",
     POOLED_F_ID: "F",
     ORDERED_G_ID: "G",
     PARTIAL_X_ID: "X",
@@ -527,7 +546,7 @@ def shortlist_specs(
         raise ValueError(f"Unknown v2 shortlist arm ids: {unknown!r}.")
     specs = tuple(ARM_SPEC_BY_ID[arm_id] for arm_id in normalized)
     for spec in specs:
-        if spec.arm_id in FULL_DEVELOPMENT_ARM_IDS:
+        if spec.arm_id in FULL_REPORT_ARM_IDS:
             expected_primary = "ad_f1"
             expected_complementary = ("grf", "ad_precision", "ad_recall")
         else:
@@ -828,6 +847,7 @@ __all__ = [
     "CURRENT_PAPER_DEVELOPMENT_ARM_IDS",
     "DISTANCE_EXECUTION_SCHEMA_VERSION",
     "DISTANCE_EXECUTION_SEMANTICS",
+    "FIXED_RADIUS_CORRECTION_ARM_IDS",
     "HEIGHTS_BY_SIMULATOR_REGIME",
     "INTERMEDIATE_BANK_SCHEMA_VERSION",
     "INTERMEDIATE_RUN_SCHEMA_VERSION",
@@ -848,6 +868,7 @@ __all__ = [
     "PARTIAL_DECLARED_METRICS",
     "PARTIAL_DEVELOPMENT_ARM_IDS",
     "PARTIAL_X_ID",
+    "PARTIAL_Y_ID",
     "PARTIAL_V2_ARM_IDS",
     "PLACEMENT_POLICIES",
     "POOLED_D_ID",

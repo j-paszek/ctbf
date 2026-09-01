@@ -765,6 +765,70 @@ The four runs contain 25,146 records in total: 7,200 for v2, 3,546 for the
 Rerun the identical command after a normal interruption or hard process
 termination. Existing completed roots are validated rather than overwritten.
 
+#### Additive Pooled-Q comparison
+
+The completed six-arm runs remain immutable. To add the pooled
+`rooted_labeled_nj` comparator, run the same pipeline with the explicit
+additive flag:
+
+```bash
+python -m algorithm_evaluation.v5_frozen_transition_development_run \
+  --experiment-root algorithm_evaluation/results/v5_development/shortlist_robustness \
+  --add-pooled-q \
+  --record-workers 8 \
+  --progress
+```
+
+This reconstructs only Pooled-Q on the 4,191 available v2/v2a/v2b/v2c
+conditions. It neither reruns nor rewrites E, D, A', B', X, or Y'. The new
+non-overwriting output is nested under `frozen_transition_v3/pooled_q_v1/`:
+
+- `{v2,v2a,v2b,v2c}/run/result.json` contains only Pooled-Q records;
+- `{v2,v2a,v2b,v2c}/report/` merges the corresponding immutable six-arm run
+  with Pooled-Q into a seven-arm report; and
+- `pipeline_manifest.json` records the two-source provenance, failures, and an
+  exact validation that all existing score summaries, existing pairwise
+  effects, depth and placement interactions, and diagnostics are unchanged.
+
+AD-F1 remains the primary fully labeled metric and GRF remains complementary.
+The report includes Pooled-Q-minus-E and Pooled-Q-minus-D among its principal
+paired contrasts. Heights, placements, and simulator regimes are not pooled
+into one ranking.
+
+### Corrected fixed-radius counterpart extension
+
+The six-arm refresh intentionally omitted fixed-radius A, B, and Y. Their
+stored pre-correction rows therefore cannot be compared directly with corrected
+adaptive-radius A', B', and Y'. The focused extension reconstructs only the
+three fixed counterparts on the same 4,191 available conditions (12,573 arm
+records), reuses the corrected adaptive records above, and keeps all historical
+counterpart records only as superseded provenance. It neither regenerates banks
+nor recomputes cnp2cnp matrices.
+
+```bash
+python -m algorithm_evaluation.v5_frozen_transition_fixed_radius_run \
+  --experiment-root algorithm_evaluation/results/v5_development/shortlist_robustness \
+  --record-workers 8 \
+  --progress
+```
+
+The default fresh output is nested under `frozen_transition_v3/fixed_radius/`:
+
+- `{v2,v2a,v2b,v2c}/run/result.json` contains only corrected fixed A/B/Y;
+- `{v2,v2a,v2b,v2c}/report/` combines those rows with the stored corrected
+  six-arm portfolio for within-regime inspection;
+- `verification/` reports block-paired corrected and historical A'-minus-A,
+  B'-minus-B, and Y'-minus-Y effects by regime and height, plus placement
+  details and separate method score shifts; and
+- `pipeline_manifest.json` records source and completion provenance.
+
+One independent adaptive-minus-fixed effect is the mean of the three
+placement-specific effects for a complete truth block. A'/A and B'/B use
+AD-F1 as primary and GRF as secondary; Y'/Y uses GRF. The report does not pool
+output families, regimes, or heights, tune a radius, or declare an automatic
+winner. Repeating the exact command resumes incomplete runs and validates
+completed ones.
+
 ## CTBF v5 non-paper reconstruction-intuition probe
 
 `simulator_reconstruction_intuition_probe.py` implements the owner-approved
