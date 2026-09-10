@@ -79,6 +79,9 @@ from algorithm_evaluation.v5_algorithm_development_run import (
     run_algorithms,
     run_semantic_gate,
 )
+from algorithm_evaluation.v5_medicc2_development_run import (
+    MEDICC2_DEVELOPMENT_ARM_ID,
+)
 from ctbs import DistanceMatrix
 from distance_semantics import cnp2cnp_provenance
 from reconstructor_biopsy_blocks import (
@@ -1286,6 +1289,17 @@ def test_build_report_treats_300_conditions_as_100_independent_blocks():
             )
         )
         records.append(_success_record(case, "candidate", PARTIAL_FAMILY, 0.6))
+        records.append(
+            _success_record(case, PARTIAL_ADAPTIVE_MEDIAN_Y_ID, PARTIAL_FAMILY, 0.65)
+        )
+        records.append(
+            _success_record(
+                case,
+                MEDICC2_DEVELOPMENT_ARM_ID,
+                CONTEXT_FAMILY,
+                0.45,
+            )
+        )
     result = {
         "run_id": "fixture",
         "bank_id": "fixture-bank",
@@ -1317,9 +1331,44 @@ def test_build_report_treats_300_conditions_as_100_independent_blocks():
                 "primary_metric": "grf",
                 "complementary_metrics": [],
             },
+            {
+                "arm_id": PARTIAL_ADAPTIVE_MEDIAN_Y_ID,
+                "family": PARTIAL_FAMILY,
+                "problem": "partial",
+                "role": "principal_partial_method",
+                "primary_metric": "grf",
+                "complementary_metrics": [],
+            },
+            {
+                "arm_id": MEDICC2_DEVELOPMENT_ARM_ID,
+                "family": CONTEXT_FAMILY,
+                "problem": "partial",
+                "role": "external_contextual_baseline",
+                "primary_metric": "grf",
+                "complementary_metrics": [],
+            },
         ],
         "records": records,
     }
+    result["semantic_gate_by_arm"] = {
+        spec["arm_id"]: {"status": "passed", "fixture_results": []}
+        for spec in result["arm_specs"]
+    }
+    result["semantic_gate_by_arm"][MEDICC2_DEVELOPMENT_ARM_ID][
+        "external_fixture_results"
+    ] = [
+        {
+            "case_id": case_id,
+            "status": "success",
+            "canonical_topology_digest": "same-topology",
+        }
+        for case_id in (
+            "simple",
+            "simple_repeat",
+            "simple_permuted",
+            "simple_relabelled",
+        )
+    ]
     report = build_report([result], created_at_utc="fixture")
     assert report["condition_count"] == 300
     assert report["dependence_contract"]["independent_truth_block_count"] == 100
@@ -1330,3 +1379,19 @@ def test_build_report_treats_300_conditions_as_100_independent_blocks():
     )
     assert candidate["vs_incumbent_wins"] == 300
     assert candidate["vs_incumbent_mean_block_delta"] == pytest.approx(0.1)
+    assert {
+        row["comparison_role"]
+        for row in report["contextual_matched_comparisons"]
+    } == {
+        "medicc2_vs_cnp2cnp_nj_baseline",
+        "medicc2_vs_principal_partial_method",
+    }
+    assert report["algorithm_summaries"][MEDICC2_DEVELOPMENT_ARM_ID][
+        "external_d0_stability"
+    ] == {
+        "fixture_count": 4,
+        "success_count": 4,
+        "deterministic_rerun_same_topology": True,
+        "raw_taxon_row_permutation_same_topology": True,
+        "taxon_relabelling_same_topology_after_inverse_map": True,
+    }

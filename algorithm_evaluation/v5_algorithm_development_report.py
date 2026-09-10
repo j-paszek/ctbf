@@ -37,6 +37,7 @@ from algorithm_evaluation.v5_algorithm_development_common import (
     PARTIAL_BOTTOM_EXTENSION_ARM_SPECS,
     PARTIAL_BOTTOM_TOP_INTERACTION_ARM_ID,
     PARTIAL_BOTTOM_TOP_INTERACTION_ROLE,
+    PARTIAL_ADAPTIVE_MEDIAN_Y_ID,
     REPORT_SCHEMA_VERSION,
     RUN_SCHEMA_VERSION,
     ensure_new_output_root,
@@ -44,6 +45,9 @@ from algorithm_evaluation.v5_algorithm_development_common import (
     write_json,
 )
 from algorithm_evaluation.v5_algorithm_development_run import RESULT_NAME
+from algorithm_evaluation.v5_medicc2_development_run import (
+    MEDICC2_DEVELOPMENT_ARM_ID,
+)
 
 
 TIE_TOLERANCE = 1e-12
@@ -619,6 +623,28 @@ def _algorithm_summary(
         if (value := _resource_value(record, "peak_rss_bytes")) is not None
     ]
     gate_fixtures = semantic_gate.get("fixture_results", [])
+    external_gate_fixtures = semantic_gate.get("external_fixture_results", [])
+    external_by_id = {
+        str(row.get("case_id")): row
+        for row in external_gate_fixtures
+        if isinstance(row, Mapping)
+    }
+
+    def external_topology_equal(left: str, right: str) -> bool | None:
+        if left not in external_by_id or right not in external_by_id:
+            return None
+        left_row = external_by_id[left]
+        right_row = external_by_id[right]
+        if (
+            left_row.get("status") != "success"
+            or right_row.get("status") != "success"
+        ):
+            return None
+        return (
+            left_row.get("canonical_topology_digest")
+            == right_row.get("canonical_topology_digest")
+        )
+
     return {
         "arm_id": arm_id,
         "family": spec["family"],
@@ -638,6 +664,26 @@ def _algorithm_summary(
                 if not row["different_seed_same_topology"]
             ],
         },
+        "external_d0_stability": (
+            {
+                "fixture_count": len(external_gate_fixtures),
+                "success_count": sum(
+                    row.get("status") == "success"
+                    for row in external_gate_fixtures
+                ),
+                "deterministic_rerun_same_topology": external_topology_equal(
+                    "simple", "simple_repeat"
+                ),
+                "raw_taxon_row_permutation_same_topology": external_topology_equal(
+                    "simple", "simple_permuted"
+                ),
+                "taxon_relabelling_same_topology_after_inverse_map": (
+                    external_topology_equal("simple", "simple_relabelled")
+                ),
+            }
+            if external_gate_fixtures
+            else None
+        ),
         "primary_metric": primary,
         "record_count": len(records),
         "success_count": len(successes),
@@ -1443,6 +1489,35 @@ def build_report(
                 complementary_metrics=temporal_complementary,
             )
         )
+    if MEDICC2_DEVELOPMENT_ARM_ID in specs:
+        for comparator_id, comparison_role in (
+            ("classical_partial", "medicc2_vs_cnp2cnp_nj_baseline"),
+            (PARTIAL_ADAPTIVE_MEDIAN_Y_ID, "medicc2_vs_principal_partial_method"),
+        ):
+            if comparator_id not in specs:
+                continue
+            if {
+                str(specs[MEDICC2_DEVELOPMENT_ARM_ID]["primary_metric"]),
+                str(specs[comparator_id]["primary_metric"]),
+            } != {"grf"}:
+                raise ValueError(
+                    "MEDICC2 contextual comparisons require rooted GRF on both arms."
+                )
+            comparison = pairwise_comparison(
+                MEDICC2_DEVELOPMENT_ARM_ID,
+                comparator_id,
+                records_by_key,
+                case_inventory,
+                primary_metric="grf",
+                complementary_metrics=(),
+            )
+            comparison["comparison_role"] = comparison_role
+            comparison["interpretation"] = (
+                "Paired rooted-topology comparison after the declared MEDICC2 "
+                "diploid-outgroup projection; this is a whole-pipeline "
+                "comparison, not a biopsy-time ablation."
+            )
+            contextual_matched.append(comparison)
     biopsy_guided_full_vs_pooled_incumbent = None
     biopsy_guided_full_ids = sorted(
         arm_id
@@ -2191,7 +2266,7 @@ def _markdown(report: Mapping[str, Any]) -> str:
             ]
         )
     if report["contextual_matched_comparisons"]:
-        lines.extend(["### Temporal versus no-time ablation", ""])
+        lines.extend(["### Matched contextual comparisons", ""])
         for comparison in report["contextual_matched_comparisons"]:
             wtl = comparison["combined_conditions"]["wtl"]
             lines.append(
