@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "Please cite the version of CTBF used, its release commit, and the accompanying paper when available."
+type: software
+title: "CTBF: Cancer Tree Biopsy Framework"
+version: "1.2.0"
+license: MIT
+repository-code: "https://github.com/j-paszek/ctbf"
+url: "https://github.com/j-paszek/ctbf"
+abstract: >-
+  Simulation of representative copy-number states and biopsy-aware
+  phylogenetic reconstruction under the CTBF v5 scientific contract.
+  Original software uses MIT. Research-data licensing is specified
+  separately in LICENSESCOPE.md and the release assets.
+authors:
+  - family-names: Paszek
+    given-names: Jarosław
+    orcid: "https://orcid.org/0000-0001-6442-3529"
+  - family-names: Mykowiecka
+    given-names: Agnieszka
+    orcid: "https://orcid.org/0000-0002-8103-1073"
+  - family-names: Gogolewski
+    given-names: Krzysztof
+    orcid: "https://orcid.org/0000-0001-5523-5198"
+keywords:
+  - phylogenetic reconstruction
+  - copy-number profiles
+  - longitudinal biopsies
+  - cancer evolution
+  - reproducible research

@@ -1,0 +1,13 @@
+paper_id	arm_id	input	completion	output	role
+M0	classical_partial	pooled distinct states	classical NJ	partial	main
+M1	neighbor_joining_baseline	pooled distinct states	labeled closest-pair	closed-state	main
+M2	biopsy_guided_top_anticentral_binary_adaptive_median_prior_nn_bottom_deferred_tie	adaptive/deferred biopsy forest	binary anticentral	partial	main
+M3	rooted_labeled_nj	pooled distinct states	rooted labeled-Q	closed-state	main; historical alias Pooled-Q
+M4	biopsy_guided_classical_adaptive_median_prior_nn_bottom_deferred_tie	adaptive/deferred biopsy forest	classical NJ	partial	main; additive confirmation extension
+M5	neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony	pooled distinct states	binary anticentral	closed-state	main
+M6	biopsy_guided_full_anticentral_binary_adaptive_median_prior_nn_bottom_deferred_tie	adaptive/deferred biopsy forest	binary anticentral	closed-state	main
+M7	biopsy_guided_full_rooted_labeled_q_adaptive_median_prior_nn_bottom_deferred_tie	adaptive/deferred biopsy forest	rooted labeled-Q	closed-state	main
+MEDICC2	medicc2_total_cn_topology_partial	biopsy-indexed occurrences	topology-only MEDICC2	partial	contextual comparator; H14/H24/H34
+NestedBD-Long	external NestedBD-Long	biopsy-indexed occurrences and times	birth-death inference	partial	fixed-budget contextual comparator; H14/H24
+Temporal	temporal_minimum	biopsy-indexed occurrences	constrained global tree	closed-state	secondary definition only
+No-time	temporal_minimum_no_time	biopsy-indexed occurrences	unrestricted global tree	closed-state	secondary definition only

@@ -1,0 +1,323 @@
+{
+  "schema_version": "ctbf-v5-confirmatory-design-manifest-v1",
+  "manifest_id": "ctbf-v5-g2-01a-independent-confirmation-v1",
+  "status": "frozen_design_candidate",
+  "prepared": "2026-09-10",
+  "product_version": "CTBF v5",
+  "simulator_semantic_version": "ctbf-cnp-state-simulator-v5",
+  "internal_runtime_contract": {
+    "python_implementation": "CPython",
+    "python_version": "3.13.0",
+    "packages": {
+      "networkx": "3.4.2",
+      "numpy": "2.2.6",
+      "plotly": "6.1.1",
+      "psutil": "7.0.0"
+    }
+  },
+  "protocol": {
+    "path": "experimental_description/v5_confirmatory_protocol.md",
+    "sha256": "c8759d2d3cb347395d31c7f5b29f969eabf33973fbeb60ce865f5adf3455a79a"
+  },
+  "owner_approval": {
+    "required": true,
+    "mechanism": "external_exact_hash_lock",
+    "lock_path": "algorithm_evaluation/v5_confirmation_approval.py"
+  },
+  "held_out_outputs_generated": false,
+  "held_out_outputs_inspected": false,
+  "legacy_artifacts_admissible": false,
+  "simulator": {
+    "config_path": "simulator_examples/paper_v5/confirmatory_standard.json",
+    "config_sha256": "35a2f19817b4b26c0e931cfebb9c3d41629edde5df226a95902cf7bcae3d2ce4",
+    "simulation_height": 34,
+    "block_count": 100
+  },
+  "seed_contract": {
+    "namespace": "ctbf-v5-g2-01a-independent-confirmation-v1",
+    "derivation": "uint63 from the first eight big-endian SHA-256 bytes of NUL-joined namespace, stream, zero-based block, and integer coordinates",
+    "simulation_stream": "simulation",
+    "sampling_stream": "sampling",
+    "random_schedule_stream": "random_schedule",
+    "reconstruction_stream": "reconstruction",
+    "analysis_derivation": "uint63 from the first eight big-endian SHA-256 bytes of NUL-joined namespace, analysis, and analysis name",
+    "analysis_seeds": {
+      "primary_bootstrap": 6917218322129967350,
+      "primary_sign_flip": 2323887935007660973,
+      "secondary_bootstrap": 6425196476729369971
+    },
+    "development_namespaces_excluded": [
+      "ctbf-v5-g1-06-existing-screen-v1",
+      "ctbf-v5-g1-06-shortlist-robustness-v1"
+    ]
+  },
+  "observation_design": {
+    "sampling_rule": "min(N,max(6,ceil(0.5*N)))",
+    "target_fraction": 0.5,
+    "lower_bound": 6,
+    "sampling_unit": "distinct_representative_genotype_state",
+    "sampling_seed_scope": "truth_block_and_generation",
+    "condition_count_per_block": 8,
+    "conditions": [
+      {
+        "condition_id": "H14_rule_y",
+        "height": 14,
+        "family": "standard",
+        "schedule": [9, 12, 14]
+      },
+      {
+        "condition_id": "H24_L2",
+        "height": 24,
+        "family": "biopsy_count",
+        "schedule": [15, 24]
+      },
+      {
+        "condition_id": "H24_rule_y",
+        "height": 24,
+        "family": "standard_biopsy_count_and_placement_anchor",
+        "schedule": [15, 20, 24]
+      },
+      {
+        "condition_id": "H24_L4",
+        "height": 24,
+        "family": "biopsy_count",
+        "schedule": [15, 18, 20, 24]
+      },
+      {
+        "condition_id": "H24_L5",
+        "height": 24,
+        "family": "biopsy_count",
+        "schedule": [15, 18, 20, 22, 24]
+      },
+      {
+        "condition_id": "H24_late",
+        "height": 24,
+        "family": "placement",
+        "schedule": [22, 23, 24]
+      },
+      {
+        "condition_id": "H24_random",
+        "height": 24,
+        "family": "placement",
+        "schedule": "two_without_replacement_from_15_through_23_then_24"
+      },
+      {
+        "condition_id": "H34_rule_y",
+        "height": 34,
+        "family": "standard",
+        "schedule": [21, 28, 34]
+      }
+    ],
+    "standard_condition_ids": [
+      "H14_rule_y",
+      "H24_rule_y",
+      "H34_rule_y"
+    ],
+    "biopsy_count_condition_ids": [
+      "H24_L2",
+      "H24_rule_y",
+      "H24_L4",
+      "H24_L5"
+    ],
+    "placement_condition_ids": [
+      "H24_rule_y",
+      "H24_late",
+      "H24_random"
+    ],
+    "random_schedule_window": [15, 23],
+    "random_schedule_draw_count": 2,
+    "terminal_generation_always_included": 24
+  },
+  "reconstruction_portfolio": [
+    {
+      "paper_id": "M0",
+      "arm_id": "classical_partial",
+      "problem": "partial",
+      "primary_metric": "grf"
+    },
+    {
+      "paper_id": "M2",
+      "arm_id": "biopsy_guided_top_anticentral_binary_adaptive_median_prior_nn_bottom_deferred_tie",
+      "problem": "partial",
+      "primary_metric": "grf"
+    },
+    {
+      "paper_id": "M1",
+      "arm_id": "neighbor_joining_baseline",
+      "problem": "inferred_copy_fully_labeled_closed_state",
+      "primary_metric": "ad_f1"
+    },
+    {
+      "paper_id": "Pooled-Q",
+      "arm_id": "rooted_labeled_nj",
+      "problem": "fully_labeled_closed_state",
+      "primary_metric": "ad_f1"
+    },
+    {
+      "paper_id": "M5",
+      "arm_id": "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
+      "problem": "inferred_copy_fully_labeled_closed_state",
+      "primary_metric": "ad_f1"
+    },
+    {
+      "paper_id": "M6",
+      "arm_id": "biopsy_guided_full_anticentral_binary_adaptive_median_prior_nn_bottom_deferred_tie",
+      "problem": "biopsy_guided_occurrence_aware_fully_labeled_closed_state",
+      "primary_metric": "ad_f1"
+    },
+    {
+      "paper_id": "M7",
+      "arm_id": "biopsy_guided_full_rooted_labeled_q_adaptive_median_prior_nn_bottom_deferred_tie",
+      "problem": "biopsy_guided_occurrence_aware_fully_labeled_closed_state",
+      "primary_metric": "ad_f1"
+    }
+  ],
+  "external_contextual_comparator": {
+    "arm_id": "medicc2_total_cn_topology_partial",
+    "problem": "partial",
+    "primary_metric": "grf",
+    "conditions": [
+      "H14_rule_y",
+      "H24_rule_y",
+      "H34_rule_y"
+    ],
+    "role": "separate_topology_only_contextual_comparison"
+  },
+  "distance_contract": {
+    "provider": "cnp2cnp",
+    "semantic_version": "ctbf-cnp2cnp-any-min-bidirectional-v1",
+    "formula": "min(d_any(u,v),d_any(v,u))",
+    "external_tool_lock": {
+      "executable_name": "cnp2cnp.py",
+      "git_revision": "f0b1a19cd02b72dbb22ecb2e1c888683f187ab46",
+      "source_sha256": {
+        "bioinfoutil.py": "9928ad9424a736a3cb508b2ecbd95107586aff857cf590b27e3f620947c07a98",
+        "cnp2cnp.py": "aac348347dcd77bd119403be95a4b88a9c8ebdca8356919b11a7234058fb1766",
+        "cnpsolver.py": "f765faa13f47f3282a6369cf1208103e08901ab46d26f6e4bbc8cf8e57901cd4",
+        "genomesimulator.py": "f87dce89e38a37650c9a81f731f97b11226a225c113a41b50ebddbaa5ae79e62",
+        "node.py": "8558f85bc01663601efc779f2f794d0794374bf8449781587b894ba30904d538"
+      }
+    },
+    "one_maximal_matrix_per_truth_block": true,
+    "condition_matrix": "exact_label_aligned_submatrix",
+    "fallback_allowed": false,
+    "truth_distance_allowed": false
+  },
+  "evaluator_contract": {
+    "native_schema": "ctbf-tree-evaluation-result-v1",
+    "partial_primary": "grf",
+    "full_primary": "ad_f1",
+    "required_observation_coverage": 1.0,
+    "fixed_label_biopsy_count_metric": "ctbf-fixed-label-ad-f1-v1",
+    "metric_direction": "higher_is_better"
+  },
+  "primary_hypothesis": {
+    "contrast": "M2_minus_M0",
+    "conditions": [
+      "H14_rule_y",
+      "H24_rule_y",
+      "H34_rule_y"
+    ],
+    "metric": "grf",
+    "independent_unit": "truth_block",
+    "block_effect": "unweighted_mean_of_three_height_paired_differences",
+    "minimum_complete_blocks": 90,
+    "maximum_arm_failure_rate_per_height": 0.1,
+    "minimum_material_mean_gain": 0.01,
+    "confidence_interval": "two_sided_percentile_95_percent_block_bootstrap",
+    "bootstrap_repetitions": 100000,
+    "test": "one_sided_monte_carlo_block_sign_flip_positive_mean",
+    "sign_flip_repetitions": 100000,
+    "alpha": 0.05,
+    "tie_tolerance": 1e-12,
+    "multiplicity_adjustment": "none_single_primary_test"
+  },
+  "secondary_analyses": {
+    "full_matched_contrasts": [
+      {
+        "contrast": "M6_minus_M5",
+        "metric": "ad_f1"
+      },
+      {
+        "contrast": "M7_minus_Pooled-Q",
+        "metric": "ad_f1"
+      }
+    ],
+    "biopsy_count": {
+      "method": "M6",
+      "endpoint": "H24_L5_minus_H24_L2",
+      "metric": "fixed_label_ad_f1",
+      "fixed_label_source": "H24_L2",
+      "binary_support_rule": false
+    },
+    "placement": {
+      "anchor": "H24_rule_y",
+      "comparators": [
+        "H24_late",
+        "H24_random"
+      ],
+      "binary_support_rule": false
+    },
+    "automatic_winner": false,
+    "partial_and_full_combined": false
+  },
+  "analysis_contract": {
+    "missing_metric_imputation": false,
+    "case_or_seed_replacement": false,
+    "tree_size_weighting": false,
+    "post_hoc_subgroup_promotion": false,
+    "secondary_interval": "two_sided_percentile_95_percent_truth_block_bootstrap",
+    "reported_effect_summaries": [
+      "count",
+      "mean",
+      "median",
+      "minimum",
+      "maximum",
+      "worst_five_mean",
+      "conditional_gain_mean",
+      "conditional_loss_mean",
+      "wins_ties_losses"
+    ]
+  },
+  "resource_contract": {
+    "simulation_timeout_seconds": 300,
+    "distance_timeout_seconds": 1200,
+    "cnp2cnp_process_timeout_seconds": 540,
+    "reconstruction_timeout_seconds": 300,
+    "evaluation_timeout_seconds": 300,
+    "rss_limit_bytes": 4294967296,
+    "capture_limit_bytes": 1048576,
+    "maximum_distance_workers": 6,
+    "maximum_record_workers": 8,
+    "worker_lifecycle": "one_fresh_spawned_process_per_declared_task"
+  },
+  "artifact_contract": {
+    "bank_schema": "ctbf-v5-confirmatory-bank-v1",
+    "run_schema": "ctbf-v5-confirmatory-run-v1",
+    "report_schema": "ctbf-v5-confirmatory-report-v1",
+    "strict_json": true,
+    "checksum_closure_before_aggregate_inspection": true,
+    "nonoverwriting_roots": true,
+    "reconstructed_trees_retained": true,
+    "expected_condition_records": 800,
+    "expected_internal_arm_records": 5600,
+    "expected_medicc2_records": 300
+  },
+  "source_lock": {
+    "status": "frozen",
+    "path": "experimental_description/g2_01a_v5_source_lock.json",
+    "sha256": "1bb2f24789944bd3ec61c2da522c42fde9b5f0a5142b234772baf0b6d54c5578"
+  },
+  "explicit_exclusions": [
+    "all CTBF v1 through v4 artifacts",
+    "all algorithm-development and shortlist-robustness seeds and outputs",
+    "H38 from the primary confirmation",
+    "a height by fraction by timing grid",
+    "fixed-budget biopsy claims",
+    "partial and full methods in one ranking",
+    "automatic method selection",
+    "post-result algorithm or threshold changes",
+    "KTN152 truth-based accuracy",
+    "model-mismatch generalization from this experiment"
+  ]
+}

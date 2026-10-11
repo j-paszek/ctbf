@@ -1,0 +1,8 @@
+# Reproduction environment for release 1.2.0, tested with CPython 3.13.
+# This is not a retroactive lockfile for historical external-tool campaigns.
+numpy==2.2.6
+networkx==3.4.2
+matplotlib==3.10.7
+plotly==6.1.1
+psutil==7.0.0
+pytest==8.3.5

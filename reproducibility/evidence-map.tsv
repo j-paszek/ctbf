@@ -1,0 +1,28 @@
+paper_object	panel_or_scope	source_keys_or_code	statistic	methods	denominator	display_precision	portable_output
+tab:reconstruction-method-map	formal definitions	reproducibility/method-map.tsv;reconstructor_registry.py;algorithm_evaluation/v5_confirmation_common.py;algorithm_evaluation/v5_partial_comparator_extension_common.py	composition; no experimental statistic	M0-M7;MEDICC2;NestedBD-Long	not applicable	not applicable	method-map.tsv
+tab:supp-secondary-method-map	formal definitions	reproducibility/method-map.tsv;reconstructor_temporal.py	composition; not principal confirmation methods	Temporal;No-time	not applicable	not applicable	method-map.tsv
+tab:supp-simulation-parameters	standard regime	simulation;design	fixed config and collection design	simulator	100 independent histories	as configuration	simulation.json
+tab:supp-confirmatory-partial	absolute scores and paired effects	v1_means;v1_contrasts;v1_summary;extension_report	mean full-truth GRF; paired mean CI and W/T/L	M0;M2;M4;MEDICC2	100 per height;100 history means for combined effects	6 decimals	tables/tab-supp-confirmatory-partial.csv
+tab:supp-confirmatory-full	absolute scores and paired effects	v1_summary;v1_contrasts	AD-F1 means; paired mean CI and W/T/L	M1;M3;M5;M6;M7	100	6 decimals	tables/tab-supp-confirmatory-full.csv
+tab:supp-confirmatory-full-grf	full means/effects and trimmed means	v4_means;v4_contrasts;closed_trimmed	GRF means; paired mean CI and W/T/L	M1;M3;M5;M6;M7	100	6 decimals	tables/tab-supp-confirmatory-full-grf.csv
+tab:supp-native-biopsy-count	means and five-minus-two	native_counts;v6_audit	native AD-F1; paired mean CI and W/T/L	M1;M3;M5;M6;M7	100	6 decimals	tables/tab-supp-native-biopsy-count.csv
+tab:supp-confirmatory-biopsy-count	2/3/4/5 biopsies	v3_counts;m4_counts	partial full GRF; closed fixed-U2 AD-F1	M0-M7	100	6 decimals	tables/tab-supp-confirmatory-biopsy-count.csv
+tab:supp-confirmatory-biopsy-gains	five-minus-two and differences of changes	v3_audit;v5_audit	mean median paired CI and W/T/L	M0-M7	100	6 decimals	tables/tab-supp-confirmatory-biopsy-gains.csv
+tab:supp-confirmatory-placement	standard minus late/random	v1_summary;m4_placement;m4_placement_pairs	mean paired CI and W/T/L; original family seed stream	M0-M7	100	5 decimals	tables/tab-supp-confirmatory-placement.csv
+tab:supp-confirmatory-resources	condition-specific pipelines	resources	mean/median/max seconds;mean/max process-tree RSS	M2;MEDICC2	300 inputs	seconds 3;decimal MB 1	tables/tab-supp-confirmatory-resources.csv
+tab:supp-partial-extension-scores	full/trimmed matched means	v5_means	paired-input mean score; mean of two NestedBD runs	M0;M2;M4;MEDICC2;NestedBD-Long	H14 100;H24 98;H34 100 without NestedBD	5 decimals	tables/tab-supp-partial-extension-scores.csv
+tab:supp-partial-extension-effects	seven contrasts;two targets	v5_audit	whole-history mean CI and W/T/L	M0;M2;M4;MEDICC2;NestedBD-Long	100 or 98 as recorded	5 decimals	tables/tab-supp-partial-extension-effects.csv
+tab:supp-partial-trimmed-sampling	five-minus-two full/trimmed	v3_audit;v5_audit	paired mean CI; harmonized full-target intervals	M0;M2;M4	100	5 decimals	tables/tab-supp-partial-trimmed-sampling.csv
+tab:supp-nestedbd-100-diagnostics	10/25/50 percent burn-in	v5_audit	posterior and likelihood ESS; between-run clade frequency differences	NestedBD-Long	200/197 successful runs;100/98 pairs	ESS 1;clades 3	tables/tab-supp-nestedbd-100-diagnostics.csv
+tab:supp-ktn152-feasibility	LOCAL EMPIRICAL DRAFT	empirical_report	state/node counts;wall seconds;peak RSS	D;M0;M2	one feasibility input;76 states	seconds 3;MiB 1	tables/tab-supp-ktn152-feasibility.csv
+tab:supp-nestedbd-long-convergence	LOCAL EMPIRICAL DRAFT	empirical_diagnostics	ESS and majority-clade agreement;convergence unestablished	NestedBD-Long	two empirical runs	ESS 2;counts integer	tables/tab-supp-nestedbd-long-convergence.csv
+fig:connect-then-complete	A/B/C	paper/figures/connect-then-complete-owner-v2.tex	algorithm schematic	pooled and biopsy-guided	not applicable	vector	vectors/connect-then-complete-owner-v2.pdf
+fig:supp-nonidentifiability	both histories	paper/figures/nonidentifiability-v2.tex	formal counterexample	not applicable	not applicable	vector	vectors/nonidentifiability-v2.pdf
+fig:supp-trimmed-true-tree	two examples	paper/figures/trimmed-true-tree-v1.tex	formal projection examples	not applicable	not applicable	vector	vectors/trimmed-true-tree-v1.pdf
+fig:v5-confirmation	A upper	v3_counts;m4_counts	full GRF mean and pointwise CI	M0;M2;M4	100	unrounded plot inputs	figures/main-figure.pdf
+fig:v5-confirmation	A lower	native_counts	native AD-F1 mean and pointwise CI	M1;M3;M5;M6;M7	100	unrounded plot inputs	figures/main-figure.pdf
+fig:v5-confirmation	B full/trimmed	v5_means	matched mean and pointwise CI	M0;M2;M4;MEDICC2;NestedBD-Long	100/98/100;no NestedBD H34	unrounded plot inputs	figures/main-figure.pdf
+fig:v5-confirmation	C AD-F1/full GRF	v1_means;v4_means	mean and pointwise CI	M3;M5;M6;M7	100	unrounded plot inputs	figures/main-figure.pdf
+fig:supp-confirmation-controls	fixed labels and trimmed targets	v3_counts;trimmed_counts;closed_trimmed	means and pointwise CIs	M0-M7 in applicable panels	100	unrounded plot inputs	figures/supplementary-controls.pdf
+fig:supp-confirmation-block-effects	100 history effects	primary_blocks;v1_summary	sorted within-history mean effects;mean and CI	M2-minus-M0	100 independent histories	unrounded plot inputs	figures/primary-block-effects.pdf
+fig:ktn152-empirical	LOCAL EMPIRICAL DRAFT	empirical_svg;empirical_report;empirical_profiles_collapsed;empirical_bins	render accepted editable SVG;no new inference	M2;empirical CNPs	76 states;77 biopsy-indexed occurrences	vector	vectors/ktn152-empirical-v4.pdf

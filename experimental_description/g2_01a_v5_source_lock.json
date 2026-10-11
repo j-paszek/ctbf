@@ -1,0 +1,208 @@
+{
+  "schema_version": "ctbf-v5-confirmatory-source-lock-v1",
+  "created": "2026-09-10",
+  "scope": "transitive_local_python_import_closure_of_the_four_confirmation_entry_points",
+  "entry_points": [
+    "algorithm_evaluation/v5_confirmation_bank.py",
+    "algorithm_evaluation/v5_confirmation_run.py",
+    "algorithm_evaluation/v5_confirmation_medicc2.py",
+    "algorithm_evaluation/v5_confirmation_report.py"
+  ],
+  "exclusions": [
+    {
+      "path": "algorithm_evaluation/v5_confirmation_approval.py",
+      "reason": "contains only the three owner-installed hashes and approval-record metadata and must change mechanically after approval"
+    }
+  ],
+  "external_source_policy": "cnp2cnp source is locked separately in the design manifest; MEDICC2 source and runtime are locked by its mandatory resource gate",
+  "files": [
+    {
+      "path": "algorithm_evaluation/hypothesis_height_ambiguity_trend.py",
+      "sha256": "e502a97f15cb65260da51b06fff30fa27e5f79e7a866913845d46264da1d183e"
+    },
+    {
+      "path": "algorithm_evaluation/hypothesis_trend_distance_preflight.py",
+      "sha256": "8c340c1f272dbee7142f6099f9cf5cdb2d7b86303b30f5a5c1cfe1b81d104be0"
+    },
+    {
+      "path": "algorithm_evaluation/hypothesis_trend_pilot.py",
+      "sha256": "a702193fef0994805fed1f6539a96ec328b41006a4c22accc2c6bde117c90440"
+    },
+    {
+      "path": "algorithm_evaluation/hypothesis_trend_population_preflight.py",
+      "sha256": "76654b79a155f9ee3b1c8e3ac028dde79698853b4b3fd09f210b6449a543f4e9"
+    },
+    {
+      "path": "algorithm_evaluation/medicc2_reconstruction_preflight.py",
+      "sha256": "f5a84d3b746ffd7a7214d442c0d09103b8724569b1d206c22fcf278f5fe50a3f"
+    },
+    {
+      "path": "algorithm_evaluation/paper_pipeline_analysis.py",
+      "sha256": "2e841cbe48ae9e398f1f1803917570a33954186858ae1593fff1fdbc75a967fc"
+    },
+    {
+      "path": "algorithm_evaluation/paper_pipeline_contract.py",
+      "sha256": "da890d7afd6f2623eb5f3e21c6156821398401e669eaae0ca5fe129aa3161887"
+    },
+    {
+      "path": "algorithm_evaluation/paper_pipeline_runner.py",
+      "sha256": "93c11e651a7c2a9801d08f64f9faf50187d8590bda910514c412c12e596b813f"
+    },
+    {
+      "path": "algorithm_evaluation/process_isolation.py",
+      "sha256": "c264c0ee4be1585e8b3b38a8068b8496c60d5235c9ef83d159814572a094c5d3"
+    },
+    {
+      "path": "algorithm_evaluation/simulator_growth_probe.py",
+      "sha256": "8106e47c740e522ebb90b6cbe24a8e4117053dbc4df9ebce0ab38cda8a1a2ed6"
+    },
+    {
+      "path": "algorithm_evaluation/simulator_reconstruction_intuition_probe.py",
+      "sha256": "0014905eb1066941727a0188a675ec2a76473027bc49ff50eb99f2f90293a31d"
+    },
+    {
+      "path": "algorithm_evaluation/v5_algorithm_development_common.py",
+      "sha256": "b58d565c979cce3c4691ec8bbb753a8ac1adcbc8a406507810eefecf465af5e2"
+    },
+    {
+      "path": "algorithm_evaluation/v5_algorithm_development_run.py",
+      "sha256": "3ce9b8419c903548844de9eb2d1133fd0e31e9a2cf44ebe61694534b0df8076a"
+    },
+    {
+      "path": "algorithm_evaluation/v5_confirmation_bank.py",
+      "sha256": "7b6db963b3c1417f4ea6359f0c2cdbd81c9fa15b00951b463272e9b5bb0e0b62"
+    },
+    {
+      "path": "algorithm_evaluation/v5_confirmation_common.py",
+      "sha256": "69c0089923dec50b3b4d9f69e93ab644847475c0f7cbb03be414ccceca60fc00"
+    },
+    {
+      "path": "algorithm_evaluation/v5_confirmation_medicc2.py",
+      "sha256": "cddcf41e5a2fed0430925a5653c665cf6a18e94f55c0d5f78da0d9fdd4a0cca5"
+    },
+    {
+      "path": "algorithm_evaluation/v5_confirmation_report.py",
+      "sha256": "8d46ad740c30659d19ae264590a3370118da5bbba3d52e205535fe08a47cdec2"
+    },
+    {
+      "path": "algorithm_evaluation/v5_confirmation_run.py",
+      "sha256": "c62b532acb8911d3671a1fa6690b031f803e3a564bc69d6db5d25c13d87194ee"
+    },
+    {
+      "path": "algorithm_evaluation/v5_medicc2_development_run.py",
+      "sha256": "5287de7a0d6da480667e024f6486433e6028a0005e7583e814db6c9498afe4b2"
+    },
+    {
+      "path": "ctbf_constraints.py",
+      "sha256": "c3b51ea4532a24c2bf284752ab055d2d2cabaeeab6285488630369dfc61ea183"
+    },
+    {
+      "path": "ctbs.py",
+      "sha256": "a003fe452fd2693d2ecb6c33a4e819cc77f2d4ffaa8937bc1e7af86893121896"
+    },
+    {
+      "path": "ctbs_utils.py",
+      "sha256": "3b5240fcd006a77b74e4a418851c07f6ecffed43c569ee0ebfbf06b2c1658fa8"
+    },
+    {
+      "path": "distance_semantics.py",
+      "sha256": "341d563dead875ffd0e71ca0ff24af7266aad507c746cd2ee0b6da1ab27c4bfa"
+    },
+    {
+      "path": "evaluation_contract.py",
+      "sha256": "43b43fe7bb3dd73daae41a38ed4e348a32fa9ae55780ca12a6565e93dce680fd"
+    },
+    {
+      "path": "evaluator.py",
+      "sha256": "19288e6338436bee836782639fb3adde0e431b92c121fb34339ae403e963c150"
+    },
+    {
+      "path": "evaluator_full.py",
+      "sha256": "2f469213b1963acfe7cc5c4a8d8f91827df0af7a947caf17b9b4a606052a0524"
+    },
+    {
+      "path": "reconstructor.py",
+      "sha256": "1df2f664a7994284766e0774a1adf352ac276882d207cff8f20843a8a74993c1"
+    },
+    {
+      "path": "reconstructor_algorithm_specs.py",
+      "sha256": "c8eef0d82f5c68764c8a8602a203bc26365f035b6459ddfb19a2e1de2fba65c0"
+    },
+    {
+      "path": "reconstructor_algorithms.py",
+      "sha256": "42dba882d030051d61a451fe858580b750216e0dc814cb3d5198fd143734a831"
+    },
+    {
+      "path": "reconstructor_ancestor_selection.py",
+      "sha256": "41126bae1b29043ef0a5ef46a204eaa583d927f3b21fc7210740b4d80b02cfc2"
+    },
+    {
+      "path": "reconstructor_anticentral.py",
+      "sha256": "3522d3b32f5071d42074b313e8b070afe493671a343f3be9cf1e68da128adafa"
+    },
+    {
+      "path": "reconstructor_biopsy_blocks.py",
+      "sha256": "9a8b6d380dde2a49df8a12fef2d0e6473aa609bb1788ace8a772d9951a851f8b"
+    },
+    {
+      "path": "reconstructor_biopsy_guided.py",
+      "sha256": "f8f7e1aa278ee82bcf9649b3a0525cd7471b85e169e82037d6540cff97df489a"
+    },
+    {
+      "path": "reconstructor_biopsy_presets.py",
+      "sha256": "376efa79e53c0a41e4b0736f7f002db06af66dee7e7da1c8ad8fb595b1a9f232"
+    },
+    {
+      "path": "reconstructor_distance_update.py",
+      "sha256": "56145194f7f9ff06dccfb965e91342a2f66a5b09b89f87844ffc775dcfc020df"
+    },
+    {
+      "path": "reconstructor_engine.py",
+      "sha256": "da15e7b75cb3b59bbedae9fa7dc5cc4b90007aaeb538ce7fd1834756573a2cd4"
+    },
+    {
+      "path": "reconstructor_merge.py",
+      "sha256": "e4a0cb953a9c3917f184e1406cf94bc7b9bdaa19de6c09d31c9aa79dbbb51109"
+    },
+    {
+      "path": "reconstructor_metrics.py",
+      "sha256": "ae3e7a68e468df4e13bbcace0995c821ec9da0379239e000332c17c6f258d86c"
+    },
+    {
+      "path": "reconstructor_nj.py",
+      "sha256": "097f626e1701ecb11e0f8e5a6e08477d53dc0f57d4bd689e9b42669a32700b9e"
+    },
+    {
+      "path": "reconstructor_pair_selection.py",
+      "sha256": "f9efacb44b966f8e12edf6692b93bdcf466bd8609f1a17c2cc17f0c6591472cd"
+    },
+    {
+      "path": "reconstructor_plausibility.py",
+      "sha256": "5c991f63d49e4b3461644f792915a22f899cf1132b3bcb7f6bd3b583e1ea30c5"
+    },
+    {
+      "path": "reconstructor_registry.py",
+      "sha256": "16b6c6dc5bebaeb52379293282920d2eec70050366abb75cdc5dc9dd9124ec39"
+    },
+    {
+      "path": "reconstructor_temporal.py",
+      "sha256": "f9a94d9676caa14348f58bf615d85c15ba5373cbcae92efe926bd3bd555f6612"
+    },
+    {
+      "path": "reconstructor_utils.py",
+      "sha256": "7563881cd8598af27e2f503dfc49afbadfdb95a23c9384e9c37fe820efd5a9df"
+    },
+    {
+      "path": "simulator.py",
+      "sha256": "bf0421f79a18220fb9ccc3fac0c4783c909bc9b14318d701aa40a12599039c16"
+    },
+    {
+      "path": "simulator_config.py",
+      "sha256": "b7d7828e589188a8f0027b690b0c56bd2e8e9e6bb7141541cabca7d2390bf841"
+    },
+    {
+      "path": "simulator_events.py",
+      "sha256": "27c83aad544f7eba54d91fc731b646a5fb688c125f71086282f29e5edc496923"
+    }
+  ]
+}
