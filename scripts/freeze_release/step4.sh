@@ -28,7 +28,7 @@ print(f"complete: toy reconstruction; {tree.number_of_nodes()} nodes; {tree.numb
 PY
 "$CTBF_PYTHON" -m pytest -q test/test_reconstructor_classical_nj.py \
     test/test_paper_confirmation_figure_v6.py test/test_paper_empirical_figure_v3.py \
-    test/test_freezing_release_scripts.py test/test_release_reproduction.py
+    test/test_freezing_release_scripts.py test/test_release_reproduction.py test/test_quickstart.py
 "$CTBF_PYTHON" -m algorithm_evaluation.v5_confirmation_common --require-approved
 if [[ "${1:-}" == --full ]]; then
     "$CTBF_PYTHON" -m pytest -q test -m 'not slow and not json_full'

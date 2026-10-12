@@ -5,6 +5,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/common.sh"
 start_step step8 "$@"
 [[ $# == 0 ]] || die 'Usage: step8.sh'
 require_preparation
+require_no_tracked_embedded_html
 [[ "$(git branch --show-current)" == main ]] || die 'Manually select/merge the reviewed release on main before step8.'
 git diff --exit-code
 git diff --cached --exit-code
@@ -19,7 +20,16 @@ git ls-files --error-unmatch algorithm_evaluation/v5_confirmation_run.py \
     LICENSE-DATA LICENSESCOPE.md DATA_ATTRIBUTION.md THIRD_PARTY_NOTICES.md \
     reproducibility/REPRODUCE.md reproducibility/evidence-map.tsv reproducibility/source-pins.json \
     reproducibility/bundle.py reproducibility/reproduce.py reproducibility/tables.py \
-    reproducibility/method-map.tsv test/test_release_reproduction.py scripts/freeze_release/common.sh
+    reproducibility/method-map.tsv test/test_release_reproduction.py scripts/freeze_release/common.sh \
+    examples/__init__.py examples/quickstart.py examples/tree_gallery.py examples/quickstart.json \
+    test/test_quickstart.py presentation/README.md presentation/simulator_manual.md \
+    presentation/quickstart-v2/index.html presentation/quickstart-v2/true_tree.html \
+    presentation/quickstart-v2/trimmed_true_tree.html presentation/quickstart-v2/M0.html \
+    presentation/quickstart-v2/M1.html presentation/quickstart-v2/M2.html presentation/quickstart-v2/M3.html \
+    presentation/quickstart-v2/M4.html presentation/quickstart-v2/M5.html \
+    presentation/quickstart-v2/M6.html presentation/quickstart-v2/M7.html \
+    presentation/quickstart-v2/config.json presentation/quickstart-v2/input.json \
+    presentation/quickstart-v2/trees.json presentation/quickstart-v2/summary.json
 CTBF_RELEASE_COMMIT="$(git rev-parse HEAD)"
 CTBFBIO_RELEASE_COMMIT="$(git -C "$CTBFBIO_ROOT" rev-parse HEAD)"
 CTBFBIO_RELEASE_BRANCH="$(git -C "$CTBFBIO_ROOT" branch --show-current)"

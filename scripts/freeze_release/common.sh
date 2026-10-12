@@ -10,6 +10,29 @@ require_new() { [[ ! -e "$1" && ! -L "$1" ]] || die "Refusing to overwrite: $1. 
 require_command() { command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"; }
 require_flag() { [[ "${1:-}" == "$2" ]] || die "This step requires explicit approval: $2"; }
 
+# These obsolete root views embed Plotly.js. Keep working copies, but do not
+# carry them into the new release's tracked Git tree. No history rewriting.
+CTBF_LEGACY_EMBEDDED_HTML=(nj.html reconstructed.html simulated_tree.html true_tree.html)
+
+exclude_legacy_embedded_html_from_index() {
+    local file
+    for file in "${CTBF_LEGACY_EMBEDDED_HTML[@]}"; do
+        if git ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
+            git rm --cached -- "$file"
+            printf 'Excluded from the next Git snapshot; local copy preserved: %s\n' "$file"
+        fi
+    done
+}
+
+require_no_tracked_embedded_html() {
+    local file
+    for file in "${CTBF_LEGACY_EMBEDDED_HTML[@]}"; do
+        if git ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
+            die "Release still tracks obsolete third-party-JavaScript view: $file. Review step7 exclusions."
+        fi
+    done
+}
+
 release_identity() {
     printf '%s\t%s\n' CTBF_ROOT "$CTBF_ROOT" CTBFBIO_ROOT "$CTBFBIO_ROOT" \
         CTBF_RELEASE_TAG "$CTBF_RELEASE_TAG" CTBFBIO_RELEASE_TAG "$CTBFBIO_RELEASE_TAG" \
@@ -134,6 +157,7 @@ load_commits() {
 
 check_commits() {
     load_commits
+    require_no_tracked_embedded_html
     [[ "$(git rev-parse HEAD)" == "$CTBF_RELEASE_COMMIT" && "$(git rev-parse refs/heads/main)" == "$CTBF_RELEASE_COMMIT" ]] \
         || die 'CTBF HEAD/main changed since step8. Select and validate a new release candidate.'
     [[ "$(git -C "$CTBFBIO_ROOT" rev-parse HEAD)" == "$CTBFBIO_RELEASE_COMMIT" \

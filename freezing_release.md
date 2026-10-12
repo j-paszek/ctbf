@@ -419,6 +419,29 @@ dependency guarantee: the clean-clone test detects overlooked sources.
 Narrow ignore-file exceptions can later replace force-adds. Do not unignore
 all of `paper/` or all results.
 
+The current selection includes the all-method JSON runner and the 15 files
+in `presentation/quickstart-v2/` (11 HTML views/index and four JSON files).
+The earlier `presentation/quickstart/` example is left untouched locally.
+Step 7 also previews four **index-only exclusions**: `nj.html`,
+`reconstructed.html`, `simulated_tree.html` and `true_tree.html`. They embed
+Plotly.js and therefore cannot enter the new release under the adopted
+no-vendoring policy. Only `--stage-reviewed-files` applies these exclusions
+with `git rm --cached`, preserving local files. The existing root-HTML ignore
+rule prevents accidental re-addition. No Git history is rewritten. Step 8
+and later publication checks refuse a candidate that still tracks them.
+
+Review the staged README and notices again: earlier staged versions may
+predate the latest refinements. The script refreshes those selected files.
+Do not run it until all selected source/gallery changes are ready to stage.
+
+After committing, publish `presentation/quickstart-v2/` through the intended
+GitHub Pages source. For branch-based Pages, select the intended branch's
+root in repository **Settings → Pages**, push using your usual workflow,
+and wait for deployment. Existing Actions-based Pages workflows must include
+that folder instead. No separate image upload is necessary. Local viewing
+works immediately; online links work only after deployment. This is an owner
+publication step, not performed by the freeze scripts.
+
 For ctbfbio, stage reviewed workflow/scripts/tests/configuration, README,
 completed citation/licence metadata and original manifests. Keep processed
 data in release assets, not a blanket commit of `data/processed/`.

@@ -17,14 +17,12 @@ Suggested credit:
 
 When redistributing a released dataset, retain its actual version, commit,
 data-archive identifier and supplied notices. Describe modifications or say
-that the data are unchanged, as appropriate. This file does not assert that
-release 1.2.0 or a Zenodo DOI has already been published.
+that the data are unchanged, as appropriate. Archive identifiers will be
+provided with the published assets.
 
 The data are provided subject to the warranty/liability terms in CC BY 4.0.
-This attribution record does not license external-tool source/outputs or
-empirical derivatives outside the scope above. Credit those materials using
-their separately supplied notices.
+External-tool source/outputs and empirical derivatives have separate
+attribution and rights notices.
 
 Funding acknowledgement: National Science Centre, Poland, grant
-2020/39/D/ST6/03321. This acknowledgement is not a claim of NCN certification
-of a software licence or a new condition on reuse.
+2020/39/D/ST6/03321.

@@ -1,17 +1,18 @@
-# Evaluation of NJ-derived Reconstruction Algorithms
+# Reconstruction experiments
 
-## CTBF v5 paper pipeline
+## Current paper results
 
-Reusable pipeline mechanics live in `paper_pipeline_contract.py`,
-`paper_pipeline_runner.py`, and `paper_pipeline_analysis.py`. Registered and
-smoke execution are currently disabled: CTBF v5 simulator parameters and a new
-protocol/manifest must be owner-approved before the manifest hash lock is set.
+Start with [portable table/figure reproduction](../reproducibility/REPRODUCE.md).
+For full experiment execution, use the
+[confirmation](../experimental_description/v5_confirmatory_runbook.md),
+[partial-comparator](../experimental_description/v5_partial_comparator_extension_runbook.md)
+and [trimmed-truth](../experimental_description/v5_trimmed_truth_runbook.md)
+runbooks. These specify the frozen input and software identities.
 
-The old G0-05-A CTBF-v2 manifest, commands, outputs, and exact-lock tests are
-legacy evidence and are not accepted or replayed. Generic pipeline invariants
-remain in `test/test_paper_pipeline.py`; new manifest-specific tests are added
-only after the v5 freeze. The historical scripts and result folders described
-below are CTBF v1/rejected-paper context, not v5 evidence.
+The remaining sections document development experiments and diagnostic
+commands. Their method names and run identifiers describe the corresponding
+experiment. Current paper identifiers M0–M7 are mapped in
+[method-map.tsv](../reproducibility/method-map.tsv).
 
 ## CTBF v5 algorithm-development bank
 

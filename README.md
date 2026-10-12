@@ -1,110 +1,268 @@
 # CTBF: Cancer Tree Biopsy Framework
 
-### Authors: Jarosław Paszek, Agnieszka Mykowiecka, Krzysztof Gogolewski
+Jarosław Paszek, Agnieszka Mykowiecka, Krzysztof Gogolewski
 
-Version 1.0.0 (only partial CNP-tres reconstruction) presented on ISMB/ECCB 2025 (poster).  
-Version 1.1.0 extends reconstruction to full CNP-trees, adds reconstruction algorithm analyzer, adds distance matrix analyzer.
+CTBF studies how a cancer's copy-number profiles change over time and how much
+of that history can be reconstructed from biopsies. A **copy-number profile
+(CNP)** is a sequence of integers: each entry gives the number of copies of a
+genomic bin. CTBF can simulate a known evolutionary history, sample it at
+several generations, reconstruct trees from the sampled CNPs, and compare the
+reconstructions with the known history.
 
-_____
+Reconstruction takes CNPs grouped by biopsy time and a matrix of pairwise
+dissimilarities. **Partial trees** may have unlabeled inferred ancestors.
+**Full, closed-state trees** label every vertex with one of the observed CNPs.
+A CNP label can occur at several vertices in either representation.
 
-To run CTBF simply run:
-`python ctbs.py`
+This is the **1.2.0 release candidate**, using the CTBF v5 simulation model.
+Configurations and results from releases 1.0/1.1 are not backward-compatible
+with this release.
 
-Important note, to run pairwise CNP comparisons we use [cnp2cnp](https://github.com/AEVO-lab/cnp2cnp) tool.
-Set the paths `cnp2cnp_FOLDER` and `cnp2cnp_FILE` in `ctbs_config.json`.
+## Install
 
-The default `python ctbs.py` run is also configured in `ctbs_config.json`, in the `RUN_SINGLE_TEST` section.
+Use CPython 3.13. From the repository root:
 
-`RUN_SINGLE_TEST` options:
-- `seed` - random seed used by the simulator and biopsy sampling.
-- `config` - path to the main simulator JSON config.
-- `bedfile` - optional CSV file with genome-position-specific simulator parameters.
-- `biopsy_size_scalable` - fraction of cells sampled from each requested generation;
-  non-empty generations contribute at least one sampled cell even when the
-  scaled fraction floors to zero. Sampling is over genotype representatives;
-  the simulator does not track an abundance weight per genotype.
-- `biopsy_generations` - list of generations from which biopsy samples are taken.
-- `r_dist` - reconstruction radius used while connecting biopsy cells into the inferred tree.
-- `write_newick` - if `true`, prints the simulated, reconstructed, and NJ trees in Newick format.
-- `visualize` - if `true`, writes HTML visualizations of the simulated and reconstructed trees.
-- `reconstruction_algorithm` - to select reconstruction algorithm inside `run_single_test`;
+```bash
+python3.13 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-release.txt
+```
 
-In `ctbs_config.json`, the simulator is controlled through the `config` and `bedfile` options:
-- `config` points to the main JSON simulator configuration,
-- `bedfile` points to the optional BED-like CSV file with per-locus simulator settings.
+For event-based CNP comparisons, install
+[cnp2cnp](https://github.com/AEVO-lab/cnp2cnp) separately following its upstream
+instructions. CTBF needs the path to its `cnp2cnp.py` file. The interactive
+examples below can also be viewed without installing either program.
 
-An updated simulator manual is available in [presentation/simulator_manual.md](presentation/simulator_manual.md).
+An optional installation check, requiring no external tools, is:
 
-To reconstruct full CNP-trees select interesting algorithm, by setting `reconstruction_algorithm` to in example 
-`neighbor_joining_hybrid_anticentral_opt`, or `neighbor_joining_hybrid_anticentral_adaptive_v3`.
+```bash
+python -m reproducibility.example
+```
 
-To reconstruct partial CNP-trees (like in version 1.0.0), in `reconstruction_algorithm` use `"None"` 
-or leave the field empty.
+It applies classical neighbor joining to four supplied CNPs and their
+dissimilarity matrix. Expected output: `complete: toy reconstruction; 7 nodes; 6 edges`.
 
-_____
+## One history, all eight CTBF paper methods
 
-Repository contains:
-- source code files:
-  - `ctbs.py` - main file
-  - `simulator.py` - simulates an evolution of a cancer cell, enables to take biopsy samples, see `Evolution Model` section for more information
-  - `reconstructor.py` - reconstructs cancer tree from biopsy samples, see `Tree Reconstruction` section for more information
-  - `evaluator.py` - computes similarity between two cancer trees, see `Tree Comparison` section for more information 
-- config files:
-  - `config_for_pic.json` - general config file for the simulator 
-  - `pic.csv` - detailed config file for the simulator
-- other files (temporal files to generate distances between CNPs of biopsy cells):
-  - `biopsy.txt` - file generated as cnp2cnp input
-  - `cnp_distance_matrix.txt` - results from cnp2cnp
-- plots (see below)
+The example uses 100 bins, 14 generations and biopsies at generations 9, 12
+and 14. It produces **one true tree, its state-trimmed view and eight
+reconstructions**, all from the same history. Select any subset of M0–M7
+in one JSON file, without editing Python.
 
-____
+| Tree | What it shows | Interactive view |
+|---|---|---|
+| True tree | Complete simulated history, with sampled occurrences highlighted | [View](https://j-paszek.github.io/ctbf/presentation/quickstart-v2/true_tree.html) |
+| Trimmed true tree | Every occurrence of an observed CNP state, with necessary unlabeled branching vertices retained | [View](https://j-paszek.github.io/ctbf/presentation/quickstart-v2/trimmed_true_tree.html) |
+| M0 — partial, pooled | Classical neighbor joining of pooled distinct CNPs | [View](https://j-paszek.github.io/ctbf/presentation/quickstart-v2/M0.html) |
+| M1 — full, pooled | Labeled closest-pair reconstruction | [View](https://j-paszek.github.io/ctbf/presentation/quickstart-v2/M1.html) |
+| M2 — partial, biopsy-guided | Binary anticentral top completion, with new top labels suppressed | [View](https://j-paszek.github.io/ctbf/presentation/quickstart-v2/M2.html) |
+| M3 — full, pooled | Rooted labeled-Q reconstruction | [View](https://j-paszek.github.io/ctbf/presentation/quickstart-v2/M3.html) |
+| M4 — partial, biopsy-guided | Classical NJ top completion | [View](https://j-paszek.github.io/ctbf/presentation/quickstart-v2/M4.html) |
+| M5 — full, pooled | Binary anticentral reconstruction | [View](https://j-paszek.github.io/ctbf/presentation/quickstart-v2/M5.html) |
+| M6 — full, biopsy-guided | Binary anticentral top completion, retaining new top labels | [View](https://j-paszek.github.io/ctbf/presentation/quickstart-v2/M6.html) |
+| M7 — full, biopsy-guided | Rooted labeled-Q top completion | [View](https://j-paszek.github.io/ctbf/presentation/quickstart-v2/M7.html) |
 
-To reproduce trees from Figure 1 of ECCB 2026 paper submission run `python ctbs.py` with:
-- `"visualize": true` for enabling generation of plots
-- `"reconstruction_algorithm": "None"` to reconstruct evolution as partial CNP-trees (output trees A, B, C, D) 
-- `"reconstruction_algorithm": "neighbor_joining_hybrid_anticentral_adaptive_v3"` to reconstruct evolution as full CNP-trees (output trees A, B, E, F)
+[Open the gallery](https://j-paszek.github.io/ctbf/presentation/quickstart-v2/index.html)
+or open the supplied [index.html](presentation/quickstart-v2/index.html) in a
+browser. The online links use GitHub Pages and become available when these
+files are published there. Hover over vertices to inspect CNPs and biopsy
+membership, and over edge midpoints for event or distance information.
+[Viewing guide](presentation/README.md).
 
-[Simulated tree](https://j-paszek.github.io/ctbf/simulated_tree.html) Cancer cell evolution tree generated by 
-simulator basing on the evolution model. Hover over edges to show labels that describe evolutionary events.
-For an interactive user guide, see [presentation/README.md](presentation/README.md).
+### Reproduce the example
 
-[True tree](https://j-paszek.github.io/ctbf/true_tree.html) Simplified simulated tree limited to cells obtained from the biopsy.
+Edit [examples/quickstart.json](examples/quickstart.json): replace
+`"cnp2cnp": null` with the absolute path to your installed `cnp2cnp.py`.
+With the environment activated, run:
 
-[Reconstructed tree](https://j-paszek.github.io/ctbf/reconstructed.html) Full CNP-tree inferred by our reconstruction 
-algorithm, that incorporates information of the cell order from biopsy order. Algorithm used for pairwise reconstruction
-of the top is NJ anticentral.
+```bash
+python -m examples.quickstart --config examples/quickstart.json
+```
 
-[NJ tree](https://j-paszek.github.io/ctbf/nj.html) Full CNP-tree obtained from pairwise NJ anticentral algorithm. 
+Open `quickstart-output/index.html`. Expected final line:
+`complete: 10 trees; open .../quickstart-output/index.html`.
+The output directory must be new. No browser opens automatically.
+HTML plots load Plotly from its CDN, so viewing them requires internet access.
 
+All settings are in [examples/quickstart.json](examples/quickstart.json):
 
+| Setting | Example value | Meaning |
+|---|---|---|
+| `seed` | `9` | Reproducible simulation, biopsy draws and reconstruction tie resolution |
+| `simulator` | JSON object | Complete simulator configuration, including 100 bins, 14 generations and CNA initiation probability `0.001` per bin |
+| `biopsy_generations` | `[9, 12, 14]` | Sampled generations, in chronological order; the founder is generation 0 |
+| `biopsy_sampling` | `{"mode":"fraction","fraction":0.5,"lower_bound":6}` | Fractional sampling with a lower bound; alternatively use `{"mode":"fixed","size":6}` |
+| `methods` | `["M0","M1","M2","M3","M4","M5","M6","M7"]` | Select any nonempty subset of the eight CTBF paper methods |
+| `visualize` | `true` | Write the interactive HTML gallery; `false` produces headless JSON outputs only, plus optional Newick |
+| `write_newick` | `false` | Also export each tree as topology-only `.nwk`, retaining labels and leaving unlabeled vertices empty |
+| `partial_ad_f1` | `false` | Also report AD-F1 on partial trees as a labeled diagnostic, rather than their primary endpoint |
+| `bedfile` | `null` | Optional single-chromosome BED-like CSV, described below |
+| `cnp2cnp` | `null` | Set to the path of your independently installed `cnp2cnp.py`, or override with `--cnp2cnp` |
+| `output` | `"../quickstart-output"` | New output directory, relative to the JSON file; optionally override with `--output` |
+| `distance_workers` | `1` | One uses two ordered matrix calls; larger values use the bounded pairwise provider with up to this many workers |
+| `max_distance_profiles` | `64` | Stop before distance computation if the number of distinct sampled CNPs exceeds this limit |
+| `cnp2cnp_timeout_seconds` | `120` | Per-process time limit for an ordered matrix call, or for each directional pair call in parallel mode |
 
-____
+For a generation of size `N`, fractional sampling requests
+`min(N, max(lower_bound, ceil(fraction * N)))` representatives. Fixed sampling
+requests `min(N, size)`. Both rules accept small nonempty generations.
+The simulator tracks genotype representatives, rather than population
+abundances. Equal CNPs are collapsed within a biopsy and retained as separate
+observations across biopsy times.
 
-For sample output see `sample_output.txt`. To reproduce this clear output, please disable plots by setting 
-`"visualize": false` in `ctbs_config.json`.  
+The selected methods share one matrix over exactly the sampled distinct CNPs.
+Each entry is the minimum of the two directed cnp2cnp `d_any` costs, also in
+parallel mode. M2/M4/M6/M7 use the adaptive median radius and defer ambiguous
+parent ties. M0/M4 share classical NJ completion; M3/M7 share rooted labeled-Q;
+M5/M6 share binary anticentral completion. M2 is M6's partial projection.
 
-Note, the output consists of several ancestor-descendant distances. The AD-F1 used in paper is 
-denoted as F1 in `ancestors_unique_restricted` model. In that model ancestor descendant relations are counted only once, 
-and nodes considered are restricted to biopsy nodes. 
+The output also contains `config.json`, `input.json` (biopsy CNPs and bin
+coordinates), `trees.json` (all selected trees), and `summary.json` (method
+identities, sampling counts, scores and simulator/distance-tool provenance).
+The displayed scores describe this example only. JSON retains complete tree
+attributes; optional Newick exports only labeled topology, without lengths.
 
-_____
+To run only **M0**, set `"methods": ["M0"]` and keep `"visualize": true`.
+This produces its Plotly tree and both GRF scores. Set `"partial_ad_f1": true`
+if you also want its ancestry diagnostic. M0 labels only leaves and therefore
+has no positive labeled ancestor–descendant pairs. Its diagnostic AD-F1 is
+zero, including under the empty/empty convention; GRF is its meaningful
+paper endpoint.
 
-For the information about the **Evaluation of NJ-derived Reconstruction Algorithms** (described in Appendix E, 
-results provided in Figure 4) and the code and frozen data that can be used used to reproduce the Figure please see 
-[algorithm_evaluation/README](https://github.com/j-paszek/ctbf/tree/main/algorithm_evaluation).
+For all **partial methods**, select `["M0", "M2", "M4"]`. For all **full
+methods**, select `["M1", "M3", "M5", "M6", "M7"]`. AD-F1 is reported for
+every full method. MEDICC2 and NestedBD-Long use the separate external-tool
+workflows linked below and are not bundled with this runner.
 
-_____
+Relative paths in JSON are resolved against that JSON file's directory.
+CLI overrides are relative to the current working directory. For example,
+without editing the distributed configuration:
 
-For the information about the **Simulation-Based Evaluation of Distance Measures for CNP Evolution**
-(described in Appendix C, results provided in Figure 3) and the code and frozen data that can be used used to reproduce the Figure please see 
-[supp_figure_3/README](https://github.com/j-paszek/ctbf/tree/main/measures_evaluation/supp_figure_3).
+```bash
+python -m examples.quickstart --config examples/quickstart.json \
+  --cnp2cnp /path/to/cnp2cnp/cnp2cnp.py --output quickstart-output
+```
 
-____
+`config.json` preserves the supplied configuration; environment-specific CLI
+path overrides are not copied into it. To rerun, choose a fresh output path
+and provide your local cnp2cnp path again.
 
-For more information please contact: j.paszek@uw.edu.pl 
+With `bedfile`, remove `GENOME_LENGTH`, `NUMBER_OF_CHROMOSOMES`,
+`INITIAL_COPY_NUMBER` and `CRUCIAL_BIN_INDICES` from `simulator`. BED rows
+supply the bin layout, initial CNs and crucial flags. This runner uses
+single-chromosome distances and rejects multi-chromosome inputs rather than
+allowing CNA events across chromosome boundaries. See the
+[simulator manual](presentation/simulator_manual.md) for the CSV format.
 
-____
+## Advanced driver: `ctbs.py`
 
-Funding:
+The general simulation/reconstruction driver is:
 
-Financial support was provided by the National Science Center grant no. 2020/39/D/ST6/03321
+```bash
+python ctbs.py
+```
+
+Before running it, edit [ctbs_config.json](ctbs_config.json). Set
+`cnp2cnp_FILE` to your installed `cnp2cnp.py` and `cnp2cnp_FOLDER` to the
+installation directory. `RUN_SINGLE_TEST` controls the analysis:
+
+| Option | Meaning |
+|---|---|
+| `seed` | Random seed |
+| `config` | Simulator JSON file, for example `simulator_examples/default.json` |
+| `bedfile` | Optional chromosome/bin CSV with per-bin settings; use `null` without one |
+| `biopsy_generations` | Increasing generation numbers to sample |
+| `biopsy_size` | Fixed sample size, capped by availability |
+| `biopsy_size_scalable` | Fractional sampling: `min(N, max(1, floor(f*N)))` for nonempty generations; takes precedence over `biopsy_size` |
+| `r_dist` | Fixed distance radius for biopsy connections |
+| `biopsy_guided_strategy` | Bottom-connection strategy, e.g. `"deferred_tie"` |
+| `reconstruction_algorithm` | Pairwise/top solver, specified below |
+| `write_newick` | Print simulated and reconstructed trees in Newick format |
+| `visualize` | Generate plots; static-image export additionally needs Plotly's optional image-export dependencies |
+
+Use `"neighbor_joining_classical"` for partial reconstruction or
+`"neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony"` for
+full anticentral reconstruction. The driver constructs both a biopsy-guided
+tree and a pooled tree. Its fixed-radius settings support exploratory runs;
+the JSON runner above supplies all eight exact paper compositions. Fixed
+radius or alternative bottom settings constitute custom variants, not the
+adaptive methods M2/M4/M6/M7.
+
+The [simulator manual](presentation/simulator_manual.md) describes every
+current JSON field, chromosome-aware intervals, offspring generation,
+viability rules, resource limits and the optional BED-like CSV. For an
+HTML-only workflow with no static-image dependency, use the JSON runner.
+
+Console evaluation includes `ancestors_unique_restricted`, whose `F1` field
+compares unique ancestor–descendant CNP-label pairs on the biopsy label set.
+This is a restriction by **state label**, not by sampled vertex identity:
+all occurrences of those labels may contribute. The example reports AD-F1
+for full trees and GRF similarity against both truth views.
+
+## Methods and evaluation
+
+| Input | Partial trees | Full, closed-state trees |
+|---|---|---|
+| Pooled distinct CNPs | M0: classical NJ | M1: labeled closest-pair; M3: rooted labeled-Q; M5: binary anticentral |
+| Biopsy-guided, adaptive-radius/deferred-tie bottom | M2: binary anticentral top; M4: classical NJ top | M6: binary anticentral top; M7: rooted labeled-Q top |
+
+Pooled methods use the CNPs without biopsy order. Biopsy-guided methods first
+connect adjacent biopsy levels and then complete the top of the resulting
+forest. M2 and M6 share the same construction and differ in whether newly
+created top vertices retain their CNP labels.
+
+**Rooted GRF similarity** compares tree structure, including repeated labels.
+CTBF reports it against the complete true tree and against state-trimmed
+truth. **AD-F1** measures agreement between unique ancestor–descendant
+state-label pairs for full reconstructions. Both reported scores range from
+0 to 1, with larger values indicating closer agreement. For AD-F1, the
+evaluation convention assigns 0 when both relation sets are empty.
+
+## Reproduce paper results
+
+[REPRODUCE.md](reproducibility/REPRODUCE.md) gives the portable commands,
+[evidence-map.tsv](reproducibility/evidence-map.tsv) maps the tables and
+figures to their inputs, and [SCHEMA.md](reproducibility/SCHEMA.md) defines
+the exports. Once the matching synthetic evidence asset is available:
+
+```bash
+python -m reproducibility.reproduce \
+  --bundle /path/to/ctbf-v5-reproduction \
+  --output /path/to/new-output --figures
+```
+
+This exports 12 synthetic numerical tables and renders three numerical
+figures from stored summaries and selected per-history evidence. It preserves
+the original intervals and method-specific coverage. Rebuilding the vector
+schematics additionally requires TeX/latexmk.
+
+The separate KTN152 empirical evidence asset is a local draft pending its
+data-rights review. It adds two empirical tables and the editable empirical
+figure, whose PDF rendering requires Inkscape. This case study demonstrates
+computational feasibility; its absolute copy-number scale remains unresolved.
+
+Release assets and archive identifiers will be linked here when published.
+The larger simulation and external-comparator workflows are documented in
+the [confirmation](experimental_description/v5_confirmatory_runbook.md),
+[partial-comparator](experimental_description/v5_partial_comparator_extension_runbook.md)
+and [trimmed-truth](experimental_description/v5_trimmed_truth_runbook.md)
+runbooks. Full reruns require their input banks and independently installed
+external tools. The lightweight evidence asset supports stored-result
+reproduction rather than the complete raw-data and inference pipelines.
+
+## Verification, citation and licence
+
+```bash
+python -m pytest -q test/test_quickstart.py test/test_release_reproduction.py test/test_reconstructor_classical_nj.py
+```
+
+Use [CITATION.cff](CITATION.cff) for software attribution. Original CTBF code
+is licensed under [MIT](LICENSE). Original CTBF-generated simulation and
+benchmark data covered by [LICENSESCOPE.md](LICENSESCOPE.md) use
+[CC BY 4.0](LICENSE-DATA), with [data attribution](DATA_ATTRIBUTION.md).
+[Third-party notices](THIRD_PARTY_NOTICES.md) identify external dependencies
+and the separate scope of their outputs and empirical data.
+
+Funding: National Science Centre grant no. 2020/39/D/ST6/03321.
+
+Contact: j.paszek@uw.edu.pl

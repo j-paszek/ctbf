@@ -1,240 +1,251 @@
-# CTBF Simulator Manual
+# CTBF simulator manual
 
-This document describes the **current simulator implementation** in [`simulator.py`](../simulator.py).
-It replaces the older [`simulator_parameters.csv`](./simulator_parameters.csv), which contains several parameters that are no longer implemented, are only partially implemented, or describe intended behavior rather than current behavior.
+This guide describes the CTBF v5 simulator included in software release 1.2.0.
+A simulated vertex represents a CNP at a particular generation. The simulator
+records its parent and copy-number events, providing a known tree against
+which reconstructions can be evaluated.
 
-## Scope
+## Start with a complete example
 
-The simulator is configured from:
+The [all-method tutorial](../README.md#one-history-all-eight-ctbf-paper-methods) supplies
+all simulation, biopsy and reconstruction settings in
+[examples/quickstart.json](../examples/quickstart.json). Its `simulator` object
+contains the fields described below.
 
-1. a JSON configuration file passed as `config_path`,
-2. optionally, a BED-like CSV file passed as `genome_csv`.
+To run the simulator alone, use a standalone configuration:
 
-If `genome_csv` is provided, the founder genome and per-locus annotations are loaded from that file.
+```python
+from simulator import CancerCellEvolutionSimulator
 
-## Global JSON Parameters
+sim = CancerCellEvolutionSimulator("simulator_examples/default.json", seed=9)
+sim.run_simulation()
+biopsy = sim.perform_biopsy(generation=5, biopsy_size=6, seed=9)
+print("Tree vertices:", len(sim.tree))
+print("Sampled CNPs:", [cell.genome.tolist() for cell in biopsy])
+```
 
-| Parameter | Type | Required | Default | Current behavior |
-| --- | --- | --- | --- | --- |
-| `genome_length` | integer | Yes if `genome_csv` is not provided | none | Length of the founder genome. Ignored when `genome_csv` is used. |
-| `initial_copies` | integer | Yes if `genome_csv` is not provided | none | Copy number assigned to every locus in the founder genome. Ignored when `genome_csv` is used. |
-| `NUMBER_OF_GENERATIONS` | integer | Yes | none | Number of generations simulated. |
-| `REPRESENTATION_TYPE` | string | No | `"representative"` | Must be `"full"` or `"representative"`. In `"representative"` mode, duplicate child genomes within the same generation are collapsed. |
-| `OFFSPRING_MODEL` | string | Yes | none | Supported values: `"constant"`, `"uniform_range"`, `"poisson"`, `"fitness"`. |
-| `OFFSPRING_PARAMETER` | number or string | Yes | none | Interpretation depends on `OFFSPRING_MODEL`; see below. |
-| `GENERAL_EVENT_PROB` | float | Yes | none | Baseline probability that a CN event is attempted at a locus. |
-| `GENERAL_DUPLICATION_PROB` | float | Yes | none | Probability that an event is a duplication rather than a loss. |
-| `GENERAL_DUPLICATION_MULTIPLICITY` | float | Yes | none | Mean of the Poisson used for duplication size. Actual duplicated copy count is `Poisson(mean) + 1`. |
-| `GENERAL_LOSS_PROB` | float | Yes in config, but not used in event generation | none | Loaded and stored, but the current implementation does not use it when choosing event type. Loss occurs whenever duplication is not chosen. |
-| `GENERAL_SINGLE_OR_MULTIPLE_EVENT_PROB` | float | Yes | none | Probability that an event extends from locus `i` to a randomly chosen `j >= i`. |
-| `MODEL_TELOMERIC_REGIONS` | string or bool | No | `"False"` | Enables telomeric instability logic. Values are interpreted case-insensitively through `str(...).lower() == "true"`. |
-| `GENERAL_TELOMERIC_PERCENTAGE` | float | Required if `MODEL_TELOMERIC_REGIONS` is enabled | none | Fraction of each chromosome end considered telomeric. |
-| `GENERAL_TELOMERIC_INSTABILITY` | float | Required if `MODEL_TELOMERIC_REGIONS` is enabled | none | Added to event probability inside telomeric regions, capped at 1. |
-| `MODEL_CRUCIAL_FOR_SURVIVAL` | string or bool | No | `"False"` | If enabled, any event that reduces a locus marked `CRUCIAL=1` to copy number 0 causes that child genome to be discarded. |
+`default.json` generates six generations after the founder. The tutorial
+uses the same event settings with a 14-generation horizon. A Python mapping
+can be supplied instead of a configuration path.
 
-## Offspring Models
+For the general `python ctbs.py` driver, `RUN_SINGLE_TEST.config` selects a
+standalone simulator JSON file, and `RUN_SINGLE_TEST.bedfile` selects the
+optional bin-coordinate CSV. These settings belong in `ctbs_config.json`.
+The tutorial's outer configuration, which also contains biopsy and method
+settings, is used by `python -m examples.quickstart` instead.
 
-| `OFFSPRING_MODEL` | `OFFSPRING_PARAMETER` format | Current behavior |
-| --- | --- | --- |
-| `"constant"` | integer-like | Each parent produces exactly `int(OFFSPRING_PARAMETER)` children, then the loop runs `num_children + 1` times in the current implementation. |
-| `"uniform_range"` | string `"min,max"` | Samples an integer uniformly from the closed interval `[min, max]`, then the loop runs `num_children + 1` times. |
-| `"poisson"` | numeric | Samples offspring count from `Poisson(parameter)`, then the loop runs `num_children + 1` times. |
-| `"fitness"` | numeric | Uses the parameter as `MAX_N` in the logistic fitness-to-Poisson mean transform, then samples from `Poisson(lambda)`. The outer loop still runs `num_children + 1` times. |
+## JSON parameters
 
-### Important implementation note
+All fields below are required. With a BED-like CSV, omit `GENOME_LENGTH`,
+`NUMBER_OF_CHROMOSOMES`, `INITIAL_COPY_NUMBER` and `CRUCIAL_BIN_INDICES`:
+those values are supplied by its rows. Unknown fields and invalid values
+are rejected before simulation. Booleans are JSON `true`/`false`, and
+probabilities are finite numbers in `[0,1]`.
 
-The current code iterates over `range(num_children + 1)`, not `range(num_children)`.
-As a result, the realized number of children is always **one larger** than the sampled offspring count.
+| Field | Accepted value | Meaning |
+|---|---|---|
+| `SIMULATOR_SEMANTIC_VERSION` | `"ctbf-cnp-state-simulator-v5"` | Configuration/model version |
+| `GENOME_LENGTH` | Integer ≥ 1 | Number of genomic bins |
+| `NUMBER_OF_CHROMOSOMES` | Integer from 1 to `GENOME_LENGTH` | Contiguous, nearly equal chromosome blocks; extra bins go to earlier blocks |
+| `INITIAL_COPY_NUMBER` | Nonnegative integer | Founder copy number in every bin; the complete founder must contain at least one nonzero bin |
+| `CRUCIAL_BIN_INDICES` | Sorted, unique zero-based indices | Bins whose loss to zero is lethal when crucial-bin survival is enabled |
+| `NUMBER_OF_GENERATIONS` | Integer ≥ 0 | Number of generations after founder generation 0 |
+| `REPRESENTATION_TYPE` | `"representative"` or `"full"` | Retain one occurrence per exact CNP per generation, or every viable occurrence |
+| `OFFSPRING_MODEL` | `"constant"`, `"poisson"`, `"uniform_range"` | Distribution of additional descendant attempts |
+| `OFFSPRING_PARAMETER` | Model-specific, below | Additional-attempt parameter |
+| `BASELINE_DESCENDANT_ATTEMPTS` | Integer `1` | One baseline attempt per continuing parent |
+| `CNA_EVENT_PROBABILITY` | Probability | Per-bin probability of initiating a segmental event in each attempted descendant |
+| `CNA_INITIATION_SCHEDULE` | Object, below | Generation-specific multiplier of initiation probabilities |
+| `GAIN_GIVEN_CNA_PROBABILITY` | Probability | Conditional gain probability; loss has probability `1 − gain` |
+| `INTERVAL_CNA_PROBABILITY` | Probability | Conditional probability of interval mode instead of a point-unit event |
+| `INTERVAL_GAIN_OPERATOR_PROBABILITIES` | Object with `unit`, `additive`, `multiplicative` | Nonnegative probabilities summing to 1 |
+| `ADDITIVE_GAIN_LAMBDA` | Finite number ≥ 0 | Additive interval gain size is `2 + Poisson(lambda)` |
+| `MULTIPLICATIVE_FACTOR_PROBABILITIES` | Object, e.g. `{"2": 1}` | Probabilities of integer multiplication factors ≥ 2, summing to 1 |
+| `WGD_PROBABILITY` | Probability | Probability of one whole-genome-doubling proposal per attempted descendant |
+| `STATE_LINEAGE_REGULATION` | Object, below | Optional regulation of continuing representatives |
+| `RESOURCE_GUARD` | Object, below | Abort limits for retained vertices |
+| `TELOMERIC_INSTABILITY_ENABLED` | Boolean | Enable increased initiation probabilities at chromosome ends |
+| `TELOMERIC_INSTABILITY_INCREMENT` | Probability | Initiation increment for telomeric bins |
+| `TELOMERIC_FRACTION` | Probability | Fraction at each chromosome end, rounded down to a bin count |
+| `CRUCIAL_SURVIVAL_ENABLED` | Boolean | Reject an attempted descendant as soon as a crucial bin reaches zero |
 
-## BED-like Genome CSV Format
+The tutorial uses 100 initially diploid bins, one chromosome, CNA initiation
+`0.001`, conditional gain probability `0.5`, interval probability `0.1`, no
+WGD, and no telomeric increment. Conditional interval gains are +1 with
+probability 0.8 and +2 with probability 0.2. The fixed crucial-bin list is
+`[4,7,38,40,41,49,54,61,69,72]`.
 
-The optional genome file is read with `csv.DictReader` and is expected to contain at least:
+These are explicit JSON settings. Changing `GENOME_LENGTH` does not rescale
+`CNA_EVENT_PROBABILITY` automatically. To retain the example's expected 0.1
+initiation proposals per attempted descendant, use `0.1 / GENOME_LENGTH`
+when initiation is uniform and the schedule and telomeric multipliers are
+inactive.
 
-| Column | Required | Current behavior |
-| --- | --- | --- |
-| `ChromosomeNumber` | No | If present, telomeric regions are computed separately per chromosome. If absent, the whole genome is treated as a single chromosome. |
-| `Start` | No | Ignored by the current implementation. Included for BED-like readability only. |
-| `End` | No | Ignored by the current implementation. Included for BED-like readability only. |
-| `Parameters` | Yes | Semicolon-separated `key=value` pairs, e.g. `CN=2;EVENT_PROB=0.8;CRUCIAL=1`. |
+### Descendant attempts and representation
 
-Example:
+For each continuing parent, the number of attempts is `1 + S`:
+
+| Model | Parameter | Additional attempts `S` |
+|---|---|---|
+| `constant` | Integer ≥ 0 | Exactly that integer |
+| `poisson` | Finite mean ≥ 0 | Poisson draw with that mean |
+| `uniform_range` | Two integers `[min, max]`, `0 ≤ min ≤ max` | Uniform integer from the inclusive range |
+
+An attempt may be rejected by a viability rule. In `representative` mode,
+only the first generated occurrence of each exact CNP in the new generation
+is retained. Later identical occurrences are discarded, including those
+from different parents. The retained tree contains genotype representatives
+without abundance weights. In `full` mode, every viable attempt is retained.
+
+Simulation representation is separate from reconstruction output: either
+simulator mode can provide biopsies for partial or fully labeled reconstruction.
+
+### CNA mechanics and viability
+
+At each bin, an initiation draw is followed by footprint, gain/loss and
+magnitude draws. Point-unit events change one bin by +1 or −1. An interval
+starts at its initiation bin, chooses left or right with equal probability,
+and selects an inclusive endpoint uniformly up to that chromosome boundary.
+Singleton intervals are retained. Events never cross chromosome boundaries.
+
+Interval losses subtract one. Interval gains select a unit increment,
+`2 + Poisson(lambda)` additional copies, or a multiplication factor according
+to the configured mixture. WGD separately doubles the profile.
+
+Copy numbers stay nonnegative, and zero is absorbing under gain operations.
+Proposed events can overlap. They are applied in sampled temporal order.
+An all-zero founder is invalid. An attempted descendant is rejected
+immediately if its entire profile reaches zero, or if a crucial bin reaches
+zero while crucial survival is enabled. Enabling that rule requires a
+nonempty mask whose founder copy numbers are positive.
+
+### Time-dependent initiation
+
+For a constant rate:
+
+```json
+"CNA_INITIATION_SCHEDULE": {"MODEL": "constant"}
+```
+
+For an early burst followed by decay:
+
+```json
+"CNA_INITIATION_SCHEDULE": {
+  "MODEL": "early_burst_decay",
+  "INITIAL_MULTIPLIER": 2.0,
+  "FINAL_MULTIPLIER": 0.25,
+  "DECAY_EXPONENT": 2.0
+}
+```
+
+The initial multiplier must exceed the positive final multiplier, and the
+exponent must be positive. For generation `g` in a horizon `H > 1`, the
+multiplier is `final + (initial − final) * (1 − (g−1)/(H−1))^exponent`.
+A one-generation run uses the initial multiplier. At each bin, the effective
+initiation probability is `min(1, multiplier * (base + telomeric increment))`.
+The schedule changes segmental initiation only. WGD and conditional event
+properties retain their separate settings.
+
+### Regulation and resource limits
+
+The example leaves regulation off:
+
+```json
+"STATE_LINEAGE_REGULATION": {"MODEL": "none"}
+```
+
+The optional model, available only in `representative` mode, is:
+
+```json
+"STATE_LINEAGE_REGULATION": {
+  "MODEL": "soft_capacity", "CAPACITY": 1000, "STEEPNESS": 2.0
+}
+```
+
+`CAPACITY` is a positive integer and `STEEPNESS` is positive. With `G` parent
+representatives and unregulated expected attempts `R0`, each parent
+continues with probability `1 / (1 + (R0−1)*(G/CAPACITY)^STEEPNESS)`.
+This regulates expected attempted descendants, rather than enforcing an
+exact population size. Extinction is a recorded outcome.
+
+The independent resource guard is required in both modes:
+
+```json
+"RESOURCE_GUARD": {
+  "MAX_REPRESENTATIVES_PER_GENERATION": 2000,
+  "MAX_TOTAL_NODES": 40000
+}
+```
+
+Both limits are positive integers. The total includes the founder and all
+retained historical vertices. A run raises `SimulationResourceLimitExceeded`
+before retaining a vertex that would exceed a limit. That incomplete history
+is unsuitable for reconstruction. The guard does not prune a tree to fit.
+
+## Optional chromosome/bin CSV
+
+Pass a BED-like CSV as the simulator's second argument:
+
+```python
+sim = CancerCellEvolutionSimulator("my_config.json", "my_bins.csv", seed=9)
+```
+
+Remove the four no-BED fields listed above from `my_config.json`. The exact
+header and an example are:
 
 ```csv
 ChromosomeNumber,Start,End,Parameters
-1,0,100000,CN=2;EVENT_PROB=0.8;TELOMERIC_INSTABILITY=0.5
-1,100000,200000,CN=3
-2,100000,200000,CN=1;CRUCIAL=1
-2,200000,300000,CN=2;FITNESS_WEIGHT=0.1
+1,0,100000,CN=2;CNA_EVENT_PROBABILITY=0.001
+1,100000,200000,CN=2;GAIN_GIVEN_CNA_PROBABILITY=0.7;CRUCIAL=1
+2,0,100000,CN=1;INTERVAL_CNA_PROBABILITY=0.2
 ```
 
-## Per-Locus Parameters in `Parameters`
+Each row is one CNP bin. Chromosome names must be nonempty, and coordinates
+must satisfy `0 ≤ Start < End`. Rows are sorted and non-overlapping within
+each chromosome, which must occupy one contiguous block of rows. `CN` is
+required in every row.
 
-| Key | Type | Current behavior |
-| --- | --- | --- |
-| `CN` | integer | Founder copy number at this locus. Defaults to `2` if omitted. |
-| `EVENT_PROB` | float | Overrides `GENERAL_EVENT_PROB` at that locus. This override is used. |
-| `DUPLICATION_PROB` | float | Parsed and stored, but currently **not used** during event generation. |
-| `DUPLICATION_MULTIPLICITY` | float | Parsed and stored, but currently **not used** during event generation. |
-| `LOSS_PROB` | float | Parsed and stored, but currently **not used** during event generation. |
-| `SINGLE_OR_MULTIPLE_EVENT_PROB` | float | Parsed and stored, but currently **not used** during event generation. The simulator uses the global `GENERAL_SINGLE_OR_MULTIPLE_EVENT_PROB`. |
-| `TELOMERIC_INSTABILITY` | float | Overrides telomeric instability at that locus when telomeric modeling is enabled. |
-| `CRUCIAL` | `0` or `1` | If `MODEL_CRUCIAL_FOR_SURVIVAL` is enabled, loss to copy number 0 at this locus invalidates the child genome. |
-| `FITNESS_WEIGHT` | float | Per-locus weight used only by the `"fitness"` offspring model. |
+Optional semicolon-separated row settings are `CNA_EVENT_PROBABILITY`,
+`GAIN_GIVEN_CNA_PROBABILITY`, `INTERVAL_CNA_PROBABILITY`,
+`INTERVAL_GAIN_OPERATOR_PROBABILITIES`, `ADDITIVE_GAIN_LAMBDA`,
+`MULTIPLICATIVE_FACTOR_PROBABILITIES`, `TELOMERIC_INSTABILITY` and `CRUCIAL`.
+Distribution values use forms such as `unit:0.8,additive:0.2,multiplicative:0`.
+CSV fields containing commas must be quoted. `CRUCIAL` is `0` or `1`.
+Explicit `TELOMERIC_INSTABILITY` requires telomeric mode to be enabled.
+Overrides are taken from the initiation row and apply over the event footprint.
 
-## What the Simulator Actually Uses During Event Generation
+## Biopsy sampling and CNP identity
 
-For each locus `i`, the simulator:
+`perform_biopsy(generation, biopsy_size=n)` samples without replacement,
+capped by the available count. With `biopsy_size_scalable=f`, a nonempty
+generation of size `N` contributes `min(N, max(1, floor(f*N)))` raw samples.
+The tutorial uses an explicit size calculation with a configurable lower
+bound and ceiling, described in its [configuration table](../README.md#reproduce-the-example).
+Empty generations yield no sample.
 
-1. starts from `EVENT_PROB` if provided, otherwise `GENERAL_EVENT_PROB`,
-2. adds telomeric instability if telomeric modeling is enabled,
-3. decides whether the event is single-locus or multi-locus using the **global** `GENERAL_SINGLE_OR_MULTIPLE_EVENT_PROB`,
-4. decides duplication vs loss using the **global** `GENERAL_DUPLICATION_PROB`,
-5. samples duplication size using the **global** `GENERAL_DUPLICATION_MULTIPLICITY`,
-6. applies the change across `[i, j]`.
+`node_id` identifies a tree occurrence. `cell_id` identifies a CNP state.
+Exact recurrent CNPs are canonicalized to the same state label at the biopsy
+and truth-export boundaries. Identical states are collapsed within a biopsy,
+while repeated observations across biopsy times remain separate. The raw
+simulation tree is preserved.
 
-This means the following values are **loaded but currently inactive** in the mutation step:
+## Inspecting results
 
-- `GENERAL_LOSS_PROB`
-- per-locus `DUPLICATION_PROB`
-- per-locus `DUPLICATION_MULTIPLICITY`
-- per-locus `LOSS_PROB`
-- per-locus `SINGLE_OR_MULTIPLE_EVENT_PROB`
+- `sim.tree`: directed simulation tree, including typed edge-event records.
+- `sim.canonicalized_tree_by_genome()`: a truth-tree copy with canonical CNP labels.
+- `sim.provenance()`: seed, configuration hashes, versions and RNG information.
+- `sim.diagnostics_snapshot()`: generation sizes, proposals, rejected attempts and retained events.
+- `sim.create_bed_csv(path)`: resolved bin configuration.
+- `sim.get_parameters_csv(path)`: resolved parameters as a wide table.
 
-## Founder Genome Behavior
+The tutorial calls the same `trim_true_tree` helper used in evaluation. It
+retains every true occurrence of an observed state, clears other labels,
+prunes branches without retained labels and suppresses unlabeled unary
+vertices, promoting the child of an unlabeled unary root. Repeated labeled
+vertices and unlabeled branching vertices remain.
 
-If `genome_csv` is not provided:
-
-- the founder genome is `initial_copies` repeated `genome_length` times.
-
-If `genome_csv` is provided:
-
-- the founder genome is built from the ordered `CN` values in the file,
-- `genome_length` is inferred from the CSV,
-- optional chromosome, cruciality, telomeric, and fitness annotations are taken from the CSV.
-
-## Telomeric Regions
-
-If `MODEL_TELOMERIC_REGIONS` is enabled:
-
-- both `GENERAL_TELOMERIC_INSTABILITY` and `GENERAL_TELOMERIC_PERCENTAGE` must be present,
-- if chromosome labels exist, telomeric regions are computed separately for each chromosome,
-- otherwise the first and last `int(length * percentage)` loci of the whole genome are treated as telomeric,
-- per-locus `TELOMERIC_INSTABILITY` values override the automatically assigned telomeric values.
-
-## Representation Modes
-
-| Mode | Current behavior |
-| --- | --- |
-| `representative` | Within one generation spawning step, repeated child genomes are collapsed using genome equality across all parents in that generation. |
-| `full` | All children are retained, even if they have identical genomes. |
-
-## Canonical Cell IDs for Recurrent Genomes
-
-`node_id` and `cell_id` have different meanings:
-
-- `node_id` is graph identity. It identifies a specific node in the simulated
-  tree.
-- `cell_id` is genotype identity. It is the label used by biopsy, distance, and
-  reconstruction components.
-
-If no copy-number event occurs on an edge, the child reuses the parent
-`cell_id`. If an event occurs, the raw simulator assigns a new `cell_id`.
-However, later copy-number events can reverse earlier changes. For example, a
-lineage can duplicate one locus and a later descendant can lose that same copy,
-returning to an already observed genome.
-
-In that recurrent-genome case, the raw tree can contain two different
-`cell_id` values with the same genome. Biopsy and export views canonicalize
-that situation by choosing the smallest observed `cell_id` for each genome.
-This is not treated as a new distinct observed genotype.
-
-The motivation is observational: downstream components receive only the biopsy
-sample and its CNP/genotype values. They do not receive extra hidden lineage
-information that would prove that one sampled cell mutated away and later
-mutated back. If two cells in one biopsy have the same genotype, the observable
-interpretation is another sample from the same line, not two distinguishable
-biopsy genotypes.
-
-The simulator therefore exposes:
-
-- `canonical_cell_id_by_genome()`: maps each observed genome to the minimum
-  `cell_id` seen with that genome;
-- `canonicalized_tree_by_genome()`: returns a copy of the tree with node
-  `cell_id` values canonicalized by genome;
-- biopsy sampling returns canonicalized genotype copies, leaving the raw
-  simulator tree unchanged.
-
-The inverse invariant remains strict: one `cell_id` must not map to multiple
-genomes. If that is encountered while building the canonical map, the simulator
-raises an error.
-
-## Biopsy Sampling
-
-`CancerCellEvolutionSimulator.perform_biopsy` samples unique genotype
-representatives from the requested generation, then canonicalizes sampled
-`cell_id` values by genome.
-
-The simulator does not currently store an explicit population size or abundance
-weight for each genotype representative. A genotype node should therefore be
-read as the observable copy-number state present at that generation, not as a
-single explicitly counted biological cell. If a selected generation contains one
-genotype representative, that means the simulated state available for biopsy at
-that generation is represented by that one genotype. Scalable biopsy sampling
-therefore treats genotype representatives as equally weighted and ensures that a
-non-empty selected generation contributes at least one representative.
-
-The method supports two sizing modes:
-
-- `biopsy_size`: fixed raw sample size, capped at the number available in the
-  requested generation before canonical duplicate collapse.
-- `biopsy_size_scalable`: fraction of the requested generation. For non-empty
-  generations this mode samples at least one cell, even when
-  `int(biopsy_size_scalable * generation_size)` would be `0`. The computed
-  value is the raw sample size before canonical duplicate collapse. Empty
-  generations still return an empty biopsy.
-
-If both sizing modes are provided, `biopsy_size_scalable` controls the raw
-sample size before canonical duplicate collapse.
-
-After the raw sample is drawn, sampled cells with the same canonical `cell_id`
-are collapsed within that single biopsy. This means the returned biopsy can be
-smaller than the requested fixed size or the size computed from
-`biopsy_size_scalable`. This collapse is intentional and allowed in the rare
-case where the raw simulator sampled multiple nodes that are observationally the
-same genotype after recurrent-genome canonicalization.
-
-The minimum-one rule for non-empty generations applies before this collapse: a
-non-empty generation still contributes at least one raw sampled representative,
-and after collapsing identical canonical genotypes it still contributes at least
-one returned genotype. Repeated `cell_id` observations in different biopsy
-levels are not collapsed by `perform_biopsy`, because each call represents one
-generation snapshot.
-
-## Output Helpers
-
-The simulator currently exposes these helper/export methods:
-
-| Method | Output |
-| --- | --- |
-| `get_parameters_csv(file)` | Writes a flat per-locus table of the simulator state after initialization. |
-| `create_bed_csv(file)` | Writes a minimal BED-like CSV with `ChromosomeNumber,Start,End,Parameters`, but currently outputs placeholder `Start=0`, `End=0`, and only `CN=...`. |
-| `canonicalized_tree_by_genome()` | Returns a copy of the current tree with repeated-genome `cell_id` values canonicalized to the minimum observed `cell_id`. |
-| `tree_without_CNPs()` | Returns a copy of the current tree with node `genome` values replaced by `None`. |
-| `to_distance_matrix(output_filename, node_list=None)` | Writes a PHYLIP-like distance matrix using event-count distance along undirected tree paths and `cell_id` row labels. |
-| `plot_tree(...)` | Renders the current tree with optional biopsy and node highlighting. |
-
-## Differences From the Old Manual
-
-The old `simulator_parameters.csv` includes several entries that do not reflect the current codebase:
-
-- `TELOMERIC_MASKING_FILE` is not implemented.
-- `FITNESS_MODEL` is not implemented as a config option.
-- `SELECTIVE_PRESSURE` is not implemented as a config option.
-- `GENERAL_LOSS_PROB` is described as active, but is not currently used in event selection.
-- several per-locus overrides are parsed but not actually applied in mutation generation.
-
-## Recommended Usage Notes
-
-- Use the JSON file to control global simulation behavior.
-- Use the BED-like CSV only when founder-genome heterogeneity or per-locus annotations are needed.
-- If precise biological interpretation matters, treat the inactive parameters listed above as **unsupported in the current implementation**, even if they appear in older documentation.
+The [interactive gallery](https://j-paszek.github.io/ctbf/presentation/quickstart-v2/index.html)
+shows the complete and trimmed truth alongside all eight CTBF paper methods.
+The simulator supports multiple chromosomes, but this lightweight runner
+currently requires one chromosome because its distance provider operates
+on one interval domain. It rejects multi-chromosome configurations explicitly.

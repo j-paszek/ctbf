@@ -37,7 +37,7 @@ export XDG_CACHE_HOME="$attempt/cache"
     cd "$attempt/ctbf"
     "$clean_python" -m pytest -q test/test_reconstructor_classical_nj.py \
         test/test_paper_confirmation_figure_v6.py test/test_paper_empirical_figure_v3.py \
-        test/test_freezing_release_scripts.py test/test_release_reproduction.py
+        test/test_freezing_release_scripts.py test/test_release_reproduction.py test/test_quickstart.py
 )
 mkdir "$attempt/unpacked"
 tar -xzf "$CTBF_RELEASE_WORK/assets/ctbf-v5-reproduction-1.2.0.tar.gz" -C "$attempt/unpacked"

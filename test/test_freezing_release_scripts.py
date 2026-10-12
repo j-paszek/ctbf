@@ -101,7 +101,37 @@ def test_source_preview_does_not_change_git_index(release_workspace):
     result = run_step(release_workspace, 7)
     assert result.returncode == 0, result.stdout
     assert "Preview only" in result.stdout
+    assert "examples/quickstart.py" in result.stdout
+    assert "test/test_quickstart.py" in result.stdout
+    assert "presentation/quickstart-v2/trimmed_true_tree.html" in result.stdout
+    assert "presentation/quickstart-v2/M2.html" in result.stdout
+    assert "presentation/quickstart-v2/M7.html" in result.stdout
+    assert "local files preserved" in result.stdout
+    assert "nj.html" in result.stdout
     assert not (release_workspace[0] / ".git" / "index").exists()
+
+
+def test_embedded_library_exclusion_preserves_local_copies_and_other_files(release_workspace):
+    ctbf = release_workspace[0]
+    obsolete = ("nj.html", "reconstructed.html", "simulated_tree.html", "true_tree.html")
+    for name in (*obsolete, "keep.txt"):
+        (ctbf / name).write_text(f"preserve {name}\n")
+    subprocess.run(["git", "add", "--", *obsolete, "keep.txt"], cwd=ctbf, check=True)
+
+    def call_helper(name):
+        return subprocess.run(["bash", "-c", 'source "$1"; "$2"', "check",
+                               str(SCRIPTS / "common.sh"), name], cwd=ctbf,
+                              text=True, capture_output=True, timeout=10)
+
+    blocked = call_helper("require_no_tracked_embedded_html")
+    assert blocked.returncode != 0 and "still tracks" in blocked.stderr
+    removed = call_helper("exclude_legacy_embedded_html_from_index")
+    assert removed.returncode == 0, removed.stderr
+    assert call_helper("exclude_legacy_embedded_html_from_index").returncode == 0
+    assert call_helper("require_no_tracked_embedded_html").returncode == 0
+    assert all((ctbf / name).read_text() == f"preserve {name}\n" for name in obsolete)
+    tracked = subprocess.check_output(["git", "ls-files"], cwd=ctbf, text=True)
+    assert tracked.strip() == "keep.txt"
 
 
 def fake_command(fixture, name):

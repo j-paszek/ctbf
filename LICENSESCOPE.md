@@ -42,13 +42,13 @@ Retain supplied creator/source and licence notices, link to CC BY 4.0, and
 indicate changes, as required by that licence. Include the released version
 and archive identifier when available. Citation of the accompanying research
 paper is requested for scientific credit, not imposed as an additional
-licence condition. Do not invent a release DOI before the deposit exists.
+licence condition. Archive identifiers accompany the published data assets.
 
 ## Separation in release assets
 
-The release packager must explicitly list which files each notice covers.
-The existing frozen experiment directories must not be moved or relabeled
-in place. Create reviewed release copies using a layout such as:
+Each asset's `file-rights.tsv` identifies the files covered by each notice.
+The release layout separates original synthetic material from external
+outputs:
 
 ```text
 ctbf-v5-reproduction/
@@ -67,42 +67,26 @@ ctbf-v5-reproduction/
     cnp2cnp/NOTICE.md
 ```
 
-Only include the external-output directories actually needed. Each external
-output notice must identify the tool/version or commit, the generating run,
-input origin, file coverage, any supplied attribution and the reviewed
-output-specific redistribution basis. The program's software licence alone
-is not an output licence. An unresolved status must be stated explicitly and
-resolved before that material is published. A disclaimer cannot create
-missing redistribution rights.
+External-output directories are included when needed by the asset. Their
+notices identify the tool/version or commit, generating run, input origin,
+covered files, attribution and output-specific redistribution basis.
+Files with unresolved redistribution status are excluded from public assets.
 
-Keep empirical material in a separately described ctbfbio evidence asset.
-Do not put a blanket `CC-BY-4.0` label on a mixed synthetic/external/empirical
-archive. Its metadata must point to these per-scope notices. A record hosting
-only `ctbf-generated/` may use CC-BY-4.0 as its data licence.
+Empirical material belongs to the separately described ctbfbio evidence
+asset. Mixed assets refer to per-scope notices. A record containing only
+`ctbf-generated/` uses CC BY 4.0 as its data licence.
 
 ## No third-party software redistribution
 
-The releases may contain original CTBF wrappers, installation instructions,
-upstream URLs, version pins, checksums and bibliographic references. They must
-not contain upstream software source, adapted copies of that source, bundled
-libraries, executable packages, JARs or container images. A copied example or
-XML template is not made original merely by changing parameter values.
-Link to any required upstream template and preserve its hash instead.
+The releases contain original CTBF wrappers, installation instructions,
+upstream URLs, version pins, checksums and bibliographic references. Upstream
+software source, adapted source, copied templates, bundled libraries,
+executable packages, JARs and container images are excluded. Required upstream
+templates are identified by links and hashes.
 
-This rule applies to the Git tree published under the tag, source snapshots
-inside evidence archives, submodule contents and ancillary assets. Check
-committed history before making a previously private repository public.
-Do not delete local installations or rewrite frozen scientific source locks
-to satisfy the release policy. Keep exact upstream identity and independent
-installation instructions available for reproducibility.
+This scope applies to tagged Git trees, evidence archives, submodule contents
+and ancillary assets. Provenance records identify the independently installed
+upstream versions used by each experiment.
 
 The dependency/output distinction is detailed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-## Superseded candidates
-
-CC0 was an earlier proposal and was not adopted for this release. Any
-`LICENSE-DATA-CC0.txt` in the owner's local release workspace is an unused
-candidate, not a licence declaration for CTBF data. It must not be placed in
-the public evidence asset. Do not remove licences from material that another
-rights holder has already independently released under CC0.
