@@ -1,0 +1,127 @@
+{
+  "seed": 9,
+  "truth_vertices": 55,
+  "trimmed_truth_vertices": 52,
+  "distinct_sampled_profiles": 8,
+  "sampling": [
+    {
+      "generation": 9,
+      "available": 5,
+      "requested": 5,
+      "selected": 5,
+      "labels": [
+        0,
+        13,
+        5,
+        14,
+        9
+      ]
+    },
+    {
+      "generation": 12,
+      "available": 6,
+      "requested": 6,
+      "selected": 6,
+      "labels": [
+        9,
+        14,
+        13,
+        36,
+        0,
+        5
+      ]
+    },
+    {
+      "generation": 14,
+      "available": 10,
+      "requested": 6,
+      "selected": 6,
+      "labels": [
+        13,
+        14,
+        0,
+        5,
+        52,
+        46
+      ]
+    }
+  ],
+  "methods": {
+    "M0": {
+      "arm_id": "classical_partial",
+      "output": "partial",
+      "grf_full": 0.17698803706551003,
+      "grf_trimmed": 0.18877481448413913,
+      "ad_f1": null,
+      "ad_f1_role": "not_reported"
+    },
+    "M1": {
+      "arm_id": "neighbor_joining_baseline",
+      "output": "closed-state",
+      "grf_full": 0.1763491775872097,
+      "grf_trimmed": 0.18744818754223258,
+      "ad_f1": 0.1714285714285714,
+      "ad_f1_role": "closed_state_endpoint"
+    },
+    "M2": {
+      "arm_id": "biopsy_guided_top_anticentral_binary_adaptive_median_prior_nn_bottom_deferred_tie",
+      "output": "partial",
+      "grf_full": 0.26217583620560003,
+      "grf_trimmed": 0.2965221040976941,
+      "ad_f1": null,
+      "ad_f1_role": "not_reported"
+    },
+    "M3": {
+      "arm_id": "rooted_labeled_nj",
+      "output": "closed-state",
+      "grf_full": 0.14131988122676065,
+      "grf_trimmed": 0.1521909065625331,
+      "ad_f1": 0.2777777777777778,
+      "ad_f1_role": "closed_state_endpoint"
+    },
+    "M4": {
+      "arm_id": "biopsy_guided_classical_adaptive_median_prior_nn_bottom_deferred_tie",
+      "output": "partial",
+      "grf_full": 0.26130593125283963,
+      "grf_trimmed": 0.295639696606221,
+      "ad_f1": null,
+      "ad_f1_role": "not_reported"
+    },
+    "M5": {
+      "arm_id": "neighbor_joining_hybrid_anticentral_adaptive_v3_plausible_parsimony",
+      "output": "closed-state",
+      "grf_full": 0.20792666897281753,
+      "grf_trimmed": 0.22143474011783915,
+      "ad_f1": 0.6842105263157896,
+      "ad_f1_role": "closed_state_endpoint"
+    },
+    "M6": {
+      "arm_id": "biopsy_guided_full_anticentral_binary_adaptive_median_prior_nn_bottom_deferred_tie",
+      "output": "closed-state",
+      "grf_full": 0.26502607840204095,
+      "grf_trimmed": 0.29954959638076506,
+      "ad_f1": 0.7999999999999999,
+      "ad_f1_role": "closed_state_endpoint"
+    },
+    "M7": {
+      "arm_id": "biopsy_guided_full_rooted_labeled_q_adaptive_median_prior_nn_bottom_deferred_tie",
+      "output": "closed-state",
+      "grf_full": 0.26956051325407815,
+      "grf_trimmed": 0.30645253962994135,
+      "ad_f1": 0.6666666666666667,
+      "ad_f1_role": "closed_state_endpoint"
+    }
+  },
+  "simulator_provenance": {
+    "config_sha256": "91bd125b077b7c25192382d70f01fbdba00818ce02415d52e218bc6a947fccc3",
+    "bed_sha256": null
+  },
+  "distance": {
+    "name": "cnp2cnp d_any",
+    "symmetrization": "minimum_bidirectional",
+    "construction": "matrix",
+    "requested_workers": 1,
+    "cnp2cnp_sha256": "aac348347dcd77bd119403be95a4b88a9c8ebdca8356919b11a7234058fb1766"
+  },
+  "numpy_version": "2.2.6"
+}

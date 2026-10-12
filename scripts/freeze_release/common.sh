@@ -18,7 +18,10 @@ exclude_legacy_embedded_html_from_index() {
     local file
     for file in "${CTBF_LEGACY_EMBEDDED_HTML[@]}"; do
         if git ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
-            git rm --cached -- "$file"
+            # Individual skip-worktree bits can exist even without an active
+            # sparse checkout. Authorize only this approved path's index
+            # removal; do not change global sparsity rules or working files.
+            git rm --cached --sparse -- "$file"
             printf 'Excluded from the next Git snapshot; local copy preserved: %s\n' "$file"
         fi
     done

@@ -111,12 +111,20 @@ def test_source_preview_does_not_change_git_index(release_workspace):
     assert not (release_workspace[0] / ".git" / "index").exists()
 
 
-def test_embedded_library_exclusion_preserves_local_copies_and_other_files(release_workspace):
+@pytest.mark.parametrize("skip_worktree", (False, True))
+def test_embedded_library_exclusion_preserves_local_copies_and_other_files(release_workspace, skip_worktree):
     ctbf = release_workspace[0]
     obsolete = ("nj.html", "reconstructed.html", "simulated_tree.html", "true_tree.html")
     for name in (*obsolete, "keep.txt"):
         (ctbf / name).write_text(f"preserve {name}\n")
     subprocess.run(["git", "add", "--", *obsolete, "keep.txt"], cwd=ctbf, check=True)
+    if skip_worktree:
+        # The owner's repository is NOT a sparse checkout, but these entries
+        # have individual skip-worktree bits. Preserve an unrelated bit too.
+        subprocess.run(["git", "update-index", "--skip-worktree", "--",
+                        "nj.html", "true_tree.html", "keep.txt"], cwd=ctbf, check=True)
+        assert subprocess.run(["git", "config", "--get", "core.sparseCheckout"],
+                              cwd=ctbf, capture_output=True).returncode == 1
 
     def call_helper(name):
         return subprocess.run(["bash", "-c", 'source "$1"; "$2"', "check",
@@ -132,6 +140,13 @@ def test_embedded_library_exclusion_preserves_local_copies_and_other_files(relea
     assert all((ctbf / name).read_text() == f"preserve {name}\n" for name in obsolete)
     tracked = subprocess.check_output(["git", "ls-files"], cwd=ctbf, text=True)
     assert tracked.strip() == "keep.txt"
+    assert (ctbf / "keep.txt").read_text() == "preserve keep.txt\n"
+    if skip_worktree:
+        flags = subprocess.check_output(["git", "ls-files", "-v", "--", "keep.txt"],
+                                        cwd=ctbf, text=True)
+        assert flags.strip() == "S keep.txt"
+        assert subprocess.run(["git", "config", "--get", "core.sparseCheckout"],
+                              cwd=ctbf, capture_output=True).returncode == 1
 
 
 def fake_command(fixture, name):

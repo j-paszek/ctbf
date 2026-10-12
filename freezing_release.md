@@ -426,7 +426,9 @@ Step 7 also previews four **index-only exclusions**: `nj.html`,
 `reconstructed.html`, `simulated_tree.html` and `true_tree.html`. They embed
 Plotly.js and therefore cannot enter the new release under the adopted
 no-vendoring policy. Only `--stage-reviewed-files` applies these exclusions
-with `git rm --cached`, preserving local files. The existing root-HTML ignore
+with `git rm --cached --sparse`, preserving local files even when a target
+has Git's `skip-worktree` flag. This does not change sparse-checkout settings
+or unrelated index flags. The existing root-HTML ignore
 rule prevents accidental re-addition. No Git history is rewritten. Step 8
 and later publication checks refuse a candidate that still tracks them.
 
