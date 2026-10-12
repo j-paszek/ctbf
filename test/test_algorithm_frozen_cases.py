@@ -26,8 +26,12 @@ def test_seed689_frozen_case_regression_for_legacy_variants(expectation):
 
     actual = reconstruct_frozen_case(FROZEN_CASE, algorithm)
 
-    assert actual["rec_root"] == expectation["rec_root"]
-    assert actual["nj_root"] == expectation["nj_root"]
+    # CTBF v5 returns graph occurrence ids. This older fixture's root fields
+    # contain CNP state labels, so verify both identities without rewriting it.
+    assert actual["rec_graph_roots"] == [actual["rec_root"]]
+    assert actual["nj_graph_roots"] == [actual["nj_root"]]
+    assert actual["rec_root_cell_id"] == expectation["rec_root"]
+    assert actual["nj_root_cell_id"] == expectation["nj_root"]
     assert actual["rec_newick"] == expectation["rec_newick"]
     assert actual["nj_newick"] == expectation["nj_newick"]
 

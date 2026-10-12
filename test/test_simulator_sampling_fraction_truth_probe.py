@@ -99,7 +99,10 @@ def test_cross_biopsy_diagnostics_separate_adjacent_and_any_earlier_ancestry():
     assert summary["observed_only_occurrence_arborescence_representable"] is False
 
 
-def test_one_small_seed_block_runs_truth_only_with_all_nested_conditions():
+def test_one_small_seed_block_runs_truth_only_with_all_nested_conditions(
+    controlled_stage_rss,
+):
+    controlled_stage_rss()
     report = probe.run_probe(
         replicates=1,
         base_seed=31,

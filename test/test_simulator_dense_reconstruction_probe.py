@@ -130,7 +130,8 @@ def test_reconstruction_comparison_is_within_arm_and_paired():
             }
 
 
-def test_small_injected_case_runs_all_six_arms_without_reference_corpus():
+def test_small_injected_case_runs_all_six_arms_without_reference_corpus(controlled_stage_rss):
+    controlled_stage_rss()
     report = probe.run_probe(
         replicates=1,
         heights=(14,),

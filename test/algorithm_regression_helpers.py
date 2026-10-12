@@ -92,6 +92,10 @@ def reconstruct_frozen_case(case, algorithm):
     return {
         "rec_root": rec_root,
         "nj_root": nj_root,
+        "rec_graph_roots": [node for node, degree in rec_tree.in_degree() if degree == 0],
+        "nj_graph_roots": [node for node, degree in nj_tree.in_degree() if degree == 0],
+        "rec_root_cell_id": rec_tree.nodes[rec_root]["cell_id"],
+        "nj_root_cell_id": nj_tree.nodes[nj_root]["cell_id"],
         "rec_newick": to_newick(rec_tree),
         "nj_newick": to_newick(nj_tree),
         "rec_ancestors_unique_restricted": {

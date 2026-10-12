@@ -19,7 +19,10 @@ def test_population_case_plan_deduplicates_shared_length_height_cell():
     assert shared["unreduced_binary_total_node_bound"] == 511
 
 
-def test_small_population_preflight_runs_simulation_only_and_writes_compact_counts():
+def test_small_population_preflight_runs_simulation_only_and_writes_compact_counts(
+    controlled_stage_rss,
+):
+    controlled_stage_rss()
     report = preflight.run_population_preflight(
         lengths=[10],
         heights=[7, 8],

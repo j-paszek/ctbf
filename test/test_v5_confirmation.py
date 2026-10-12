@@ -4,6 +4,7 @@ import networkx as nx
 import numpy as np
 import pytest
 
+from algorithm_evaluation import v5_confirmation_run as confirmation_run
 from algorithm_evaluation.paper_pipeline_contract import (
     PaperContractError,
     read_json,
@@ -133,7 +134,19 @@ def test_one_sided_sign_flip_is_deterministic():
     ) == _one_sided_sign_flip(values, repetitions=2000, seed=17)
 
 
-def test_confirmation_record_reconstructs_before_loading_truth(tmp_path):
+@pytest.mark.parametrize(
+    "over_limit_stage", [None, "reconstruction", "evaluation"],
+    ids=["within-limit", "reconstruction-rss", "evaluation-rss"],
+)
+def test_confirmation_record_reconstructs_before_loading_truth(
+    tmp_path, monkeypatch, controlled_stage_rss, over_limit_stage,
+):
+    stage_peaks = [64 * 1024**2, 96 * 1024**2]
+    if over_limit_stage is not None:
+        stage_peaks[["reconstruction", "evaluation"].index(over_limit_stage)] = (
+            1024**3 + 1
+        )
+    controlled_stage_rss(*stage_peaks)
     case_root = tmp_path / "case"
     case_root.mkdir()
     profiles = {0: [2, 2, 2], 1: [2, 2, 1], 2: [2, 1, 1]}
@@ -198,6 +211,27 @@ def test_confirmation_record_reconstructs_before_loading_truth(tmp_path):
         "truth_path": "case/truth.json",
     }
 
+    events = []
+    reconstruct = confirmation_run.reconstruct_development_arm
+    read_asset = confirmation_run.read_json
+
+    def observed_reconstruction(*args, **kwargs):
+        events.append("reconstruction_started")
+        result = reconstruct(*args, **kwargs)
+        events.append("reconstruction_finished")
+        return result
+
+    def observed_read(path):
+        if Path(path) == case_root / "truth.json":
+            assert events == ["reconstruction_started", "reconstruction_finished"]
+            events.append("truth_read")
+        return read_asset(path)
+
+    monkeypatch.setattr(
+        confirmation_run, "reconstruct_development_arm", observed_reconstruction
+    )
+    monkeypatch.setattr(confirmation_run, "read_json", observed_read)
+
     record = _execute_record(
         str(tmp_path),
         case,
@@ -208,7 +242,19 @@ def test_confirmation_record_reconstructs_before_loading_truth(tmp_path):
         1024**3,
     )
 
-    assert record["status"] == "success"
+    expected_events = ["reconstruction_started", "reconstruction_finished"]
+    if over_limit_stage != "reconstruction":
+        expected_events.append("truth_read")
+    assert events == expected_events, record.get("failure")
+
+    if over_limit_stage is not None:
+        assert record["status"] == "failure", record.get("failure")
+        assert record["failure"]["stage"] == over_limit_stage
+        assert record["failure"]["type"] == "StageResourceError"
+        assert "exceeded the registered limit" in record["failure"]["message"]
+        return
+
+    assert record["status"] == "success", record.get("failure")
     assert record["observation_coverage"]["fraction"] == 1.0
     assert record["reconstruction_metadata"][
         "truth_loaded_only_after_reconstruction"

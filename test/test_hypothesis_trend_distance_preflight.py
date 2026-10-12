@@ -183,7 +183,10 @@ def test_vectorized_candidate_graph_matches_pair_loop_reference():
     assert observed == expected
 
 
-def test_distance_preflight_replays_compact_population_case_with_injected_distance(tmp_path):
+def test_distance_preflight_replays_compact_population_case_with_injected_distance(
+    tmp_path, controlled_stage_rss,
+):
+    controlled_stage_rss()
     population_report = population.run_population_preflight(
         lengths=[10],
         heights=[7],
@@ -217,7 +220,10 @@ def test_distance_preflight_replays_compact_population_case_with_injected_distan
     assert report["ambiguity"]["transition_count"] == 2
 
 
-def test_distance_preflight_rejects_budget_above_population_limit(tmp_path):
+def test_distance_preflight_rejects_budget_above_population_limit(
+    tmp_path, controlled_stage_rss,
+):
+    controlled_stage_rss()
     population_report = population.run_population_preflight(
         lengths=[10],
         heights=[7],

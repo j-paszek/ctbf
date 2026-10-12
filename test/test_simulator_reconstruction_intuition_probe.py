@@ -195,7 +195,8 @@ def test_dense_truth_diagnostics_do_not_call_pairwise_networkx_helpers(monkeypat
     assert summary["comparable_ancestor_descendant_pair_count"] == 0
 
 
-def test_one_block_runs_all_six_arms_with_compact_injected_output():
+def test_one_block_runs_all_six_arms_with_compact_injected_output(controlled_stage_rss):
+    controlled_stage_rss()
     report = probe.run_probe(
         replicates=1,
         base_seed=31,

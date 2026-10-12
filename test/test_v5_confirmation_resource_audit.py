@@ -110,7 +110,40 @@ def test_resource_summary_aligns_condition_specific_m2_and_medicc2():
     assert result["paired_medicc2_over_m2_wall_ratio"]["median"] == pytest.approx(2.5)
 
 
-def test_audit_case_requires_exact_distance_and_topology_equivalence(tmp_path: Path):
+@pytest.mark.parametrize(
+    "change, expected_stage, expected_type, expected_message",
+    [
+        (None, None, None, None),
+        (
+            "distance", "distance_equivalence", "ValueError",
+            "differs from its frozen submatrix",
+        ),
+        (
+            "topology", "reconstruction_equivalence", "ValueError",
+            "topology summary changed",
+        ),
+        (
+            "distance_rss", "distance_equivalence", "StageResourceError",
+            "exceeded the registered limit",
+        ),
+        (
+            "reconstruction_rss", "reconstruction_equivalence", "StageResourceError",
+            "exceeded the registered limit",
+        ),
+    ],
+    ids=[
+        "equivalent", "changed-distance", "changed-topology",
+        "distance-rss", "reconstruction-rss",
+    ],
+)
+def test_audit_case_requires_exact_distance_and_topology_equivalence(
+    tmp_path: Path,
+    controlled_stage_rss,
+    change,
+    expected_stage,
+    expected_type,
+    expected_message,
+):
     bank_root = tmp_path / "bank"
     internal_root = tmp_path / "internal"
     payload = _payload()
@@ -169,14 +202,28 @@ def test_audit_case_requires_exact_distance_and_topology_equivalence(tmp_path: P
 
     def distance_compute(cells):
         assert [cell.get_id() for cell in cells] == [0, 1, 2]
+        matrix = condition_matrix.copy()
+        if change == "distance":
+            matrix[0, 2] = matrix[2, 0] = 3
         return DistanceMatrix(
             ids=[0, 1, 2],
-            matrix=condition_matrix,
+            matrix=matrix,
             provenance={"semantics_version": CNP2CNP_SEMANTICS_VERSION},
         )
 
     def reconstruction_compute(_payload, _distance, _seed):
-        return tree.copy(), {}, "root", {}
+        reconstructed = tree.copy()
+        if change == "topology":
+            reconstructed.remove_edge("middle", "leaf")
+            reconstructed.add_edge("root", "leaf")
+        return reconstructed, {}, "root", {}
+
+    stage_peaks = [64 * 1024**2, 96 * 1024**2]
+    if change == "distance_rss":
+        stage_peaks[0] = 1024**3 + 1
+    elif change == "reconstruction_rss":
+        stage_peaks[1] = 1024**3 + 1
+    controlled_stage_rss(*stage_peaks)
 
     record = _audit_case(
         str(bank_root),
@@ -190,7 +237,14 @@ def test_audit_case_requires_exact_distance_and_topology_equivalence(tmp_path: P
         reconstruction_compute,
     )
 
-    assert record["status"] == "success"
+    if change is not None:
+        assert record["status"] == "failure", record
+        assert record["failure"]["stage"] == expected_stage
+        assert record["failure"]["type"] == expected_type
+        assert expected_message in record["failure"]["message"]
+        return
+
+    assert record["status"] == "success", record
     assert record["observed_unique_state_count"] == 3
     assert record["frozen_block_union_state_count"] == 4
     assert record["unordered_condition_pair_count"] == 3
@@ -198,4 +252,5 @@ def test_audit_case_requires_exact_distance_and_topology_equivalence(tmp_path: P
     assert record["equivalence"]["distance_matrix_exact"] is True
     assert record["equivalence"]["tree_summary_exact"] is True
     assert record["resources"]["pipeline"]["wall_time_ns"] > 0
+    assert record["resources"]["pipeline"]["memory"]["peak_rss_bytes"] == 96 * 1024**2
 

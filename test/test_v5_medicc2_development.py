@@ -212,8 +212,9 @@ def test_resource_gate_row_selection_is_distinct_and_output_blind():
 
 
 def test_development_case_loads_truth_only_after_reconstruction(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, controlled_stage_rss
 ):
+    controlled_stage_rss()
     bank_root = tmp_path / "bank"
     bank_root.mkdir()
     input_payload = _observation_input("evaluated_case")
@@ -284,7 +285,7 @@ def test_development_case_loads_truth_only_after_reconstruction(
     )
 
     assert events == ["reconstruction", "truth_read"]
-    assert record["status"] == "success"
+    assert record["status"] == "success", record.get("failure")
     assert 0.0 <= record["metrics"]["grf"] <= 1.0
     assert record["tree_summary"]["repeated_observed_occurrence_count"] == 1
 

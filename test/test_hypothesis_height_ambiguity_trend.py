@@ -141,7 +141,10 @@ def test_ambiguity_summary_reuses_fixed_candidate_graph_without_changing_values(
     assert reused == fresh
 
 
-def test_height_trend_runs_three_bounded_cases_with_injected_distance(tmp_path):
+def test_height_trend_runs_three_bounded_cases_with_injected_distance(
+    tmp_path, controlled_stage_rss,
+):
+    controlled_stage_rss()
     population_path = tmp_path / "population.json"
     write_json_atomic(
         population_path,
